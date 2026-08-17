@@ -1,0 +1,439 @@
+/* ==========================================================================
+   Fantasy Football Hub
+
+   Accessibility is a hard requirement here, not a polish pass:
+   - every colour pair below clears WCAG 2.2 AA (4.5:1 body, 3:1 large/UI)
+   - nothing is communicated by colour alone; status always carries text
+   - focus is always visible, and never removed
+   - honours prefers-reduced-motion and prefers-contrast
+   - layout survives 200% zoom and 320px viewports without horizontal scroll
+   ========================================================================== */
+
+/* --- Tokens -------------------------------------------------------------- */
+:root {
+  color-scheme: light dark;
+
+  --bg: #0f1216;
+  --bg-raised: #171c22;
+  --bg-sunken: #0a0d10;
+  --border: #2b333d;
+  --border-strong: #3d4753;
+
+  --text: #e8edf2;
+  --text-muted: #a8b3bf;
+  --text-dim: #7d8894;
+
+  --accent: #4da3ff;
+  --accent-text: #0a0d10;
+
+  --good: #4ade80;
+  --good-dim: #1a3a28;
+  --bad: #f87171;
+  --bad-dim: #3d1f1f;
+  --warn: #fbbf24;
+  --warn-dim: #3d3018;
+
+  --radius: 10px;
+  --radius-sm: 6px;
+  --gap: 1rem;
+  --maxw: 1200px;
+
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", monospace;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f6f8fa;
+    --bg-raised: #ffffff;
+    --bg-sunken: #eaeef2;
+    --border: #d0d7de;
+    --border-strong: #b6c0ca;
+
+    --text: #11181f;
+    --text-muted: #4a555f;
+    --text-dim: #656f7a;
+
+    --accent: #0a5ecc;
+    --accent-text: #ffffff;
+
+    --good: #106b33;
+    --good-dim: #ddf5e5;
+    --bad: #b32020;
+    --bad-dim: #fce4e4;
+    --warn: #8a5a00;
+    --warn-dim: #fdf1d6;
+  }
+}
+
+:root[data-theme="light"] {
+  --bg: #f6f8fa;
+  --bg-raised: #ffffff;
+  --bg-sunken: #eaeef2;
+  --border: #d0d7de;
+  --border-strong: #b6c0ca;
+  --text: #11181f;
+  --text-muted: #4a555f;
+  --text-dim: #656f7a;
+  --accent: #0a5ecc;
+  --accent-text: #ffffff;
+  --good: #106b33;
+  --good-dim: #ddf5e5;
+  --bad: #b32020;
+  --bad-dim: #fce4e4;
+  --warn: #8a5a00;
+  --warn-dim: #fdf1d6;
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --border: #6b7784;
+    --text-muted: #d4dbe2;
+  }
+}
+
+/* --- Reset --------------------------------------------------------------- */
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-text-size-adjust: 100%;
+}
+
+h1, h2, h3, h4 { line-height: 1.25; margin: 0 0 0.5em; font-weight: 650; }
+h1 { font-size: clamp(1.5rem, 4vw, 2rem); }
+h2 { font-size: clamp(1.2rem, 3vw, 1.5rem); }
+h3 { font-size: 1.05rem; }
+p { margin: 0 0 0.75em; }
+
+a { color: var(--accent); }
+a:hover { text-decoration-thickness: 2px; }
+
+/* Focus must always be obvious. Never remove this. */
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* --- Utilities ----------------------------------------------------------- */
+.visually-hidden {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip-link {
+  position: absolute;
+  left: 0.5rem;
+  top: -100%;
+  z-index: 100;
+  background: var(--accent);
+  color: var(--accent-text);
+  padding: 0.6rem 1rem;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  font-weight: 600;
+  text-decoration: none;
+}
+.skip-link:focus { top: 0; }
+
+/* --- Layout -------------------------------------------------------------- */
+.wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 1rem; }
+
+.site-header {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+  padding: 1rem 0 0;
+}
+.site-header__top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.75rem 1rem;
+  justify-content: space-between;
+}
+.site-title { margin: 0; }
+.site-title small {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.theme-toggle {
+  background: var(--bg-sunken);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.45rem 0.8rem;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.theme-toggle:hover { border-color: var(--border-strong); }
+
+/* --- Nav ----------------------------------------------------------------- */
+.site-nav { margin-top: 0.75rem; }
+.site-nav ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.site-nav a {
+  display: block;
+  padding: 0.6rem 0.9rem;
+  color: var(--text-muted);
+  text-decoration: none;
+  border-bottom: 3px solid transparent;
+  font-weight: 550;
+  font-size: 0.95rem;
+  white-space: nowrap;
+}
+.site-nav a:hover { color: var(--text); background: var(--bg-sunken); }
+/* aria-current carries the meaning; the underline is only reinforcement. */
+.site-nav a[aria-current="page"] {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+/* --- Main ---------------------------------------------------------------- */
+main { padding: 1.5rem 0 4rem; }
+main:focus { outline: none; }
+
+.view[hidden] { display: none; }
+.view > h2 { margin-bottom: 0.25rem; }
+.view__intro { color: var(--text-muted); margin-bottom: 1.25rem; max-width: 68ch; }
+
+/* --- Cards --------------------------------------------------------------- */
+.card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 1.1rem;
+}
+.card h3 { margin-top: 0; }
+
+.grid {
+  display: grid;
+  gap: var(--gap);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+}
+
+/* --- Phase banner -------------------------------------------------------- */
+.banner {
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  background: var(--bg-raised);
+  border-radius: var(--radius);
+  padding: 1rem 1.15rem;
+  margin-bottom: 1.5rem;
+}
+.banner h2 { margin: 0 0 0.3rem; font-size: 1.15rem; }
+.banner p { margin: 0; color: var(--text-muted); }
+.banner__next {
+  display: inline-block;
+  margin-top: 0.6rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.25rem 0.7rem;
+}
+
+/* --- Stat tiles ---------------------------------------------------------- */
+.stats {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+  margin-bottom: 1.5rem;
+  padding: 0;
+  list-style: none;
+}
+.stat {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.85rem 1rem;
+}
+.stat__label {
+  display: block;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  margin-bottom: 0.15rem;
+}
+.stat__value { font-size: 1.5rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.stat__note { font-size: 0.8rem; color: var(--text-muted); }
+
+/* --- Tables -------------------------------------------------------------- */
+.table-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+}
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+caption {
+  text-align: left;
+  padding: 0.85rem 1rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  border-bottom: 1px solid var(--border);
+}
+th, td {
+  padding: 0.6rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+thead th {
+  background: var(--bg-sunken);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  position: sticky;
+  top: 0;
+}
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover { background: var(--bg-sunken); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.row-team { font-weight: 600; white-space: normal; min-width: 11rem; }
+.row-team small { display: block; font-weight: 400; color: var(--text-dim); font-size: 0.8rem; }
+
+/* Playoff cut line: a border AND a label, never colour alone. */
+tr.playoff-cut td { border-bottom: 2px solid var(--accent); }
+
+/* --- Pills / badges ------------------------------------------------------ */
+.pill {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 650;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.pill--good { background: var(--good-dim); color: var(--good); border-color: var(--good); }
+.pill--bad { background: var(--bad-dim); color: var(--bad); border-color: var(--bad); }
+.pill--warn { background: var(--warn-dim); color: var(--warn); border-color: var(--warn); }
+.pill--neutral { background: var(--bg-sunken); color: var(--text-muted); border-color: var(--border); }
+
+/* --- Prize cards --------------------------------------------------------- */
+.prize {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.prize__label { font-weight: 700; font-size: 1rem; margin: 0; }
+.prize__desc { font-size: 0.85rem; color: var(--text-dim); margin: 0; }
+.prize__winner { font-size: 1.05rem; font-weight: 650; color: var(--accent); margin: 0.2rem 0 0; }
+.prize__detail { font-size: 0.88rem; color: var(--text-muted); margin: 0; }
+
+/* --- Draft board --------------------------------------------------------- */
+.draft-round { margin-bottom: 1.25rem; }
+.draft-round h3 { margin-bottom: 0.5rem; font-size: 0.95rem; color: var(--text-muted); }
+.draft-picks {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 165px), 1fr));
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.pick {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.6rem;
+  font-size: 0.85rem;
+}
+.pick__num { color: var(--text-dim); font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+.pick__player { font-weight: 650; display: block; }
+.pick__meta { color: var(--text-muted); font-size: 0.8rem; }
+
+/* --- Empty states -------------------------------------------------------- */
+.empty {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  padding: 2rem 1.25rem;
+  text-align: center;
+  color: var(--text-muted);
+  background: var(--bg-raised);
+}
+.empty h3 { color: var(--text); margin-bottom: 0.35rem; }
+.empty p { margin: 0 auto; max-width: 48ch; }
+
+/* --- Money --------------------------------------------------------------- */
+.progress {
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  height: 0.75rem;
+  overflow: hidden;
+  margin: 0.5rem 0;
+}
+.progress__fill { background: var(--accent); height: 100%; }
+
+/* --- Footer -------------------------------------------------------------- */
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: 1.25rem 0 2rem;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+/* --- Loading / error ----------------------------------------------------- */
+.loading, .error {
+  padding: 2rem 1rem;
+  text-align: center;
+  color: var(--text-muted);
+}
+.error {
+  border: 1px solid var(--bad);
+  background: var(--bad-dim);
+  color: var(--text);
+  border-radius: var(--radius);
+  text-align: left;
+  padding: 1rem 1.15rem;
+}
+.error code {
+  font-family: var(--mono);
+  background: var(--bg-sunken);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+
+@media (max-width: 480px) {
+  th, td { padding: 0.5rem 0.6rem; }
+  .site-nav a { padding: 0.55rem 0.7rem; font-size: 0.9rem; }
+}

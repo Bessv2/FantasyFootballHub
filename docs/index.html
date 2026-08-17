@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Roe Leauge — Fantasy Football Hub</title>
+  <meta name="description" content="League stats, draft analysis, trades, side prizes, and the money ledger for Roe Leauge.">
+  <meta name="color-scheme" content="dark light">
+  <link rel="stylesheet" href="assets/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏈</text></svg>">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to main content</a>
+
+  <header class="site-header">
+    <div class="wrap">
+      <div class="site-header__top">
+        <h1 class="site-title">
+          <span id="league-name">Fantasy Football Hub</span>
+          <small id="league-sub">Loading league…</small>
+        </h1>
+        <button type="button" class="theme-toggle" id="theme-toggle" aria-pressed="false">
+          Switch to light theme
+        </button>
+      </div>
+
+      <nav class="site-nav" aria-label="Sections">
+        <ul>
+          <li><a href="#overview" data-view="overview">Overview</a></li>
+          <li><a href="#standings" data-view="standings">Standings</a></li>
+          <li><a href="#teams" data-view="teams">Teams</a></li>
+          <li><a href="#draft" data-view="draft">Draft</a></li>
+          <li><a href="#trades" data-view="trades">Trades</a></li>
+          <li><a href="#prizes" data-view="prizes">Prizes</a></li>
+          <li><a href="#money" data-view="money">Money</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Route changes are announced here for screen reader users. -->
+  <p class="visually-hidden" role="status" aria-live="polite" id="route-status"></p>
+
+  <main id="main" tabindex="-1">
+    <div class="wrap">
+      <div id="boot" class="loading">Loading league data…</div>
+
+      <section class="view" id="view-overview" hidden aria-labelledby="h-overview">
+        <h2 id="h-overview">Overview</h2>
+        <div id="overview-body"></div>
+      </section>
+
+      <section class="view" id="view-standings" hidden aria-labelledby="h-standings">
+        <h2 id="h-standings">Standings</h2>
+        <p class="view__intro">
+          Ordered by record, then total points scored — the same tiebreak ESPN uses for this league.
+          <strong>Luck</strong> is wins above or below what the scores alone deserved.
+          <strong>Efficiency</strong> is how much of each roster's possible points actually got started.
+        </p>
+        <div id="standings-body"></div>
+      </section>
+
+      <section class="view" id="view-teams" hidden aria-labelledby="h-teams">
+        <h2 id="h-teams">Teams</h2>
+        <p class="view__intro">Every manager, with the numbers that separate good teams from lucky ones.</p>
+        <div id="teams-body"></div>
+      </section>
+
+      <section class="view" id="view-draft" hidden aria-labelledby="h-draft">
+        <h2 id="h-draft">Draft</h2>
+        <p class="view__intro">
+          Pick value is measured inside the draft itself: every drafted player is ranked by the points
+          they actually scored, then compared to where they were taken. Positive value means the player
+          outperformed the cost of the pick.
+        </p>
+        <div id="draft-body"></div>
+      </section>
+
+      <section class="view" id="view-trades" hidden aria-labelledby="h-trades">
+        <h2 id="h-trades">Trades &amp; Transactions</h2>
+        <p class="view__intro">Every completed trade, plus waiver and free-agent activity.</p>
+        <div id="trades-body"></div>
+      </section>
+
+      <section class="view" id="view-prizes" hidden aria-labelledby="h-prizes">
+        <h2 id="h-prizes">Side Prizes</h2>
+        <p class="view__intro">
+          Season awards computed from the box scores. These update every time the data is refreshed.
+        </p>
+        <div id="prizes-body"></div>
+      </section>
+
+      <section class="view" id="view-money" hidden aria-labelledby="h-money">
+        <h2 id="h-money">Money</h2>
+        <p class="view__intro">
+          Buy-ins, who has paid, and what each place pays out. Edit
+          <code>config/money.json</code> to change any of it.
+        </p>
+        <div id="money-body"></div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <p>
+        Data from ESPN, refreshed manually. Last built:
+        <time id="generated-at">—</time>.
+      </p>
+      <p id="fixture-warning" hidden>
+        <strong class="pill pill--warn">Sample data</strong>
+        This is synthetic test data, not your real league.
+      </p>
+    </div>
+  </footer>
+
+  <script src="assets/app.js" type="module"></script>
+</body>
+</html>

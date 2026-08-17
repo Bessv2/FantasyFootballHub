@@ -1,0 +1,24 @@
+# Cloudflare Pages response headers.
+#
+# The site is fully self-contained — no CDNs, no external fonts, no analytics,
+# no outbound requests of any kind — so the policy below can be strict without
+# breaking anything. If you ever add an external resource (team logos from
+# ESPN, for example), it will be blocked until you widen the matching
+# directive here.
+#
+# style-src allows 'unsafe-inline' because the app sets a few styles inline
+# (the money progress bar width, some spacing). That is the weakest line here
+# and it is deliberate: script-src stays locked to 'self', which is what
+# actually stops injected code running. Every rendered value is escaped before
+# it reaches innerHTML, and the app takes no user input at all.
+
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: no-referrer
+  Permissions-Policy: geolocation=(), microphone=(), camera=(), interest-cohort=()
+  Content-Security-Policy: default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+
+# League data is regenerated on every push; never let a stale week be cached.
+/data/*
+  Cache-Control: no-cache, must-revalidate

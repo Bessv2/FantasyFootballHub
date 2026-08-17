@@ -1,0 +1,42 @@
+# --- SECRETS: never commit these ---------------------------------------
+# Your ESPN session cookies live here. Anyone with them can act as you on
+# ESPN. This entry is the only thing keeping them off GitHub.
+config/secrets.json
+config/secrets.*.json
+# ...but the placeholder template must ship, or a fresh clone has no
+# instructions for setting credentials up.
+!config/secrets.example.json
+*.secret.json
+.env
+.env.*
+
+# --- Regenerable data --------------------------------------------------
+# Raw API cache: large, regenerable with `npm run fetch`, and contains more
+# of your league than needs publishing. The site reads docs/data/.
+data/raw/
+
+# Synthetic test data: `npm run fixtures` regenerates it byte-identically
+# from a fixed seed, so there is no reason to carry it in the repo.
+data/fixtures/
+
+# NOTE: docs/data/ IS committed on purpose — it is what GitHub Pages serves.
+# ...except the money ledger. It is still generated locally, so `npm run serve`
+# shows you the full ledger on your machine, but it never reaches the public
+# site. Flip site.showMoney in config/league.json and delete this line if you
+# later decide to publish it.
+docs/data/money.json
+
+# --- Node --------------------------------------------------------------
+node_modules/
+npm-debug.log*
+.npm/
+
+# --- OS / editor -------------------------------------------------------
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+.vscode/
+.idea/
+*.swp

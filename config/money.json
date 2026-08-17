@@ -1,0 +1,42 @@
+{
+  "_readme": [
+    "The money ledger. ESPN knows nothing about this — it is entirely yours.",
+    "",
+    "Everything here is editable in the app itself (Money tab -> Edit), which",
+    "writes a corrected copy you can paste back over this file. You can also",
+    "just edit it by hand.",
+    "",
+    "PLACEHOLDER VALUES: buyIn is a guess. Replace it with your real number.",
+    "Payouts are percentages so they re-balance automatically if you change the",
+    "buy-in or the league size.",
+    "",
+    "PRIVACY: if you publish the site to GitHub Pages, this file is public.",
+    "Set site.showMoney to false in league.json to keep the ledger local-only."
+  ],
+
+  "currency": "USD",
+  "buyIn": 50,
+  "buyInDueDate": "2026-09-05",
+
+  "payouts": {
+    "_note": "Percentages of the total pot. Must sum to 100.",
+    "structure": [
+      { "id": "first", "label": "1st Place", "pct": 58, "note": "Champion takes the largest share" },
+      { "id": "second", "label": "2nd Place", "pct": 25, "note": "Runner-up" },
+      { "id": "third", "label": "3rd Place", "pct": 8, "note": "Buy-in back" },
+      { "id": "sidePots", "label": "Side Prizes", "pct": 9, "note": "Weekly high score and season awards" }
+    ]
+  },
+
+  "sidePots": {
+    "_note": "Optional smaller pots funded from the sidePots share above.",
+    "weeklyHighScore": { "enabled": true, "amountPerWeek": 0, "note": "Set an amount or leave 0 to split the pot evenly across weeks" },
+    "seasonAwards": []
+  },
+
+  "_paymentsNote": "One entry per manager. Set paid=true and fill paidDate as money comes in. teamId matches the ESPN team.",
+  "payments": [],
+
+  "_payoutsPaidNote": "Filled in at the end of the season as you pay winners out.",
+  "payoutsPaid": []
+}

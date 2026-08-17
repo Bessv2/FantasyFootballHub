@@ -1,0 +1,27 @@
+{
+  "_readme": [
+    "Core league configuration. Safe to commit — contains no secrets.",
+    "leagueId: the number in your ESPN league URL, e.g.",
+    "  https://fantasy.espn.com/football/league?leagueId=123456  ->  123456",
+    "seasons: every season year you want pulled. ESPN keeps history for as long",
+    "  as the league has existed, so list them all for career/all-time stats."
+  ],
+
+  "leagueId": 274568741,
+  "seasons": [2026],
+  "currentSeason": 2026,
+
+  "leagueName": "Roe Leauge",
+  "tagline": "",
+
+  "regularSeasonWeeks": 14,
+  "playoffTeams": 6,
+
+  "site": {
+    "theme": "auto",
+    "showMoney": false,
+    "showPrizes": true,
+    "showDraft": true,
+    "showTrades": true
+  }
+}
