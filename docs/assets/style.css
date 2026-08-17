@@ -1,21 +1,27 @@
 /* ==========================================================================
    Fantasy Football Hub
 
-   Accessibility is a hard requirement here, not a polish pass:
-   - every colour pair below clears WCAG 2.2 AA (4.5:1 body, 3:1 large/UI)
+   Accessibility is a hard requirement, not a polish pass:
+   - every colour pair clears WCAG 2.2 AA (4.5:1 body, 3:1 large/UI)
    - nothing is communicated by colour alone; status always carries text
-   - focus is always visible, and never removed
+   - focus is always visible and never removed
    - honours prefers-reduced-motion and prefers-contrast
-   - layout survives 200% zoom and 320px viewports without horizontal scroll
+   - survives 200% zoom and 320px viewports with no horizontal scroll
+
+   Chart marks follow the data-viz spec: single sequential hue for magnitude
+   (never one colour per team — 12 teams exceeds any CVD-safe categorical set,
+   and identity isn't the job), bars capped at 24px with a 4px rounded data-end
+   squared at the baseline, and text in ink tokens rather than the data colour.
    ========================================================================== */
 
 /* --- Tokens -------------------------------------------------------------- */
 :root {
   color-scheme: light dark;
 
-  --bg: #0f1216;
+  --bg: #0d1014;
   --bg-raised: #171c22;
   --bg-sunken: #0a0d10;
+  --bg-hover: #1e242c;
   --border: #2b333d;
   --border-strong: #3d4753;
 
@@ -23,39 +29,49 @@
   --text-muted: #a8b3bf;
   --text-dim: #7d8894;
 
-  --accent: #4da3ff;
-  --accent-text: #0a0d10;
+  /* Validated ≥3:1 against --bg-raised. */
+  --accent: #3987e5;
+  --accent-bright: #5b9dee;
+  --accent-text: #ffffff;
+  --accent-wash: rgba(57, 135, 229, 0.14);
+  --accent-track: rgba(57, 135, 229, 0.16);
 
   --good: #4ade80;
-  --good-dim: #1a3a28;
+  --good-dim: #12301f;
   --bad: #f87171;
-  --bad-dim: #3d1f1f;
+  --bad-dim: #351a1a;
   --warn: #fbbf24;
-  --warn-dim: #3d3018;
+  --warn-dim: #33280f;
 
-  --radius: 10px;
-  --radius-sm: 6px;
+  --radius: 12px;
+  --radius-sm: 7px;
   --gap: 1rem;
-  --maxw: 1200px;
+  --maxw: 1180px;
 
-  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", monospace;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.18);
 }
 
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
-    --bg: #f6f8fa;
+    --bg: #f4f6f8;
     --bg-raised: #ffffff;
     --bg-sunken: #eaeef2;
-    --border: #d0d7de;
+    --bg-hover: #f0f4f8;
+    --border: #d8dee5;
     --border-strong: #b6c0ca;
 
-    --text: #11181f;
+    --text: #10171e;
     --text-muted: #4a555f;
-    --text-dim: #656f7a;
+    --text-dim: #667079;
 
-    --accent: #0a5ecc;
+    --accent: #2a78d6;
+    --accent-bright: #1c5cab;
     --accent-text: #ffffff;
+    --accent-wash: rgba(42, 120, 214, 0.1);
+    --accent-track: rgba(42, 120, 214, 0.14);
 
     --good: #106b33;
     --good-dim: #ddf5e5;
@@ -63,33 +79,37 @@
     --bad-dim: #fce4e4;
     --warn: #8a5a00;
     --warn-dim: #fdf1d6;
+
+    --shadow: 0 1px 2px rgba(16, 23, 30, 0.06), 0 4px 16px rgba(16, 23, 30, 0.06);
   }
 }
 
 :root[data-theme="light"] {
-  --bg: #f6f8fa;
+  --bg: #f4f6f8;
   --bg-raised: #ffffff;
   --bg-sunken: #eaeef2;
-  --border: #d0d7de;
+  --bg-hover: #f0f4f8;
+  --border: #d8dee5;
   --border-strong: #b6c0ca;
-  --text: #11181f;
+  --text: #10171e;
   --text-muted: #4a555f;
-  --text-dim: #656f7a;
-  --accent: #0a5ecc;
+  --text-dim: #667079;
+  --accent: #2a78d6;
+  --accent-bright: #1c5cab;
   --accent-text: #ffffff;
+  --accent-wash: rgba(42, 120, 214, 0.1);
+  --accent-track: rgba(42, 120, 214, 0.14);
   --good: #106b33;
   --good-dim: #ddf5e5;
   --bad: #b32020;
   --bad-dim: #fce4e4;
   --warn: #8a5a00;
   --warn-dim: #fdf1d6;
+  --shadow: 0 1px 2px rgba(16, 23, 30, 0.06), 0 4px 16px rgba(16, 23, 30, 0.06);
 }
 
 @media (prefers-contrast: more) {
-  :root {
-    --border: #6b7784;
-    --text-muted: #d4dbe2;
-  }
+  :root { --border: #6b7784; --text-muted: #d4dbe2; }
 }
 
 /* --- Reset --------------------------------------------------------------- */
@@ -103,23 +123,19 @@ body {
   font-size: 16px;
   line-height: 1.55;
   -webkit-text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
 }
 
-h1, h2, h3, h4 { line-height: 1.25; margin: 0 0 0.5em; font-weight: 650; }
-h1 { font-size: clamp(1.5rem, 4vw, 2rem); }
-h2 { font-size: clamp(1.2rem, 3vw, 1.5rem); }
+h1, h2, h3, h4 { line-height: 1.2; margin: 0 0 0.5em; font-weight: 680; letter-spacing: -0.011em; }
+h1 { font-size: clamp(1.4rem, 3.5vw, 1.85rem); }
+h2 { font-size: clamp(1.25rem, 3vw, 1.6rem); }
 h3 { font-size: 1.05rem; }
 p { margin: 0 0 0.75em; }
 
-a { color: var(--accent); }
+a { color: var(--accent); text-underline-offset: 2px; }
 a:hover { text-decoration-thickness: 2px; }
 
-/* Focus must always be obvious. Never remove this. */
-:focus-visible {
-  outline: 3px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: 3px;
-}
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -132,161 +148,144 @@ a:hover { text-decoration-thickness: 2px; }
 
 /* --- Utilities ----------------------------------------------------------- */
 .visually-hidden {
-  position: absolute;
-  width: 1px; height: 1px;
-  padding: 0; margin: -1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-  border: 0;
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 
 .skip-link {
-  position: absolute;
-  left: 0.5rem;
-  top: -100%;
-  z-index: 100;
-  background: var(--accent);
-  color: var(--accent-text);
-  padding: 0.6rem 1rem;
-  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
-  font-weight: 600;
-  text-decoration: none;
+  position: absolute; left: 0.5rem; top: -100%; z-index: 100;
+  background: var(--accent); color: var(--accent-text);
+  padding: 0.6rem 1rem; border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  font-weight: 600; text-decoration: none;
 }
 .skip-link:focus { top: 0; }
 
-/* --- Layout -------------------------------------------------------------- */
 .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 1rem; }
 
+/* --- Header -------------------------------------------------------------- */
 .site-header {
   border-bottom: 1px solid var(--border);
-  background: var(--bg-raised);
-  padding: 1rem 0 0;
+  background: linear-gradient(180deg, var(--bg-raised), var(--bg));
+  padding: 1.1rem 0 0;
 }
 .site-header__top {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.75rem 1rem;
-  justify-content: space-between;
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: 0.75rem 1rem; justify-content: space-between;
 }
-.site-title { margin: 0; }
+.site-title { margin: 0; display: flex; align-items: center; gap: 0.6rem; }
+.site-title__mark {
+  display: grid; place-items: center;
+  width: 2.1rem; height: 2.1rem; flex: none;
+  background: var(--accent); color: var(--accent-text);
+  border-radius: 9px; font-size: 1.1rem;
+}
+.site-title__text { display: block; }
 .site-title small {
-  display: block;
-  font-size: 0.85rem;
-  font-weight: 400;
-  color: var(--text-muted);
+  display: block; font-size: 0.8rem; font-weight: 450;
+  color: var(--text-muted); letter-spacing: 0;
 }
 
 .theme-toggle {
-  background: var(--bg-sunken);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 0.45rem 0.8rem;
-  font: inherit;
-  font-size: 0.85rem;
-  cursor: pointer;
+  background: var(--bg-sunken); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 0.45rem 0.8rem; font: inherit; font-size: 0.85rem; cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
-.theme-toggle:hover { border-color: var(--border-strong); }
+.theme-toggle:hover { border-color: var(--border-strong); background: var(--bg-hover); }
 
 /* --- Nav ----------------------------------------------------------------- */
-.site-nav { margin-top: 0.75rem; }
+.site-nav { margin-top: 0.9rem; }
 .site-nav ul {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.15rem;
-  list-style: none;
-  margin: 0;
-  padding: 0;
+  display: flex; flex-wrap: wrap; gap: 0.15rem;
+  list-style: none; margin: 0; padding: 0;
 }
 .site-nav a {
-  display: block;
-  padding: 0.6rem 0.9rem;
-  color: var(--text-muted);
-  text-decoration: none;
+  display: block; padding: 0.6rem 0.9rem;
+  color: var(--text-muted); text-decoration: none;
   border-bottom: 3px solid transparent;
-  font-weight: 550;
-  font-size: 0.95rem;
-  white-space: nowrap;
+  font-weight: 560; font-size: 0.95rem; white-space: nowrap;
+  transition: color 0.15s ease, background 0.15s ease;
 }
 .site-nav a:hover { color: var(--text); background: var(--bg-sunken); }
-/* aria-current carries the meaning; the underline is only reinforcement. */
-.site-nav a[aria-current="page"] {
-  color: var(--text);
-  border-bottom-color: var(--accent);
-}
+/* aria-current carries the meaning; the underline only reinforces it. */
+.site-nav a[aria-current="page"] { color: var(--text); border-bottom-color: var(--accent); }
 
-/* --- Main ---------------------------------------------------------------- */
-main { padding: 1.5rem 0 4rem; }
+main { padding: 1.75rem 0 4rem; }
 main:focus { outline: none; }
-
 .view[hidden] { display: none; }
 .view > h2 { margin-bottom: 0.25rem; }
-.view__intro { color: var(--text-muted); margin-bottom: 1.25rem; max-width: 68ch; }
+.view__intro { color: var(--text-muted); margin-bottom: 1.4rem; max-width: 68ch; }
 
-/* --- Cards --------------------------------------------------------------- */
-.card {
-  background: var(--bg-raised);
+/* --- Hero / countdown ---------------------------------------------------- */
+.hero {
+  position: relative; overflow: hidden;
+  background: linear-gradient(135deg, var(--accent-wash), transparent 60%), var(--bg-raised);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 1rem 1.1rem;
-}
-.card h3 { margin-top: 0; }
-
-.grid {
-  display: grid;
-  gap: var(--gap);
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
-}
-
-/* --- Phase banner -------------------------------------------------------- */
-.banner {
-  border: 1px solid var(--border);
-  border-left: 4px solid var(--accent);
-  background: var(--bg-raised);
-  border-radius: var(--radius);
-  padding: 1rem 1.15rem;
+  padding: 1.6rem 1.5rem;
   margin-bottom: 1.5rem;
+  box-shadow: var(--shadow);
 }
-.banner h2 { margin: 0 0 0.3rem; font-size: 1.15rem; }
-.banner p { margin: 0; color: var(--text-muted); }
-.banner__next {
-  display: inline-block;
-  margin-top: 0.6rem;
-  font-size: 0.85rem;
-  font-weight: 600;
+.hero__eyebrow {
+  font-size: 0.76rem; font-weight: 700; letter-spacing: 0.09em;
+  text-transform: uppercase; color: var(--accent); margin: 0 0 0.4rem;
+}
+.hero h2 { margin: 0 0 0.3rem; font-size: clamp(1.35rem, 3.4vw, 1.8rem); }
+.hero__sub { color: var(--text-muted); margin: 0; max-width: 60ch; }
+
+/* Hero figure: >=48px, proportional figures (tabular-nums makes big numbers
+   look loose), same sans as everything else. */
+.countdown {
+  display: flex; flex-wrap: wrap; gap: 0.5rem;
+  margin: 1.15rem 0 0; padding: 0; list-style: none;
+}
+.countdown li {
+  min-width: 4.6rem; flex: 0 1 auto;
   background: var(--bg-sunken);
   border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 0.25rem 0.7rem;
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.7rem; text-align: center;
+}
+.countdown__value {
+  display: block;
+  /* Reaches the 48px hero-figure size on desktop, where this is the lead
+     element; scales down on mobile so four units still fit across 375px. */
+  font-size: clamp(1.7rem, 5.5vw, 3rem);
+  font-weight: 700; line-height: 1.05; color: var(--text);
+}
+.countdown__unit {
+  display: block; font-size: 0.7rem; text-transform: uppercase;
+  letter-spacing: 0.07em; color: var(--text-dim); margin-top: 0.15rem;
 }
 
 /* --- Stat tiles ---------------------------------------------------------- */
 .stats {
-  display: grid;
-  gap: 0.75rem;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
-  margin-bottom: 1.5rem;
-  padding: 0;
-  list-style: none;
+  display: grid; gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 158px), 1fr));
+  margin: 0 0 1.5rem; padding: 0; list-style: none;
 }
 .stat {
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 0.85rem 1rem;
+  background: var(--bg-raised); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 0.85rem 1rem;
 }
 .stat__label {
-  display: block;
-  font-size: 0.78rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-dim);
-  margin-bottom: 0.15rem;
+  display: block; font-size: 0.74rem; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--text-dim); margin-bottom: 0.2rem;
 }
-.stat__value { font-size: 1.5rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-.stat__note { font-size: 0.8rem; color: var(--text-muted); }
+.stat__value { display: block; font-size: 1.55rem; font-weight: 700; line-height: 1.15; }
+.stat__note { display: block; font-size: 0.8rem; color: var(--text-muted); margin-top: 0.1rem; }
+
+/* --- Cards --------------------------------------------------------------- */
+.card {
+  background: var(--bg-raised); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 1.05rem 1.15rem;
+}
+.card h3 { margin-top: 0; }
+.grid {
+  display: grid; gap: var(--gap);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 265px), 1fr));
+}
 
 /* --- Tables -------------------------------------------------------------- */
 .table-scroll {
@@ -297,143 +296,153 @@ main:focus { outline: none; }
 }
 table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
 caption {
-  text-align: left;
-  padding: 0.85rem 1rem;
-  font-weight: 600;
-  color: var(--text-muted);
-  font-size: 0.9rem;
+  text-align: left; padding: 0.9rem 1rem; font-weight: 600;
+  color: var(--text-muted); font-size: 0.88rem;
   border-bottom: 1px solid var(--border);
 }
 th, td {
-  padding: 0.6rem 0.75rem;
-  text-align: left;
-  border-bottom: 1px solid var(--border);
-  white-space: nowrap;
+  padding: 0.6rem 0.75rem; text-align: left;
+  border-bottom: 1px solid var(--border); white-space: nowrap;
 }
 thead th {
-  background: var(--bg-sunken);
-  font-size: 0.78rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
-  position: sticky;
-  top: 0;
+  background: var(--bg-sunken); font-size: 0.72rem;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-muted); position: sticky; top: 0;
 }
 tbody tr:last-child td { border-bottom: none; }
-tbody tr:hover { background: var(--bg-sunken); }
+tbody tr:hover { background: var(--bg-hover); }
+/* Columns of numbers align vertically; standalone figures do not. */
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-.row-team { font-weight: 600; white-space: normal; min-width: 11rem; }
-.row-team small { display: block; font-weight: 400; color: var(--text-dim); font-size: 0.8rem; }
+.row-team { font-weight: 620; white-space: normal; min-width: 11rem; }
+.row-team small { display: block; font-weight: 400; color: var(--text-dim); font-size: 0.79rem; }
+.rank { color: var(--text-dim); font-variant-numeric: tabular-nums; }
 
-/* Playoff cut line: a border AND a label, never colour alone. */
-tr.playoff-cut td { border-bottom: 2px solid var(--accent); }
+/* Playoff cut: a rule AND a text column, never colour alone. */
+tr.playoff-cut td, tr.playoff-cut th { border-bottom: 2px solid var(--accent); }
 
-/* --- Pills / badges ------------------------------------------------------ */
+/* --- Magnitude bars ------------------------------------------------------ */
+/* Single sequential hue. Square at the baseline, 4px rounded data-end. */
+.bar-cell { min-width: 7rem; }
+.bar-wrap { display: flex; align-items: center; gap: 0.5rem; }
+.bar-track {
+  flex: 1; height: 8px; min-width: 3rem;
+  background: var(--accent-track);
+  border-radius: 2px; overflow: hidden;
+}
+.bar-fill {
+  height: 100%; background: var(--accent);
+  border-radius: 0 4px 4px 0;
+}
+.bar-value {
+  font-variant-numeric: tabular-nums; font-size: 0.86rem;
+  color: var(--text-muted); min-width: 3.2rem; text-align: right;
+}
+
+/* --- Pills --------------------------------------------------------------- */
 .pill {
-  display: inline-block;
-  padding: 0.1rem 0.5rem;
-  border-radius: 999px;
-  font-size: 0.78rem;
-  font-weight: 650;
-  border: 1px solid transparent;
-  white-space: nowrap;
+  display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px;
+  font-size: 0.77rem; font-weight: 660; border: 1px solid transparent; white-space: nowrap;
 }
 .pill--good { background: var(--good-dim); color: var(--good); border-color: var(--good); }
 .pill--bad { background: var(--bad-dim); color: var(--bad); border-color: var(--bad); }
 .pill--warn { background: var(--warn-dim); color: var(--warn); border-color: var(--warn); }
 .pill--neutral { background: var(--bg-sunken); color: var(--text-muted); border-color: var(--border); }
+.pill--accent { background: var(--accent-wash); color: var(--accent); border-color: var(--accent); }
 
 /* --- Prize cards --------------------------------------------------------- */
 .prize {
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 1rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
+  background: var(--bg-raised); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 1rem 1.1rem;
+  display: flex; flex-direction: column; gap: 0.3rem;
+  transition: border-color 0.15s ease, transform 0.15s ease;
 }
+.prize:hover { border-color: var(--border-strong); transform: translateY(-2px); }
+.prize--pending { opacity: 0.72; }
 .prize__label { font-weight: 700; font-size: 1rem; margin: 0; }
-.prize__desc { font-size: 0.85rem; color: var(--text-dim); margin: 0; }
-.prize__winner { font-size: 1.05rem; font-weight: 650; color: var(--accent); margin: 0.2rem 0 0; }
-.prize__detail { font-size: 0.88rem; color: var(--text-muted); margin: 0; }
+.prize__desc { font-size: 0.84rem; color: var(--text-dim); margin: 0; }
+.prize__winner {
+  font-size: 1.08rem; font-weight: 680; margin: 0.35rem 0 0;
+  display: flex; align-items: baseline; gap: 0.4rem; flex-wrap: wrap;
+}
+.prize__value {
+  font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 700;
+}
+.prize__detail { font-size: 0.86rem; color: var(--text-muted); margin: 0; }
 
 /* --- Draft board --------------------------------------------------------- */
-.draft-round { margin-bottom: 1.25rem; }
-.draft-round h3 { margin-bottom: 0.5rem; font-size: 0.95rem; color: var(--text-muted); }
+.draft-round { margin-bottom: 1.35rem; }
+.draft-round h3 {
+  margin-bottom: 0.55rem; font-size: 0.82rem; color: var(--text-dim);
+  text-transform: uppercase; letter-spacing: 0.07em;
+}
 .draft-picks {
-  display: grid;
-  gap: 0.5rem;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 165px), 1fr));
-  list-style: none;
-  padding: 0;
-  margin: 0;
+  display: grid; gap: 0.5rem;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 172px), 1fr));
+  list-style: none; padding: 0; margin: 0;
 }
 .pick {
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 0.5rem 0.6rem;
-  font-size: 0.85rem;
+  background: var(--bg-raised); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 0.55rem 0.65rem; font-size: 0.85rem;
 }
-.pick__num { color: var(--text-dim); font-size: 0.75rem; font-variant-numeric: tabular-nums; }
-.pick__player { font-weight: 650; display: block; }
-.pick__meta { color: var(--text-muted); font-size: 0.8rem; }
+.pick__num { color: var(--text-dim); font-size: 0.73rem; font-variant-numeric: tabular-nums; }
+.pick__player { font-weight: 660; display: block; }
+.pick__meta { color: var(--text-muted); font-size: 0.79rem; }
+
+/* --- Timeline ------------------------------------------------------------ */
+.timeline { list-style: none; margin: 0; padding: 0; }
+.timeline li {
+  position: relative; padding: 0 0 1.05rem 1.6rem;
+  border-left: 2px solid var(--border);
+}
+.timeline li:last-child { border-left-color: transparent; padding-bottom: 0; }
+.timeline li::before {
+  content: ""; position: absolute; left: -6px; top: 0.42rem;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--bg-raised); border: 2px solid var(--border-strong);
+}
+.timeline li.is-done::before { background: var(--accent); border-color: var(--accent); }
+.timeline li.is-next::before { background: var(--bg-raised); border-color: var(--accent); }
+.timeline__title { font-weight: 620; display: block; }
+.timeline__meta { font-size: 0.84rem; color: var(--text-muted); }
 
 /* --- Empty states -------------------------------------------------------- */
 .empty {
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius);
-  padding: 2rem 1.25rem;
-  text-align: center;
-  color: var(--text-muted);
-  background: var(--bg-raised);
+  border: 1px dashed var(--border-strong); border-radius: var(--radius);
+  padding: 2.25rem 1.25rem; text-align: center;
+  color: var(--text-muted); background: var(--bg-raised);
 }
+.empty__icon { font-size: 1.9rem; display: block; margin-bottom: 0.5rem; }
 .empty h3 { color: var(--text); margin-bottom: 0.35rem; }
-.empty p { margin: 0 auto; max-width: 48ch; }
+.empty p { margin: 0 auto; max-width: 50ch; }
 
-/* --- Money --------------------------------------------------------------- */
+/* --- Progress / meter ---------------------------------------------------- */
+/* Track is a lighter step of the fill's own ramp, so state reads across it. */
 .progress {
-  background: var(--bg-sunken);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  height: 0.75rem;
-  overflow: hidden;
-  margin: 0.5rem 0;
+  background: var(--accent-track); border-radius: 999px;
+  height: 0.6rem; overflow: hidden; margin: 0.5rem 0;
 }
-.progress__fill { background: var(--accent); height: 100%; }
+.progress__fill { background: var(--accent); height: 100%; border-radius: 0 4px 4px 0; }
 
 /* --- Footer -------------------------------------------------------------- */
 .site-footer {
-  border-top: 1px solid var(--border);
-  padding: 1.25rem 0 2rem;
-  color: var(--text-dim);
-  font-size: 0.85rem;
+  border-top: 1px solid var(--border); padding: 1.35rem 0 2.5rem;
+  color: var(--text-dim); font-size: 0.85rem;
 }
 
 /* --- Loading / error ----------------------------------------------------- */
-.loading, .error {
-  padding: 2rem 1rem;
-  text-align: center;
-  color: var(--text-muted);
-}
+.loading { padding: 3rem 1rem; text-align: center; color: var(--text-muted); }
 .error {
-  border: 1px solid var(--bad);
-  background: var(--bad-dim);
-  color: var(--text);
-  border-radius: var(--radius);
-  text-align: left;
-  padding: 1rem 1.15rem;
+  border: 1px solid var(--bad); background: var(--bad-dim); color: var(--text);
+  border-radius: var(--radius); text-align: left; padding: 1rem 1.15rem;
 }
 .error code {
-  font-family: var(--mono);
-  background: var(--bg-sunken);
-  padding: 0.1rem 0.35rem;
-  border-radius: 3px;
-  font-size: 0.9em;
+  font-family: var(--mono); background: var(--bg-sunken);
+  padding: 0.1rem 0.35rem; border-radius: 3px; font-size: 0.9em;
 }
 
 @media (max-width: 480px) {
-  th, td { padding: 0.5rem 0.6rem; }
-  .site-nav a { padding: 0.55rem 0.7rem; font-size: 0.9rem; }
+  th, td { padding: 0.5rem 0.55rem; }
+  .site-nav a { padding: 0.55rem 0.65rem; font-size: 0.9rem; }
+  .hero { padding: 1.25rem 1.1rem; }
+  .countdown li { min-width: 3.9rem; padding: 0.45rem 0.5rem; }
 }

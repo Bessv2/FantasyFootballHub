@@ -1,0 +1,113 @@
+name: Update league data
+
+# Keeps the hub current without anyone running anything.
+#
+# Pulls from ESPN, rebuilds the site, and commits only when something actually
+# changed. Cloudflare Pages redeploys off that push, so the whole chain is
+# hands-off.
+#
+# Requires two repository secrets (Settings -> Secrets and variables ->
+# Actions): ESPN_S2 and ESPN_SWID. See the README.
+
+on:
+  schedule:
+    # 11:00 UTC daily — about 6am US Eastern, after Monday Night Football has
+    # settled and early enough that the site is current before anyone looks.
+    - cron: '0 11 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Re-fetch every week instead of using the cache'
+        type: boolean
+        default: false
+
+# Needed so the workflow can push its own commit back.
+permissions:
+  contents: write
+
+concurrency:
+  group: update-league-data
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Verify credentials are configured
+        env:
+          ESPN_S2: ${{ secrets.ESPN_S2 }}
+          ESPN_SWID: ${{ secrets.ESPN_SWID }}
+        run: |
+          if [ -z "$ESPN_S2" ] || [ -z "$ESPN_SWID" ]; then
+            echo "::error::Missing ESPN_S2 and/or ESPN_SWID repository secrets."
+            echo "Add them under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          echo "Credentials present (espn_s2 is ${#ESPN_S2} chars)."
+
+      - name: Fetch from ESPN
+        env:
+          ESPN_S2: ${{ secrets.ESPN_S2 }}
+          ESPN_SWID: ${{ secrets.ESPN_SWID }}
+        run: |
+          if [ "${{ inputs.force }}" = "true" ]; then
+            node scripts/fetch.mjs --force
+          else
+            node scripts/fetch.mjs
+          fi
+
+      - name: Build the site
+        run: node scripts/build.mjs
+
+      - name: Run tests
+        run: node --test tests/*.test.mjs
+
+      - name: Commit and push if anything changed
+        id: commit
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No changes — nothing to publish."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          WEEKS=$(node -e "try{console.log(require('./docs/data/hub.json').status.weeksPlayed)}catch{console.log(0)}")
+          PHASE=$(node -e "try{console.log(require('./docs/data/hub.json').phase.headline)}catch{console.log('Update')}")
+
+          if [ "$WEEKS" -gt 0 ]; then
+            MSG="Week $WEEKS"
+          else
+            MSG="$PHASE"
+          fi
+
+          git commit -m "$MSG [automated]"
+          git push
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "Published: $MSG"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### League data update"
+            echo ""
+            if [ "${{ steps.commit.outputs.changed }}" = "true" ]; then
+              echo "Published new data. Cloudflare Pages will redeploy shortly."
+            else
+              echo "No changes since the last run."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

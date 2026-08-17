@@ -63,6 +63,14 @@ export async function loadConfig() {
  * if a request actually comes back unauthorized.
  */
 export async function loadSecrets() {
+  // Environment variables win, so CI can authenticate from repo secrets
+  // without a secrets.json ever existing on the runner.
+  const envS2 = process.env.ESPN_S2?.trim();
+  const envSwid = process.env.ESPN_SWID?.trim();
+  if (envS2 && envSwid) {
+    return { espnS2: envS2, swid: normalizeSwid(envSwid) };
+  }
+
   const file = path.join(ROOT, 'config', 'secrets.json');
   if (!existsSync(file)) return null;
 
@@ -73,9 +81,12 @@ export async function loadSecrets() {
   if (!espnS2 || !swid) return null;
   if (espnS2.startsWith('PASTE_') || swid.startsWith('{PASTE')) return null;
 
-  // SWID is expected to carry its braces. Add them if the user stripped them.
-  const normalizedSwid = swid.startsWith('{') ? swid : `{${swid.replace(/^\{|\}$/g, '')}}`;
-  return { espnS2, swid: normalizedSwid };
+  return { espnS2, swid: normalizeSwid(swid) };
+}
+
+/** SWID is expected to carry its braces; add them back if they were stripped. */
+function normalizeSwid(swid) {
+  return swid.startsWith('{') ? swid : `{${swid.replace(/^\{|\}$/g, '')}}`;
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

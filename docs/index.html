@@ -16,8 +16,11 @@
     <div class="wrap">
       <div class="site-header__top">
         <h1 class="site-title">
-          <span id="league-name">Fantasy Football Hub</span>
-          <small id="league-sub">Loading league…</small>
+          <span class="site-title__mark" aria-hidden="true">🏈</span>
+          <span class="site-title__text">
+            <span id="league-name">Fantasy Football Hub</span>
+            <small id="league-sub">Loading league…</small>
+          </span>
         </h1>
         <button type="button" class="theme-toggle" id="theme-toggle" aria-pressed="false">
           Switch to light theme
@@ -32,7 +35,7 @@
           <li><a href="#draft" data-view="draft">Draft</a></li>
           <li><a href="#trades" data-view="trades">Trades</a></li>
           <li><a href="#prizes" data-view="prizes">Prizes</a></li>
-          <li><a href="#money" data-view="money">Money</a></li>
+          <li data-nav="money" hidden><a href="#money" data-view="money">Money</a></li>
         </ul>
       </nav>
     </div>

@@ -166,12 +166,35 @@ private repo requires a paid GitHub plan.
 
 ### Every week after that
 
+Nothing, if automation is on (below). Otherwise:
+
 ```bash
 npm run ship
 ```
 
-Fetches, builds, commits, pushes. Cloudflare redeploys automatically. That is
-the entire weekly routine.
+Fetches, builds, commits, pushes. Cloudflare redeploys automatically.
+
+## Automation — the hands-off option
+
+`.github/workflows/update.yml` runs daily at 11:00 UTC (about 6am US Eastern,
+after Monday Night Football has settled). It fetches, rebuilds, runs the tests,
+and commits **only when something actually changed** — Cloudflare redeploys off
+that push. You never have to touch it during the season.
+
+**To switch it on**, add two repository secrets — Settings → Secrets and
+variables → Actions → New repository secret:
+
+| Name | Value |
+| --- | --- |
+| `ESPN_S2` | the same value as in `config/secrets.json` |
+| `ESPN_SWID` | the same value, braces included |
+
+You can also trigger it by hand from the Actions tab ("Run workflow"), with an
+option to re-fetch every week instead of using the cache.
+
+**When your cookies expire** the workflow fails and GitHub emails you. Update
+both secrets and it resumes. Nothing silently goes stale — a failed run is loud,
+and the site keeps serving the last good data until it's fixed.
 
 > Note for PowerShell: don't chain commands with `&&` — Windows PowerShell 5.1
 > treats it as a syntax error. Use `;` between commands, or just use

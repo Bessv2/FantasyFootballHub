@@ -135,6 +135,29 @@ describe('optimalLineup', () => {
     assert.equal(result.points, 69);
   });
 
+  test("Roe Leauge's actual superflex roster picks the second QB for the OP slot", () => {
+    // The real league starts 1 QB / 2 RB / 2 WR / 1 TE / 1 OP / 1 D-ST / 1 K.
+    // Slot 7 (OP) accepts a QB, so a second quarterback outscoring every flex
+    // option must be started there. Only one overlapping slot type exists, so
+    // this exercises the greedy path rather than the exhaustive one.
+    const slots = [
+      { slotId: 0, count: 1 }, { slotId: 2, count: 2 }, { slotId: 4, count: 2 },
+      { slotId: 6, count: 1 }, { slotId: 7, count: 1 }, { slotId: 16, count: 1 },
+      { slotId: 17, count: 1 },
+    ];
+    const roster = [
+      p(1, 'QB1', 'QB', 32), p(2, 'QB2', 'QB', 27),
+      p(3, 'RB1', 'RB', 18), p(4, 'RB2', 'RB', 14), p(5, 'RB3', 'RB', 11),
+      p(6, 'WR1', 'WR', 16), p(7, 'WR2', 'WR', 12),
+      p(8, 'TE1', 'TE', 9), p(9, 'K1', 'K', 8), p(10, 'DST1', 'D/ST', 7),
+    ];
+    // 32 + 18 + 14 + 16 + 12 + 9 + OP(QB2 27) + 7 + 8 = 143
+    const result = optimalLineup(roster, slots);
+    assert.equal(result.points, 143);
+    const op = result.lineup.find((x) => x.slotId === 7);
+    assert.equal(op.playerId, 2, 'OP slot should take the second QB, not a flex player');
+  });
+
   test('lineupEfficiency is a percentage and guards divide-by-zero', () => {
     assert.equal(lineupEfficiency(90, 100), 90);
     assert.equal(lineupEfficiency(100, 100), 100);

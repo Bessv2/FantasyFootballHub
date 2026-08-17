@@ -4,31 +4,33 @@
  * Renders pre-computed JSON from docs/data/. No framework, no build step, no
  * network calls to ESPN (the browser cannot reach it — no CORS headers).
  *
- * Two things this file is careful about:
- *   - Every view has a real empty state. The league does not draft until
- *     Sept 5 2026, so "nothing here yet" is the normal case for now and it
- *     should read as intentional, not broken.
- *   - Routing keeps keyboard and screen reader users oriented: focus moves to
- *     the heading, aria-current tracks the nav, and changes are announced.
+ * Design notes:
+ *   - Magnitude is drawn with a single sequential hue, never one colour per
+ *     team: 12 teams exceeds any CVD-safe categorical set, and the question
+ *     these tables answer is "how much", not "which one".
+ *   - Every view has a real empty state. The draft is Sept 5 2026, so "nothing
+ *     has happened yet" is the normal case for now and should read as
+ *     deliberate rather than broken.
+ *   - The Money view only exists when its data actually loaded. On the public
+ *     site the ledger is never uploaded, so the tab is absent entirely rather
+ *     than advertising that something is being withheld.
  */
 
-const VIEWS = ['overview', 'standings', 'teams', 'draft', 'trades', 'prizes', 'money'];
+const ALL_VIEWS = ['overview', 'standings', 'teams', 'draft', 'trades', 'prizes', 'money'];
+let VIEWS = ALL_VIEWS.filter((v) => v !== 'money');
 
-const state = { hub: null, season: null, draft: null, money: null, weeks: null };
+const state = { hub: null, season: null, draft: null, money: null };
+let countdownTimer = null;
 
 // --- Helpers ---------------------------------------------------------------
 
 const $ = (sel) => document.querySelector(sel);
 
-/** Escapes text before it goes anywhere near innerHTML. */
 function esc(value) {
   if (value === null || value === undefined) return '';
   return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 const num = (n, digits = 2) =>
@@ -49,7 +51,7 @@ const signed = (n, digits = 2) => {
   return `${v > 0 ? '+' : ''}${v.toFixed(digits)}`;
 };
 
-/** Sign as a pill, with the sign in the text so colour is never load-bearing. */
+/** Sign lives in the text, so colour is never the only channel. */
 function deltaPill(value, digits = 2) {
   if (value === null || value === undefined) return '<span class="pill pill--neutral">—</span>';
   const v = Number(value);
@@ -57,46 +59,154 @@ function deltaPill(value, digits = 2) {
   return `<span class="pill ${cls}">${esc(signed(v, digits))}</span>`;
 }
 
-function emptyState(title, message) {
-  return `<div class="empty"><h3>${esc(title)}</h3><p>${esc(message)}</p></div>`;
+/**
+ * A magnitude bar with its value beside it. The value is always shown as text,
+ * so the bar is reinforcement rather than the only way to read the number.
+ */
+function bar(value, max, { digits = 1, suffix = '' } = {}) {
+  const pct = max > 0 ? Math.max(0, Math.min(100, (value / max) * 100)) : 0;
+  return `
+    <div class="bar-wrap">
+      <span class="bar-track"><span class="bar-fill" style="width:${pct.toFixed(1)}%"></span></span>
+      <span class="bar-value">${esc(num(value, digits))}${esc(suffix)}</span>
+    </div>`;
 }
+
+/**
+ * How many players actually start each week. `startingSlots` lists slot TYPES
+ * with a count each, so its length is the number of distinct slots (7), not the
+ * number of players you field (9).
+ */
+const starterCount = (league) =>
+  (league.startingSlots ?? []).reduce((total, slot) => total + slot.count, 0);
+
+/** Slot 7 is ESPN's OP slot — QB-eligible, i.e. a superflex league. */
+const isSuperflex = (league) =>
+  (league.startingSlots ?? []).some((slot) => slot.slotId === 7);
+
+function emptyState(icon, title, message) {
+  return `<div class="empty">
+    <span class="empty__icon" aria-hidden="true">${esc(icon)}</span>
+    <h3>${esc(title)}</h3><p>${esc(message)}</p>
+  </div>`;
+}
+
+const fmtDate = (ms, opts = { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }) =>
+  ms ? new Date(ms).toLocaleDateString(undefined, opts) : null;
+
+const fmtTime = (ms) =>
+  ms ? new Date(ms).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }) : null;
 
 async function loadJson(path) {
   const res = await fetch(path, { cache: 'no-cache' });
   if (!res.ok) throw new Error(`${path} → ${res.status} ${res.statusText}`);
+  // Cloudflare Pages serves index.html for missing paths, so a 200 does not
+  // guarantee JSON. Parsing is what actually proves the file is there.
   return res.json();
+}
+
+// --- Countdown -------------------------------------------------------------
+
+function countdownParts(targetMs) {
+  const diff = targetMs - Date.now();
+  if (diff <= 0) return null;
+  const s = Math.floor(diff / 1000);
+  return {
+    days: Math.floor(s / 86400),
+    hours: Math.floor((s % 86400) / 3600),
+    minutes: Math.floor((s % 3600) / 60),
+    seconds: s % 60,
+  };
+}
+
+function renderCountdown() {
+  const el = document.getElementById('countdown');
+  if (!el) return;
+  const target = Number(el.dataset.target);
+  const parts = countdownParts(target);
+
+  if (!parts) {
+    el.outerHTML = '<p class="pill pill--accent">Draft is underway</p>';
+    if (countdownTimer) clearInterval(countdownTimer);
+    return;
+  }
+
+  const units = [
+    ['days', parts.days === 1 ? 'Day' : 'Days'],
+    ['hours', 'Hours'],
+    ['minutes', 'Minutes'],
+    ['seconds', 'Seconds'],
+  ];
+  el.innerHTML = units
+    .map(
+      ([key, label]) => `<li>
+        <span class="countdown__value">${String(parts[key]).padStart(2, '0')}</span>
+        <span class="countdown__unit">${label}</span>
+      </li>`
+    )
+    .join('');
+}
+
+function startCountdown() {
+  if (countdownTimer) clearInterval(countdownTimer);
+  if (!document.getElementById('countdown')) return;
+  renderCountdown();
+  countdownTimer = setInterval(renderCountdown, 1000);
 }
 
 // --- Views -----------------------------------------------------------------
 
 function renderOverview() {
   const { hub } = state;
-  const { phase, status, league, standings, power } = hub;
-
+  const { phase, status, league, power } = hub;
   const parts = [];
 
-  parts.push(`
-    <div class="banner">
-      <h2>${esc(phase.headline)}</h2>
-      <p>${esc(phase.detail)}</p>
-      ${phase.nextMilestone ? `<span class="banner__next">${esc(phase.nextMilestone)}</span>` : ''}
-    </div>
-  `);
-
   const claimed = hub.teams.filter((t) => !t.isPlaceholder).length;
-  const draftDate = league.draftDate ? new Date(league.draftDate) : null;
+  const draftMs = league.draftDate;
+  const upcoming = draftMs && draftMs > Date.now();
 
+  // --- Hero -------------------------------------------------------------
+  if (upcoming) {
+    // The ticking counter is hidden from assistive tech — a value announced
+    // every second is unusable. The static sentence above it carries the fact.
+    parts.push(`
+      <section class="hero" aria-labelledby="hero-h">
+        <p class="hero__eyebrow">Draft day</p>
+        <h2 id="hero-h">${esc(fmtDate(draftMs))}</h2>
+        <p class="hero__sub">
+          ${esc(fmtTime(draftMs))} · ${esc(league.draftType ?? 'Snake')} draft ·
+          ${esc(league.timePerPick ?? 90)} seconds per pick${
+            league.draftRoomOpens
+              ? ` · room opens ${esc(fmtTime(league.draftRoomOpens))}`
+              : ''
+          }
+        </p>
+        <p class="visually-hidden">
+          The draft begins on ${esc(fmtDate(draftMs))} at ${esc(fmtTime(draftMs))}.
+        </p>
+        <ul class="countdown" id="countdown" data-target="${esc(draftMs)}" aria-hidden="true"></ul>
+      </section>`);
+  } else {
+    parts.push(`
+      <section class="hero" aria-labelledby="hero-h">
+        <p class="hero__eyebrow">${esc(phase.nextMilestone ?? 'Season')}</p>
+        <h2 id="hero-h">${esc(phase.headline)}</h2>
+        <p class="hero__sub">${esc(phase.detail)}</p>
+      </section>`);
+  }
+
+  // --- Stat tiles -------------------------------------------------------
   parts.push(`
     <ul class="stats">
       <li class="stat">
         <span class="stat__label">Managers</span>
-        <span class="stat__value">${claimed} / ${esc(league.size)}</span>
-        <span class="stat__note">${claimed === league.size ? 'League is full' : 'Invites outstanding'}</span>
+        <span class="stat__value">${claimed}<span style="color:var(--text-dim)">/${esc(league.size)}</span></span>
+        <span class="stat__note">${claimed === league.size ? 'League is full' : `${league.size - claimed} spots open`}</span>
       </li>
       <li class="stat">
         <span class="stat__label">Scoring</span>
         <span class="stat__value">${league.isPPR ? 'PPR' : 'Standard'}</span>
-        <span class="stat__note">${esc(league.startingSlots.length)} starting slots</span>
+        <span class="stat__note">${esc(starterCount(league))} starters${isSuperflex(league) ? ' · superflex' : ''}</span>
       </li>
       <li class="stat">
         <span class="stat__label">Weeks played</span>
@@ -104,23 +214,24 @@ function renderOverview() {
         <span class="stat__note">of ${esc(league.regularSeasonWeeks)} regular season</span>
       </li>
       <li class="stat">
-        <span class="stat__label">Draft</span>
-        <span class="stat__value">${draftDate ? draftDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : 'TBD'}</span>
-        <span class="stat__note">${esc(league.draftType ?? 'Not set')}${league.timePerPick ? ` · ${league.timePerPick}s/pick` : ''}</span>
+        <span class="stat__label">Playoff spots</span>
+        <span class="stat__value">${esc(league.playoffTeams)}</span>
+        <span class="stat__note">of ${esc(league.size)} teams</span>
       </li>
-    </ul>
-  `);
+    </ul>`);
 
+  // --- Power rankings, or the season roadmap ----------------------------
   if (power.length) {
+    const maxPower = Math.max(...power.map((t) => t.powerScore), 1);
     parts.push(`
       <div class="table-scroll">
         <table>
-          <caption>Power rankings — blends all-play win rate, scoring, and recent form</caption>
+          <caption>Power rankings — 50% all-play win rate, 30% scoring, 20% last three weeks</caption>
           <thead>
             <tr>
               <th scope="col" class="num">#</th>
               <th scope="col">Team</th>
-              <th scope="col" class="num">Power</th>
+              <th scope="col" class="bar-cell">Power</th>
               <th scope="col" class="num">Record</th>
               <th scope="col" class="num">All-play</th>
               <th scope="col" class="num">Avg pts</th>
@@ -129,93 +240,126 @@ function renderOverview() {
           <tbody>
             ${power
               .map(
-                (t) => `
-              <tr>
-                <td class="num">${esc(t.rank)}</td>
-                <th scope="row" class="row-team">${esc(t.teamName)}<small>${esc(t.managerName ?? '')}</small></th>
-                <td class="num">${num(t.powerScore, 1)}</td>
-                <td class="num">${esc(t.record)}</td>
-                <td class="num">${num(t.allPlayWinPct, 1)}%</td>
-                <td class="num">${num(t.avgScore, 1)}</td>
-              </tr>`
+                (t) => `<tr>
+                  <td class="num rank">${esc(t.rank)}</td>
+                  <th scope="row" class="row-team">${esc(t.teamName)}<small>${esc(t.managerName ?? '')}</small></th>
+                  <td class="bar-cell">${bar(t.powerScore, maxPower)}</td>
+                  <td class="num">${esc(t.record)}</td>
+                  <td class="num">${num(t.allPlayWinPct, 1)}%</td>
+                  <td class="num">${num(t.avgScore, 1)}</td>
+                </tr>`
               )
               .join('')}
           </tbody>
         </table>
-      </div>
-    `);
+      </div>`);
   } else {
-    parts.push(
-      emptyState(
-        'No games played yet',
-        'Power rankings, standings, and prizes all unlock after Week 1 kicks off.'
-      )
-    );
-  }
-
-  if (!standings.length || status.weeksPlayed === 0) {
-    parts.push(`
-      <div class="card" style="margin-top:1.5rem">
-        <h3>What works right now</h3>
-        <p>Before the draft there is nothing to analyse, but two things are worth doing today:</p>
-        <ul>
-          <li><a href="#money">Money</a> — set the buy-in and start tracking who has paid.</li>
-          <li><a href="#prizes">Prizes</a> — see exactly which side prizes will be computed, so you can agree the rules before anyone has a stake in them.</li>
-        </ul>
-      </div>
-    `);
+    parts.push(seasonRoadmap());
   }
 
   $('#overview-body').innerHTML = parts.join('');
+  startCountdown();
+}
+
+/** What unlocks when — gives the preseason page something to say. */
+function seasonRoadmap() {
+  const { league, status } = state.hub;
+  const now = Date.now();
+  const claimed = state.hub.teams.filter((t) => !t.isPlaceholder).length;
+
+  const milestones = [
+    {
+      title: 'League fills up',
+      meta: `${claimed} of ${league.size} managers have joined`,
+      done: claimed >= league.size,
+    },
+    {
+      title: 'Draft',
+      meta: league.draftDate ? `${fmtDate(league.draftDate)} · ${fmtTime(league.draftDate)}` : 'Not scheduled',
+      done: state.draft?.held ?? false,
+    },
+    {
+      title: 'Week 1 kicks off',
+      meta: 'Standings, power rankings, luck and prizes all unlock',
+      done: status.weeksPlayed > 0,
+    },
+    {
+      title: 'Trade deadline',
+      meta: league.tradeDeadline ? fmtDate(league.tradeDeadline) : 'Not set',
+      done: league.tradeDeadline ? now > league.tradeDeadline : false,
+    },
+    {
+      title: 'Playoffs',
+      meta: `Top ${league.playoffTeams} teams after ${league.regularSeasonWeeks} weeks`,
+      done: false,
+    },
+  ];
+
+  const firstPending = milestones.findIndex((m) => !m.done);
+
+  return `
+    <div class="card">
+      <h3>Season roadmap</h3>
+      <ol class="timeline">
+        ${milestones
+          .map(
+            (m, i) => `<li class="${m.done ? 'is-done' : i === firstPending ? 'is-next' : ''}">
+              <span class="timeline__title">${esc(m.title)}${
+                m.done ? ' <span class="pill pill--good">Done</span>' : i === firstPending ? ' <span class="pill pill--accent">Next</span>' : ''
+              }</span>
+              <span class="timeline__meta">${esc(m.meta)}</span>
+            </li>`
+          )
+          .join('')}
+      </ol>
+    </div>`;
 }
 
 function renderStandings() {
   const { standings, league } = state.hub;
   if (!standings.length || standings.every((t) => t.gamesPlayed === 0)) {
     $('#standings-body').innerHTML = emptyState(
+      '📊',
       'Standings start after Week 1',
-      'Once games are played this fills in with records, points, luck, and lineup efficiency.'
+      'Records, points, luck and lineup efficiency all fill in once games are played.'
     );
     return;
   }
 
+  const maxPF = Math.max(...standings.map((t) => t.pointsFor), 1);
+
   const rows = standings
-    .map((t) => {
-      const cut = t.rank === league.playoffTeams;
-      return `
-      <tr class="${cut ? 'playoff-cut' : ''}">
-        <td class="num">${esc(t.rank)}</td>
-        <th scope="row" class="row-team">
-          ${esc(t.teamName)}<small>${esc(t.managerName ?? '')}</small>
-        </th>
+    .map(
+      (t) => `
+      <tr class="${t.rank === league.playoffTeams ? 'playoff-cut' : ''}">
+        <td class="num rank">${esc(t.rank)}</td>
+        <th scope="row" class="row-team">${esc(t.teamName)}<small>${esc(t.managerName ?? '')}</small></th>
         <td class="num">${esc(t.wins)}-${esc(t.losses)}${t.ties ? `-${esc(t.ties)}` : ''}</td>
-        <td class="num">${num(t.pointsFor, 1)}</td>
+        <td class="bar-cell">${bar(t.pointsFor, maxPF, { digits: 0 })}</td>
         <td class="num">${num(t.pointsAgainst, 1)}</td>
-        <td class="num">${num(t.avgScore, 1)}</td>
         <td class="num">${esc(t.allPlayWins)}-${esc(t.allPlayLosses)}</td>
         <td class="num">${deltaPill(t.luck)}</td>
         <td class="num">${t.efficiency === null ? '—' : `${num(t.efficiency, 1)}%`}</td>
         <td class="num">${t.streakType ? `${esc(t.streakType[0])}${esc(t.streakLength)}` : '—'}</td>
         <td>${t.inPlayoffs ? '<span class="pill pill--good">In</span>' : '<span class="pill pill--neutral">Out</span>'}</td>
-      </tr>`;
-    })
+      </tr>`
+    )
     .join('');
 
   $('#standings-body').innerHTML = `
     <div class="table-scroll">
       <table>
         <caption>
-          League standings. The line below rank ${league.playoffTeams} marks the playoff cut —
-          the "Playoff" column states it in text as well.
+          The rule below rank ${league.playoffTeams} marks the playoff cut; the
+          Playoff column states it in text as well.
         </caption>
         <thead>
           <tr>
             <th scope="col" class="num">#</th>
             <th scope="col">Team</th>
             <th scope="col" class="num">Record</th>
-            <th scope="col" class="num"><abbr title="Points for">PF</abbr></th>
+            <th scope="col" class="bar-cell">Points for</th>
             <th scope="col" class="num"><abbr title="Points against">PA</abbr></th>
-            <th scope="col" class="num">Avg</th>
             <th scope="col" class="num"><abbr title="Record if everyone played everyone every week">All-play</abbr></th>
             <th scope="col" class="num"><abbr title="Wins above or below what the scores deserved">Luck</abbr></th>
             <th scope="col" class="num"><abbr title="Share of possible points actually started">Eff.</abbr></th>
@@ -235,19 +379,18 @@ function renderTeams() {
   if (!stats.length || stats.every((t) => t.gamesPlayed === 0)) {
     const roster = hub.teams
       .map(
-        (t) => `
-      <div class="card">
-        <h3>${esc(t.name)}</h3>
-        <p>${
-          t.isPlaceholder
-            ? '<span class="pill pill--warn">Unclaimed</span>'
-            : `<span class="pill pill--good">Claimed</span> ${esc(t.managerName ?? '')}`
-        }</p>
-      </div>`
+        (t) => `<div class="card">
+          <h3>${esc(t.name)}</h3>
+          <p>${
+            t.isPlaceholder
+              ? '<span class="pill pill--warn">Open spot</span>'
+              : `<span class="pill pill--good">Claimed</span> ${esc(t.managerName ?? '')}`
+          }</p>
+        </div>`
       )
       .join('');
     $('#teams-body').innerHTML = `
-      ${emptyState('Team stats start after Week 1', 'Until then, here is who has claimed a spot.')}
+      ${emptyState('🏟️', 'Team stats start after Week 1', 'Until then, here is who has claimed a spot.')}
       <div class="grid" style="margin-top:1.5rem">${roster}</div>`;
     return;
   }
@@ -255,30 +398,23 @@ function renderTeams() {
   const cards = [...stats]
     .sort((a, b) => b.pointsFor - a.pointsFor)
     .map(
-      (t) => `
-    <div class="card">
-      <h3>${esc(t.teamName)}</h3>
-      <p class="stat__note">${esc(t.managerName ?? '')}</p>
-      <ul class="stats" style="margin:0.75rem 0 0">
-        <li class="stat"><span class="stat__label">Record</span>
-          <span class="stat__value">${esc(t.wins)}-${esc(t.losses)}</span></li>
-        <li class="stat"><span class="stat__label">Points</span>
-          <span class="stat__value">${num(t.pointsFor, 0)}</span>
-          <span class="stat__note">${num(t.avgScore, 1)}/wk</span></li>
-        <li class="stat"><span class="stat__label">Efficiency</span>
-          <span class="stat__value">${t.efficiency === null ? '—' : `${num(t.efficiency, 0)}%`}</span>
-          <span class="stat__note">${num(t.benchPoints, 0)} benched</span></li>
-        <li class="stat"><span class="stat__label">Luck</span>
-          <span class="stat__value">${esc(signed(t.luck, 1))}</span>
-          <span class="stat__note">${num(t.expectedWins, 1)} expected wins</span></li>
-        <li class="stat"><span class="stat__label">High / Low</span>
-          <span class="stat__value">${num(t.highScore, 0)}</span>
-          <span class="stat__note">low ${num(t.lowScore, 0)}</span></li>
-        <li class="stat"><span class="stat__label">Consistency</span>
-          <span class="stat__value">±${num(t.stdDev, 1)}</span>
-          <span class="stat__note">per week</span></li>
-      </ul>
-    </div>`
+      (t) => `<div class="card">
+        <h3>${esc(t.teamName)}</h3>
+        <p class="stat__note">${esc(t.managerName ?? '')}</p>
+        <ul class="stats" style="margin:0.75rem 0 0">
+          <li class="stat"><span class="stat__label">Record</span>
+            <span class="stat__value">${esc(t.wins)}-${esc(t.losses)}</span></li>
+          <li class="stat"><span class="stat__label">Points</span>
+            <span class="stat__value">${num(t.pointsFor, 0)}</span>
+            <span class="stat__note">${num(t.avgScore, 1)} per week</span></li>
+          <li class="stat"><span class="stat__label">Efficiency</span>
+            <span class="stat__value">${t.efficiency === null ? '—' : `${num(t.efficiency, 0)}%`}</span>
+            <span class="stat__note">${num(t.benchPoints, 0)} left benched</span></li>
+          <li class="stat"><span class="stat__label">Luck</span>
+            <span class="stat__value">${esc(signed(t.luck, 1))}</span>
+            <span class="stat__note">${num(t.expectedWins, 1)} expected wins</span></li>
+        </ul>
+      </div>`
     )
     .join('');
 
@@ -287,15 +423,32 @@ function renderTeams() {
 
 function renderDraft() {
   const draft = state.draft;
+  const league = state.hub.league;
+
   if (!draft || !draft.held) {
-    const when = state.hub.league.draftDate
-      ? new Date(state.hub.league.draftDate).toLocaleString()
+    const when = league.draftDate
+      ? `${fmtDate(league.draftDate)} at ${fmtTime(league.draftDate)}`
       : 'a date not yet set in ESPN';
-    $('#draft-body').innerHTML = emptyState(
-      'Draft has not happened yet',
-      `ESPN has ${draft?.totalSlots ?? 0} empty pick slots on the board, scheduled for ${when}. ` +
-        'The full board, per-manager grades, steals, and reaches all appear here once picks are made.'
-    );
+    $('#draft-body').innerHTML = `
+      ${emptyState(
+        '📋',
+        'The board is set, the picks are not',
+        `${draft?.totalSlots ?? 0} slots across ${draft?.rounds ?? 0} rounds, ${when}. ` +
+          'The full board, per-manager grades, steals and reaches all appear here the moment picks are made.'
+      )}
+      <div class="card" style="margin-top:1.5rem">
+        <h3>Draft settings</h3>
+        <ul class="stats" style="margin:0.5rem 0 0">
+          <li class="stat"><span class="stat__label">Format</span>
+            <span class="stat__value">${esc(league.draftType ?? '—')}</span></li>
+          <li class="stat"><span class="stat__label">Rounds</span>
+            <span class="stat__value">${esc(draft?.rounds ?? '—')}</span></li>
+          <li class="stat"><span class="stat__label">Per pick</span>
+            <span class="stat__value">${esc(league.timePerPick ?? '—')}s</span></li>
+          <li class="stat"><span class="stat__label">Total picks</span>
+            <span class="stat__value">${esc(draft?.totalSlots ?? '—')}</span></li>
+        </ul>
+      </div>`;
     return;
   }
 
@@ -305,37 +458,32 @@ function renderDraft() {
     parts.push(`
       <div class="table-scroll" style="margin-bottom:1.5rem">
         <table>
-          <caption>Draft grades — total value gained or lost versus where each pick was spent</caption>
+          <caption>Draft grades — value gained or lost against where each pick was spent</caption>
           <thead>
             <tr>
-              <th scope="col" class="num">#</th>
-              <th scope="col">Manager</th>
-              <th scope="col">Grade</th>
-              <th scope="col" class="num">Value</th>
+              <th scope="col" class="num">#</th><th scope="col">Manager</th>
+              <th scope="col">Grade</th><th scope="col" class="num">Value</th>
               <th scope="col" class="num">Points</th>
-              <th scope="col">Best pick</th>
-              <th scope="col">Worst pick</th>
+              <th scope="col">Best pick</th><th scope="col">Worst pick</th>
             </tr>
           </thead>
           <tbody>
             ${draft.teamGrades
               .map(
-                (t) => `
-              <tr>
-                <td class="num">${esc(t.rank)}</td>
-                <th scope="row" class="row-team">${esc(t.teamName)}<small>${esc(t.managerName ?? '')}</small></th>
-                <td><span class="pill pill--neutral">${esc(t.grade)}</span></td>
-                <td class="num">${deltaPill(t.totalValue, 0)}</td>
-                <td class="num">${num(t.totalPoints, 0)}</td>
-                <td>${t.bestPick ? `${esc(t.bestPick.playerName)} <small>(R${esc(t.bestPick.round)})</small>` : '—'}</td>
-                <td>${t.worstPick ? `${esc(t.worstPick.playerName)} <small>(R${esc(t.worstPick.round)})</small>` : '—'}</td>
-              </tr>`
+                (t) => `<tr>
+                  <td class="num rank">${esc(t.rank)}</td>
+                  <th scope="row" class="row-team">${esc(t.teamName)}<small>${esc(t.managerName ?? '')}</small></th>
+                  <td><span class="pill pill--accent">${esc(t.grade)}</span></td>
+                  <td class="num">${deltaPill(t.totalValue, 0)}</td>
+                  <td class="num">${num(t.totalPoints, 0)}</td>
+                  <td>${t.bestPick ? `${esc(t.bestPick.playerName)} <small>(R${esc(t.bestPick.round)})</small>` : '—'}</td>
+                  <td>${t.worstPick ? `${esc(t.worstPick.playerName)} <small>(R${esc(t.worstPick.round)})</small>` : '—'}</td>
+                </tr>`
               )
               .join('')}
           </tbody>
         </table>
-      </div>
-    `);
+      </div>`);
 
     const list = (title, picks) => `
       <div class="card">
@@ -344,18 +492,17 @@ function renderDraft() {
           ${picks
             .slice(0, 5)
             .map(
-              (p) =>
-                `<li>${esc(p.playerName)} <small>${esc(p.position)} · pick ${esc(p.overall)} · ${esc(p.teamName)}</small> ${deltaPill(p.valueDelta, 0)}</li>`
+              (p) => `<li>${esc(p.playerName)}
+                <small>${esc(p.position)} · pick ${esc(p.overall)} · ${esc(p.teamName)}</small>
+                ${deltaPill(p.valueDelta, 0)}</li>`
             )
             .join('')}
         </ol>
       </div>`;
-    parts.push(
-      `<div class="grid" style="margin-bottom:1.5rem">
-        ${list('Biggest steals', draft.steals)}
-        ${list('Biggest reaches', draft.reaches)}
-      </div>`
-    );
+    parts.push(`<div class="grid" style="margin-bottom:1.5rem">
+      ${list('Biggest steals', draft.steals)}
+      ${list('Biggest reaches', draft.reaches)}
+    </div>`);
   }
 
   parts.push('<h3>Full draft board</h3>');
@@ -366,14 +513,13 @@ function renderDraft() {
         <ol class="draft-picks">
           ${round.picks
             .map(
-              (p) => `
-            <li class="pick">
-              <span class="pick__num">${esc(p.overall)}.</span>
-              <span class="pick__player">${esc(p.playerName)}</span>
-              <span class="pick__meta">${esc(p.position)} · ${esc(p.proTeam)}</span><br>
-              <span class="pick__meta">${esc(p.teamName)}</span>
-              ${draft.hasResults ? `<br>${deltaPill(p.valueDelta, 0)}` : ''}
-            </li>`
+              (p) => `<li class="pick">
+                <span class="pick__num">${esc(p.overall)}.</span>
+                <span class="pick__player">${esc(p.playerName)}</span>
+                <span class="pick__meta">${esc(p.position)} · ${esc(p.proTeam)}</span><br>
+                <span class="pick__meta">${esc(p.teamName)}</span>
+                ${draft.hasResults ? `<br>${deltaPill(p.valueDelta, 0)}` : ''}
+              </li>`
             )
             .join('')}
         </ol>
@@ -386,35 +532,32 @@ function renderDraft() {
 function renderTrades() {
   const trades = state.season?.trades ?? [];
   const transactions = state.season?.transactions ?? [];
-
   const parts = [];
 
   if (!trades.length) {
     parts.push(
       emptyState(
+        '🤝',
         'No trades yet',
-        'Every completed trade will appear here with both sides laid out, once the season is underway.'
+        'Every completed trade shows up here with both sides laid out, once the season is underway.'
       )
     );
   } else {
-    parts.push(
-      `<div class="grid">${trades
-        .map(
-          (t) => `
-      <div class="card">
-        <h3>${t.date ? esc(new Date(t.date).toLocaleDateString()) : 'Trade'}</h3>
-        ${t.sides
-          .map(
-            (s) => `
-          <p><strong>${esc(s.teamName)}</strong> received:<br>
-          ${s.received.length ? s.received.map((p) => `${esc(p.name)} <small>(${esc(p.position)})</small>`).join('<br>') : '<em>nothing recorded</em>'}
-          </p>`
-          )
-          .join('')}
-      </div>`
-        )
-        .join('')}</div>`
-    );
+    parts.push(`<div class="grid">${trades
+      .map(
+        (t) => `<div class="card">
+          <h3>${t.date ? esc(new Date(t.date).toLocaleDateString()) : 'Trade'}</h3>
+          ${t.sides
+            .map(
+              (s) => `<p><strong>${esc(s.teamName)}</strong> received:<br>
+                ${s.received.length
+                  ? s.received.map((p) => `${esc(p.name)} <small>(${esc(p.position)})</small>`).join('<br>')
+                  : '<em>nothing recorded</em>'}</p>`
+            )
+            .join('')}
+        </div>`
+      )
+      .join('')}</div>`);
   }
 
   if (transactions.length) {
@@ -423,27 +566,21 @@ function renderTrades() {
       <div class="table-scroll">
         <table>
           <caption>${transactions.length} transaction(s)</caption>
-          <thead>
-            <tr>
-              <th scope="col" class="num">Week</th>
-              <th scope="col">Team</th>
-              <th scope="col">Type</th>
-              <th scope="col">Players</th>
-              <th scope="col" class="num">Bid</th>
-            </tr>
-          </thead>
+          <thead><tr>
+            <th scope="col" class="num">Week</th><th scope="col">Team</th>
+            <th scope="col">Type</th><th scope="col">Players</th><th scope="col" class="num">Bid</th>
+          </tr></thead>
           <tbody>
             ${transactions
               .slice(0, 100)
               .map(
-                (tx) => `
-              <tr>
-                <td class="num">${esc(tx.scoringPeriodId ?? '—')}</td>
-                <th scope="row" class="row-team">${esc(tx.teamName)}</th>
-                <td>${esc(tx.type)}</td>
-                <td>${tx.items.map((i) => `${esc(i.type)} ${esc(i.playerName)}`).join(', ')}</td>
-                <td class="num">${tx.bidAmount ? `$${esc(tx.bidAmount)}` : '—'}</td>
-              </tr>`
+                (tx) => `<tr>
+                  <td class="num">${esc(tx.scoringPeriodId ?? '—')}</td>
+                  <th scope="row" class="row-team">${esc(tx.teamName)}</th>
+                  <td>${esc(tx.type)}</td>
+                  <td>${tx.items.map((i) => `${esc(i.type)} ${esc(i.playerName)}`).join(', ')}</td>
+                  <td class="num">${tx.bidAmount ? `$${esc(tx.bidAmount)}` : '—'}</td>
+                </tr>`
               )
               .join('')}
           </tbody>
@@ -454,62 +591,59 @@ function renderTrades() {
   $('#trades-body').innerHTML = parts.join('');
 }
 
+/** Shown before any results exist, so the league can agree rules early. */
+const PRIZE_CATALOGUE = [
+  ['Highest Single Week', 'Most points scored by anyone in one week'],
+  ['Lowest Single Week', 'Fewest points scored by anyone in one week'],
+  ['Tough Luck Award', 'Highest score that still lost'],
+  ['Stole One', 'Lowest score that still won'],
+  ['Biggest Blowout', 'Largest margin of victory'],
+  ['Photo Finish', 'Narrowest margin of victory'],
+  ['Bench Warmer', 'Most points left on the bench in one week'],
+  ['Player of the Year', 'Best single game by a started player'],
+  ['Why Did You Start Him', 'Worst single game by a started player'],
+  ['Best Manager', 'Highest lineup efficiency across the season'],
+  ['Room For Improvement', 'Lowest lineup efficiency'],
+  ['Horseshoe Award', 'Won the most games above what the scores deserved'],
+  ['Snakebit', 'Won the fewest games relative to how well they scored'],
+  ['Old Reliable', 'Smallest week-to-week swing'],
+  ['Boom or Bust', 'Largest week-to-week swing'],
+  ['True Champion', 'Best record if everyone played everyone every week'],
+  ['Season-Long Bench Warmer', 'Most total points benched all season'],
+  ['Lineup Savant', 'Most weeks with a perfect lineup'],
+];
+
 function renderPrizes() {
   const prizes = state.season?.prizes ?? [];
   const weeklyHigh = state.hub.weeklyHigh ?? [];
 
   if (!prizes.length) {
-    // Even with no data, showing the catalogue is genuinely useful — it lets
-    // the league agree the rules before anyone has a stake in the outcome.
-    const catalogue = [
-      ['Highest Single Week', 'Most points scored by anyone in one week'],
-      ['Lowest Single Week', 'Fewest points scored by anyone in one week'],
-      ['Tough Luck Award', 'Highest score that still lost'],
-      ['Stole One', 'Lowest score that still won'],
-      ['Biggest Blowout', 'Largest margin of victory'],
-      ['Photo Finish', 'Narrowest margin of victory'],
-      ['Bench Warmer', 'Most points left on the bench in one week'],
-      ['Player of the Year', 'Best single game by a started player'],
-      ['Why Did You Start Him', 'Worst single game by a started player'],
-      ['Best Manager', 'Highest lineup efficiency across the season'],
-      ['Room For Improvement', 'Lowest lineup efficiency'],
-      ['Horseshoe Award', 'Won the most games above what the scores deserved'],
-      ['Snakebit', 'Won the fewest games relative to how well they scored'],
-      ['Old Reliable', 'Smallest week-to-week swing'],
-      ['Boom or Bust', 'Largest week-to-week swing'],
-      ['True Champion', 'Best record if everyone played everyone every week'],
-      ['Season-Long Bench Warmer', 'Most total points benched all season'],
-      ['Lineup Savant', 'Most weeks with a perfect lineup'],
-    ];
     $('#prizes-body').innerHTML = `
       ${emptyState(
-        'No prizes to award yet',
-        'These are the 18 prizes that will be computed automatically once games are played. Worth agreeing which ones pay out before the draft.'
+        '🏆',
+        `${PRIZE_CATALOGUE.length} prizes waiting to be won`,
+        'These are computed automatically from the box scores once games are played. Worth agreeing which ones pay out before the draft.'
       )}
       <div class="grid" style="margin-top:1.5rem">
-        ${catalogue
-          .map(
-            ([label, desc]) => `
-          <div class="prize">
+        ${PRIZE_CATALOGUE.map(
+          ([label, desc]) => `<div class="prize prize--pending">
             <p class="prize__label">${esc(label)}</p>
             <p class="prize__desc">${esc(desc)}</p>
             <p class="prize__detail"><em>Awaiting results</em></p>
           </div>`
-          )
-          .join('')}
+        ).join('')}
       </div>`;
     return;
   }
 
   const cards = prizes
     .map(
-      (p) => `
-    <div class="prize">
-      <p class="prize__label">${esc(p.label)}</p>
-      <p class="prize__desc">${esc(p.description)}</p>
-      <p class="prize__winner">${esc(p.winner.teamName)}</p>
-      <p class="prize__detail">${esc(p.winner.detail ?? '')}</p>
-    </div>`
+      (p) => `<div class="prize">
+        <p class="prize__label">${esc(p.label)}</p>
+        <p class="prize__desc">${esc(p.description)}</p>
+        <p class="prize__winner">${esc(p.winner.teamName)}</p>
+        <p class="prize__detail">${esc(p.winner.detail ?? '')}</p>
+      </div>`
     )
     .join('');
 
@@ -519,14 +653,13 @@ function renderPrizes() {
          <table>
            <caption>Top scorer each week — often its own small pot</caption>
            <thead><tr><th scope="col" class="num">Week</th><th scope="col">Team</th><th scope="col" class="num">Points</th></tr></thead>
-           <tbody>
-             ${weeklyHigh
-               .map(
-                 (w) =>
-                   `<tr><td class="num">${esc(w.week)}</td><th scope="row" class="row-team">${esc(w.teamName)}</th><td class="num">${num(w.score, 2)}</td></tr>`
-               )
-               .join('')}
-           </tbody>
+           <tbody>${weeklyHigh
+             .map(
+               (w) => `<tr><td class="num rank">${esc(w.week)}</td>
+                 <th scope="row" class="row-team">${esc(w.teamName)}</th>
+                 <td class="num">${num(w.score, 2)}</td></tr>`
+             )
+             .join('')}</tbody>
          </table>
        </div>`
     : '';
@@ -536,32 +669,17 @@ function renderPrizes() {
 
 function renderMoney() {
   const m = state.money;
-  if (!m) {
-    // On the published site the ledger is deliberately absent — it is
-    // gitignored and never uploaded. Locally it loads fine, so a missing file
-    // here means "kept private", not "broken".
-    $('#money-body').innerHTML =
-      state.hub?.site?.showMoney === false
-        ? emptyState(
-            'Ledger is kept private',
-            'Buy-ins and payments are tracked locally and are not published to this site. ' +
-              'Ask the commissioner where the money stands.'
-          )
-        : emptyState('No ledger', 'config/money.json could not be loaded.');
-    return;
-  }
+  if (!m) return; // View is not registered at all without data.
 
   const parts = [];
 
   if (m.warnings.length) {
-    parts.push(
-      `<div class="error" role="alert" style="margin-bottom:1.5rem">
-        <strong>Check the ledger config</strong>
-        <ul style="margin:0.5rem 0 0;padding-left:1.2rem">
-          ${m.warnings.map((w) => `<li>${esc(w)}</li>`).join('')}
-        </ul>
-      </div>`
-    );
+    parts.push(`<div class="error" role="alert" style="margin-bottom:1.5rem">
+      <strong>Check the ledger config</strong>
+      <ul style="margin:0.5rem 0 0;padding-left:1.2rem">
+        ${m.warnings.map((w) => `<li>${esc(w)}</li>`).join('')}
+      </ul>
+    </div>`);
   }
 
   parts.push(`
@@ -577,33 +695,28 @@ function renderMoney() {
         <span class="stat__note">${num(m.collectionPct, 0)}% in</span></li>
       <li class="stat"><span class="stat__label">Outstanding</span>
         <span class="stat__value">${esc(money(m.outstanding, m.currency))}</span>
-        <span class="stat__note">${esc(m.unpaid.length)} unpaid</span></li>
+        <span class="stat__note">${esc(m.unpaid.length)} still to pay</span></li>
     </ul>
-    <div class="progress">
-      <div class="progress__fill" style="width:${Math.min(100, m.collectionPct)}%"></div>
-    </div>
+    <div class="progress"><div class="progress__fill" style="width:${Math.min(100, m.collectionPct)}%"></div></div>
     <p class="stat__note" style="margin-bottom:1.5rem">
       ${esc(money(m.collected, m.currency))} of ${esc(money(m.expectedPot, m.currency))} collected.
-    </p>
-  `);
+    </p>`);
 
   parts.push(`
     <div class="table-scroll" style="margin-bottom:1.5rem">
       <table>
         <caption>Payout structure — percentages of the full pot</caption>
-        <thead>
-          <tr><th scope="col">Place</th><th scope="col" class="num">Share</th><th scope="col" class="num">Amount</th><th scope="col">Currently</th></tr>
-        </thead>
+        <thead><tr><th scope="col">Place</th><th scope="col" class="num">Share</th>
+          <th scope="col" class="num">Amount</th><th scope="col">Currently</th></tr></thead>
         <tbody>
           ${m.payouts
             .map(
-              (p) => `
-            <tr>
-              <th scope="row">${esc(p.label)}</th>
-              <td class="num">${esc(p.pct)}%</td>
-              <td class="num">${esc(money(p.amount, m.currency))}</td>
-              <td>${p.teamName ? esc(p.teamName) : '<span class="stat__note">—</span>'}</td>
-            </tr>`
+              (p) => `<tr>
+                <th scope="row">${esc(p.label)}</th>
+                <td class="num">${esc(p.pct)}%</td>
+                <td class="num">${esc(money(p.amount, m.currency))}</td>
+                <td>${p.teamName ? esc(p.teamName) : '<span class="stat__note">—</span>'}</td>
+              </tr>`
             )
             .join('')}
         </tbody>
@@ -615,35 +728,30 @@ function renderMoney() {
       <div class="table-scroll">
         <table>
           <caption>Who has paid</caption>
-          <thead>
-            <tr><th scope="col">Manager</th><th scope="col">Team</th><th scope="col" class="num">Paid</th><th scope="col" class="num">Balance</th><th scope="col">Status</th></tr>
-          </thead>
+          <thead><tr><th scope="col">Manager</th><th scope="col">Team</th>
+            <th scope="col" class="num">Paid</th><th scope="col" class="num">Balance</th>
+            <th scope="col">Status</th></tr></thead>
           <tbody>
             ${m.members
               .map(
-                (mem) => `
-              <tr>
-                <th scope="row">${esc(mem.managerName ?? '—')}</th>
-                <td>${esc(mem.teamName)}</td>
-                <td class="num">${esc(money(mem.amountPaid, m.currency))}</td>
-                <td class="num">${esc(money(mem.balance, m.currency))}</td>
-                <td>${
-                  mem.paid
-                    ? '<span class="pill pill--good">Paid</span>'
-                    : mem.partial
-                      ? '<span class="pill pill--warn">Partial</span>'
-                      : '<span class="pill pill--bad">Unpaid</span>'
-                }</td>
-              </tr>`
+                (mem) => `<tr>
+                  <th scope="row">${esc(mem.managerName ?? '—')}</th>
+                  <td>${esc(mem.teamName)}</td>
+                  <td class="num">${esc(money(mem.amountPaid, m.currency))}</td>
+                  <td class="num">${esc(money(mem.balance, m.currency))}</td>
+                  <td>${
+                    mem.paid
+                      ? '<span class="pill pill--good">Paid</span>'
+                      : mem.partial
+                        ? '<span class="pill pill--warn">Partial</span>'
+                        : '<span class="pill pill--bad">Unpaid</span>'
+                  }</td>
+                </tr>`
               )
               .join('')}
           </tbody>
         </table>
       </div>`);
-  } else {
-    parts.push(
-      emptyState('No managers to bill yet', 'Once managers claim their teams they appear here.')
-    );
   }
 
   $('#money-body').innerHTML = parts.join('');
@@ -666,8 +774,9 @@ let currentView = null;
 function show(view, { focus = false } = {}) {
   if (!VIEWS.includes(view)) view = 'overview';
 
-  for (const v of VIEWS) {
-    $(`#view-${v}`).hidden = v !== view;
+  for (const v of ALL_VIEWS) {
+    const el = $(`#view-${v}`);
+    if (el) el.hidden = v !== view;
   }
   for (const link of document.querySelectorAll('.site-nav a')) {
     if (link.dataset.view === view) link.setAttribute('aria-current', 'page');
@@ -678,8 +787,10 @@ function show(view, { focus = false } = {}) {
     try {
       RENDERERS[view]();
     } catch (error) {
-      $(`#view-${view}`).querySelector('div:last-child').innerHTML =
-        `<div class="error" role="alert"><strong>Could not render this view.</strong><p>${esc(error.message)}</p></div>`;
+      const body = $(`#view-${view}`)?.querySelector('div[id$="-body"]');
+      if (body) {
+        body.innerHTML = `<div class="error" role="alert"><strong>Could not render this view.</strong><p>${esc(error.message)}</p></div>`;
+      }
       console.error(error);
     }
     currentView = view;
@@ -687,10 +798,7 @@ function show(view, { focus = false } = {}) {
 
   const heading = $(`#view-${view} h2`);
   $('#route-status').textContent = `${heading.textContent} section loaded`;
-  if (focus) {
-    const main = $('#main');
-    main.focus({ preventScroll: false });
-  }
+  if (focus) $('#main').focus({ preventScroll: false });
 }
 
 function onHashChange(isInitial = false) {
@@ -700,33 +808,31 @@ function onHashChange(isInitial = false) {
 
 // --- Theme -----------------------------------------------------------------
 
+function isLightNow() {
+  return (
+    document.documentElement.dataset.theme === 'light' ||
+    (!document.documentElement.dataset.theme &&
+      window.matchMedia('(prefers-color-scheme: light)').matches)
+  );
+}
+
 function initTheme() {
   const button = $('#theme-toggle');
   const stored = localStorage.getItem('ffh-theme');
-  if (stored === 'light' || stored === 'dark') {
-    document.documentElement.dataset.theme = stored;
-  }
+  if (stored === 'light' || stored === 'dark') document.documentElement.dataset.theme = stored;
 
   const sync = () => {
-    const isLight =
-      document.documentElement.dataset.theme === 'light' ||
-      (!document.documentElement.dataset.theme &&
-        window.matchMedia('(prefers-color-scheme: light)').matches);
-    button.textContent = isLight ? 'Switch to dark theme' : 'Switch to light theme';
-    button.setAttribute('aria-pressed', String(isLight));
+    const light = isLightNow();
+    button.textContent = light ? 'Dark theme' : 'Light theme';
+    button.setAttribute('aria-pressed', String(light));
   };
 
   button.addEventListener('click', () => {
-    const isLight =
-      document.documentElement.dataset.theme === 'light' ||
-      (!document.documentElement.dataset.theme &&
-        window.matchMedia('(prefers-color-scheme: light)').matches);
-    const next = isLight ? 'dark' : 'light';
+    const next = isLightNow() ? 'dark' : 'light';
     document.documentElement.dataset.theme = next;
     localStorage.setItem('ffh-theme', next);
     sync();
   });
-
   sync();
 }
 
@@ -740,38 +846,43 @@ async function boot() {
     state.hub = hub;
 
     const year = hub.league.season ?? hub.seasons?.[hub.seasons.length - 1];
-    const [season, draft, money] = await Promise.all([
+    const [season, draft, ledger] = await Promise.all([
       loadJson(`data/season-${year}.json`).catch(() => null),
       loadJson(`data/draft-${year}.json`).catch(() => null),
+      // Absent on the published site by design — the ledger is never uploaded.
       loadJson('data/money.json').catch(() => null),
     ]);
     state.season = season;
     state.draft = draft;
-    state.money = money;
+    state.money = ledger;
+
+    // Register the Money view only when its data is actually present, so the
+    // public site has no Money tab at all rather than an empty one.
+    if (ledger) {
+      VIEWS = [...ALL_VIEWS];
+      const navItem = document.querySelector('[data-nav="money"]');
+      if (navItem) navItem.hidden = false;
+    }
 
     $('#league-name').textContent = hub.league.displayName ?? hub.league.name;
     $('#league-sub').textContent =
-      `${hub.league.season} season · ${hub.league.size} teams · ${hub.league.isPPR ? 'PPR' : 'Standard'}`;
+      `${hub.league.season} · ${hub.league.size} teams · ${hub.league.isPPR ? 'PPR' : 'Standard'}`;
     document.title = `${hub.league.displayName ?? hub.league.name} — Fantasy Football Hub`;
 
-    const generated = new Date(hub.generatedAt);
     const timeEl = $('#generated-at');
-    timeEl.textContent = generated.toLocaleString();
+    timeEl.textContent = new Date(hub.generatedAt).toLocaleString();
     timeEl.dateTime = hub.generatedAt;
 
-    // Flag fixture builds loudly so nobody mistakes test data for the real
-    // league. The build sets this — team owner IDs are stripped before publish.
-    if (hub.synthetic) {
-      $('#fixture-warning').hidden = false;
-    }
+    if (hub.synthetic) $('#fixture-warning').hidden = false;
 
     $('#boot').hidden = true;
     onHashChange(true);
     window.addEventListener('hashchange', () => onHashChange(false));
   } catch (error) {
-    $('#boot').className = 'error';
-    $('#boot').setAttribute('role', 'alert');
-    $('#boot').innerHTML = `
+    const boot = $('#boot');
+    boot.className = 'error';
+    boot.setAttribute('role', 'alert');
+    boot.innerHTML = `
       <strong>Could not load league data.</strong>
       <p>${esc(error.message)}</p>
       <p>If you are opening this file directly, the browser blocks local

@@ -391,7 +391,13 @@ export function normalizeSeason(raw) {
       playoffTeams: settings.scheduleSettings?.playoffTeamCount ?? 6,
       playoffSeedingRule: settings.scheduleSettings?.playoffSeedingRule ?? null,
       draftType: settings.draftSettings?.type ?? null,
-      draftDate: settings.draftSettings?.draftDate ?? null,
+      // ESPN calls this `date`, not `draftDate`. The `draftDate` key does not
+      // exist on the payload at all, so reading it silently yielded null and
+      // the site showed "TBD" even once the draft was scheduled.
+      draftDate: settings.draftSettings?.date ?? null,
+      // When the draft room opens — usually an hour before the draft itself.
+      draftRoomOpens: settings.draftSettings?.availableDate ?? null,
+      tradeDeadline: settings.tradeSettings?.deadlineDate ?? null,
       timePerPick: settings.draftSettings?.timePerSelection ?? null,
       startingSlots,
       benchSlots: slotCounts['20'] ?? 0,
