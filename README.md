@@ -55,13 +55,17 @@ strategy, but no letter grades.
 
 ## During the season
 
-Run `npm run update` after Monday night, then push:
+After Monday night, run:
 
 ```bash
-git add -A && git commit -m "Week N" && git push
+npm run ship
 ```
 
-Finished weeks are cached, so each update only pulls the new week.
+That fetches, builds, commits, and pushes — Cloudflare redeploys about a minute
+later. The commit message names itself after where the season is ("Week 6",
+"Draft results"). Override it with `npm run ship -- "your message"`.
+
+Finished weeks are cached, so each run only pulls the new week.
 
 ---
 
@@ -163,11 +167,15 @@ private repo requires a paid GitHub plan.
 ### Every week after that
 
 ```bash
-npm run update
-git add -A && git commit -m "Week N" && git push
+npm run ship
 ```
 
-Cloudflare redeploys automatically on push. Nothing else to do.
+Fetches, builds, commits, pushes. Cloudflare redeploys automatically. That is
+the entire weekly routine.
+
+> Note for PowerShell: don't chain commands with `&&` — Windows PowerShell 5.1
+> treats it as a syntax error. Use `;` between commands, or just use
+> `npm run ship`, which avoids the problem entirely.
 
 Because `docs/data/money.json` is gitignored, the ledger is never pushed and so
 never deployed — it stays on your machine while everything else publishes.
