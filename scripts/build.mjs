@@ -14,6 +14,7 @@ import path from 'node:path';
 
 import { projectRoot } from './lib/espn.mjs';
 import { normalizeSeason, PHASE } from './lib/normalize.mjs';
+import { resolvePosition, PRO_TEAM } from './lib/constants.mjs';
 import {
   buildTeamWeeks,
   computeTeamStats,
@@ -76,6 +77,7 @@ async function loadSeasonRaw(season) {
     players: await readJson(path.join(dir, 'players.json'), []),
     current: await readJson(path.join(dir, 'current.json')),
     freeAgents: await readJson(path.join(dir, 'freeagents.json')),
+    draftPool: await readJson(path.join(dir, 'draftpool.json')),
     weeks,
   };
 }
@@ -191,6 +193,50 @@ const slim = (rows) => rows.map(({ weeks, ...rest }) => rest);
  */
 const stripOwnerIds = (teams) => teams.map(({ ownerIds, ...rest }) => rest);
 
+/**
+ * The draft board for the mock draft: one row per draftable player, ranked for
+ * this league's actual format.
+ */
+function buildDraftPool(raw) {
+  const rankType = raw.draftPool?.rankType ?? 'PPR';
+  const players = (raw.draftPool?.players ?? [])
+    .map((entry) => {
+      const p = entry?.player;
+      if (!p) return null;
+
+      const ranks = p.draftRanksByRankType ?? {};
+      const rank = ranks[rankType]?.rank ?? null;
+      const stats = p.stats ?? [];
+      // splitTypeId 0 + scoringPeriodId 0 is the season total, not a week.
+      const seasonProjection = stats.find(
+        (s) => s.seasonId === raw.league?.seasonId && s.statSourceId === 1 && s.statSplitTypeId === 0
+      )?.appliedTotal;
+      const lastSeason = stats.find(
+        (s) => s.seasonId === (raw.league?.seasonId ?? 0) - 1 && s.statSourceId === 0 && s.statSplitTypeId === 0
+      )?.appliedTotal;
+
+      return {
+        playerId: p.id,
+        name: p.fullName ?? `Player ${p.id}`,
+        position: resolvePosition(p),
+        proTeam: PRO_TEAM[p.proTeamId] ?? 'FA',
+        rank,
+        pprRank: ranks.PPR?.rank ?? null,
+        adp: p.ownership?.averageDraftPosition != null
+          ? Number(p.ownership.averageDraftPosition.toFixed(1))
+          : null,
+        auctionValue: ranks[rankType]?.auctionValue ?? null,
+        projected: seasonProjection != null ? Number(seasonProjection.toFixed(1)) : null,
+        lastSeason: lastSeason != null ? Number(lastSeason.toFixed(1)) : null,
+        injuryStatus: p.injuryStatus ?? null,
+      };
+    })
+    .filter((p) => p && p.rank !== null)
+    .sort((a, b) => a.rank - b.rank);
+
+  return { rankType, players };
+}
+
 /** Human-readable summary of what the league is currently doing. */
 function describePhase(season) {
   const { phase, teamsJoined, weeksPlayed } = season.status;
@@ -254,7 +300,7 @@ async function main() {
       continue;
     }
     console.log(`  season ${year}: normalizing...`);
-    built.push({ year, ...buildSeason(raw, moneyConfig) });
+    built.push({ year, raw, ...buildSeason(raw, moneyConfig) });
   }
 
   if (!built.length) {
@@ -308,6 +354,20 @@ async function main() {
     });
 
     await writeJson(path.join(DERIVED, `draft-${b.year}.json`), b.draft);
+
+    // Draft board for the mock draft, ranked for this league's format.
+    const pool = buildDraftPool(b.raw);
+    if (pool.players.length) {
+      await writeJson(path.join(DERIVED, `draftpool-${b.year}.json`), {
+        year: b.year,
+        rankType: pool.rankType,
+        rounds: b.season.draft.rounds || 16,
+        teams: b.season.league.size,
+        startingSlots: b.season.league.startingSlots,
+        benchSlots: b.season.league.benchSlots,
+        players: pool.players,
+      });
+    }
 
     // Per-team detail: the personal view each manager lands on.
     await writeJson(path.join(DERIVED, `teams-${b.year}.json`), {

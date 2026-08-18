@@ -1,3 +1,5 @@
+import { createMockDraft, advanceToUser, makePick, gradeDraft, rosterNeeds } from './mock.js';
+
 /**
  * Fantasy Football Hub — client.
  *
@@ -16,10 +18,10 @@
  *     than advertising that something is being withheld.
  */
 
-const ALL_VIEWS = ['overview', 'standings', 'teams', 'team', 'draft', 'trades', 'prizes', 'money'];
-let VIEWS = ALL_VIEWS.filter((v) => v !== 'money');
+const ALL_VIEWS = ['overview', 'standings', 'teams', 'team', 'draft', 'mock', 'trades', 'prizes', 'money'];
+let VIEWS = ALL_VIEWS.filter((v) => v !== 'money' && v !== 'mock');
 
-const state = { hub: null, season: null, draft: null, money: null, teamDetail: null };
+const state = { hub: null, season: null, draft: null, money: null, teamDetail: null, draftPool: null };
 let countdownTimer = null;
 
 /** Which team the visitor has claimed as theirs, remembered across visits. */
@@ -756,6 +758,294 @@ function syncMyTeamNav() {
   if (link && id !== null) link.href = `#team/${id}`;
 }
 
+// --- Mock draft ------------------------------------------------------------
+
+let mock = null;
+let mockFilter = 'ALL';
+
+function renderMock() {
+  const body = $('#mock-body');
+  const pool = state.draftPool;
+
+  if (!pool?.players?.length) {
+    body.innerHTML = emptyState(
+      '🎲',
+      'Draft board not available',
+      'Run npm run fetch to pull the ranked player pool from ESPN.'
+    );
+    return;
+  }
+
+  // --- Setup ------------------------------------------------------------
+  if (!mock) {
+    body.innerHTML = `
+      <div class="card">
+        <h3>Pick your draft slot</h3>
+        <p class="stat__note">
+          ${esc(pool.teams)} teams · ${esc(pool.rounds)} rounds · snake ·
+          ${esc(pool.players.length)} players ranked for ${esc(pool.rankType)}
+        </p>
+        <div class="draft-picks" style="margin-top:0.9rem">
+          ${Array.from({ length: pool.teams }, (_, i) => i + 1)
+            .map(
+              (slot) => `<button type="button" class="theme-toggle mock-slot" data-slot="${slot}"
+                style="width:100%">Slot ${slot}</button>`
+            )
+            .join('')}
+        </div>
+        <p style="margin-top:0.9rem">
+          <button type="button" class="theme-toggle" id="mock-random">Random slot</button>
+        </p>
+      </div>
+
+      <div class="card" style="margin-top:1.25rem">
+        <h3>Why superflex changes everything</h3>
+        <p class="stat__note">
+          Your league starts an OP slot, so a second quarterback can be started every week.
+          ESPN ranks the board accordingly — these are the same players, ranked two ways:
+        </p>
+        <div class="table-scroll" style="margin-top:0.6rem">
+          <table>
+            <caption>Superflex rank vs standard PPR rank</caption>
+            <thead><tr>
+              <th scope="col">Player</th><th scope="col">Pos</th>
+              <th scope="col" class="num">Superflex</th><th scope="col" class="num">PPR</th>
+              <th scope="col" class="num">Moves</th>
+            </tr></thead>
+            <tbody>
+              ${pool.players
+                .filter((p) => p.pprRank !== null)
+                .slice(0, 10)
+                .map(
+                  (p) => `<tr>
+                    <th scope="row" class="row-team">${esc(p.name)}<small>${esc(p.proTeam)}</small></th>
+                    <td>${esc(p.position)}</td>
+                    <td class="num">${esc(p.rank)}</td>
+                    <td class="num">${esc(p.pprRank)}</td>
+                    <td class="num">${deltaPill(p.pprRank - p.rank, 0)}</td>
+                  </tr>`
+                )
+                .join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+
+    for (const btn of body.querySelectorAll('.mock-slot')) {
+      btn.addEventListener('click', () => startMock(Number(btn.dataset.slot)));
+    }
+    $('#mock-random')?.addEventListener('click', () =>
+      startMock(1 + Math.floor(Math.random() * pool.teams))
+    );
+    return;
+  }
+
+  // --- Results ----------------------------------------------------------
+  if (mock.isComplete) {
+    const grades = gradeDraft(mock, pool.startingSlots);
+    const you = grades.find((g) => g.isUser);
+
+    body.innerHTML = `
+      <section class="hero">
+        <p class="hero__eyebrow">Draft complete</p>
+        <h2>You finished ${esc(you.rank)} of ${esc(grades.length)} — grade ${esc(you.grade)}</h2>
+        <p class="hero__sub">
+          Your starting lineup projects <strong>${num(you.startingPoints, 1)}</strong> points,
+          with ${num(you.benchPoints, 1)} on the bench.
+          ${you.incompleteLineup ? '<span class="pill pill--bad">Cannot field a legal lineup</span>' : ''}
+        </p>
+        <p style="margin:0.9rem 0 0">
+          <button type="button" class="theme-toggle" id="mock-restart">Draft again</button>
+        </p>
+      </section>
+
+      <div class="table-scroll" style="margin-bottom:1.5rem">
+        <table>
+          <caption>Every roster, scored on the lineup it can actually start</caption>
+          <thead><tr>
+            <th scope="col" class="num">#</th><th scope="col">Manager</th>
+            <th scope="col">Grade</th><th scope="col" class="bar-cell">Starting projection</th>
+            <th scope="col" class="num">Bench</th><th scope="col">Roster</th>
+          </tr></thead>
+          <tbody>
+            ${grades
+              .map(
+                (g) => `<tr>
+                  <td class="num rank">${esc(g.rank)}</td>
+                  <th scope="row" class="row-team">${esc(g.name)}${g.isUser ? ' <span class="pill pill--accent">You</span>' : ''}</th>
+                  <td><span class="pill pill--neutral">${esc(g.grade)}</span></td>
+                  <td class="bar-cell">${bar(g.startingPoints, grades[0].startingPoints, { digits: 0 })}</td>
+                  <td class="num">${num(g.benchPoints, 0)}</td>
+                  <td><small>${POSITIONS_ORDER.filter((p) => g.byPosition[p])
+                    .map((p) => `${g.byPosition[p]}${p}`)
+                    .join(' · ')}</small></td>
+                </tr>`
+              )
+              .join('')}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="table-scroll">
+        <table>
+          <caption>Your picks</caption>
+          <thead><tr>
+            <th scope="col" class="num">Rd</th><th scope="col" class="num">Pick</th>
+            <th scope="col">Player</th><th scope="col">Pos</th>
+            <th scope="col" class="num">Board rank</th><th scope="col" class="num">Value</th>
+          </tr></thead>
+          <tbody>
+            ${mock.picks
+              .filter((p) => p.isUser)
+              .map(
+                (p) => `<tr>
+                  <td class="num rank">${esc(p.round)}</td>
+                  <td class="num rank">${esc(p.overall)}</td>
+                  <th scope="row" class="row-team">${esc(p.player.name)}<small>${esc(p.player.proTeam)}</small></th>
+                  <td>${esc(p.player.position)}</td>
+                  <td class="num">${esc(p.player.rank)}</td>
+                  <td class="num">${deltaPill(p.overall - p.player.rank, 0)}</td>
+                </tr>`
+              )
+              .join('')}
+          </tbody>
+        </table>
+      </div>`;
+
+    $('#mock-restart')?.addEventListener('click', () => {
+      mock = null;
+      renderMock();
+    });
+    return;
+  }
+
+  // --- Draft in progress -------------------------------------------------
+  const you = mock.teams.find((t) => t.isUser);
+  const onClock = mock.onTheClock;
+  const recent = [...mock.picks].slice(-6).reverse();
+
+  const filtered =
+    mockFilter === 'ALL'
+      ? mock.available
+      : mock.available.filter((p) => p.position === mockFilter);
+
+  body.innerHTML = `
+    <section class="hero" style="margin-bottom:1.25rem">
+      <p class="hero__eyebrow">Round ${esc(mock.current.round)} · Pick ${esc(mock.pickIndex + 1)} of ${esc(mock.order.length)}</p>
+      <h2>${onClock.isUser ? 'You are on the clock' : `${esc(onClock.name)} is picking…`}</h2>
+      <p class="hero__sub">You are drafting from slot ${esc(you.slot)} · ${esc(you.roster.length)} players so far</p>
+    </section>
+
+    <div class="grid" style="grid-template-columns:minmax(0,2fr) minmax(0,1fr)">
+      <div>
+        <div style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-bottom:0.75rem">
+          ${['ALL', ...POSITIONS_ORDER]
+            .map(
+              (pos) => `<button type="button" class="theme-toggle mock-filter"
+                data-pos="${esc(pos)}" aria-pressed="${mockFilter === pos}">${esc(pos)}</button>`
+            )
+            .join('')}
+        </div>
+        <div class="table-scroll" style="max-height:26rem;overflow-y:auto">
+          <table>
+            <caption>Best available — ${esc(filtered.length)} players</caption>
+            <thead><tr>
+              <th scope="col" class="num">#</th><th scope="col">Player</th>
+              <th scope="col">Pos</th><th scope="col" class="num">Proj</th>
+              <th scope="col" class="num">ADP</th><th scope="col"></th>
+            </tr></thead>
+            <tbody>
+              ${filtered
+                .slice(0, 60)
+                .map(
+                  (p) => `<tr>
+                    <td class="num rank">${esc(p.rank)}</td>
+                    <th scope="row" class="row-team">${esc(p.name)}<small>${esc(p.proTeam)}</small></th>
+                    <td>${esc(p.position)}</td>
+                    <td class="num">${p.projected === null ? '—' : num(p.projected, 0)}</td>
+                    <td class="num">${p.adp === null ? '—' : num(p.adp, 1)}</td>
+                    <td>${
+                      onClock.isUser
+                        ? `<button type="button" class="theme-toggle mock-pick" data-id="${esc(p.playerId)}">Draft</button>`
+                        : ''
+                    }</td>
+                  </tr>`
+                )
+                .join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div>
+        <div class="card" style="margin-bottom:1rem">
+          <h3>Your roster</h3>
+          ${(() => {
+            const needs = rosterNeeds(you.roster, state.draftPool.startingSlots);
+            const picksLeft = Math.ceil((mock.order.length - mock.pickIndex) / mock.teamCount);
+            if (!needs.length) {
+              return '<p><span class="pill pill--good">Legal lineup</span> Every starting slot is covered.</p>';
+            }
+            const urgent = needs.length >= picksLeft;
+            return `<p><span class="pill ${urgent ? 'pill--bad' : 'pill--warn'}">
+              Still need ${esc(needs.join(', '))}</span>
+              ${urgent ? ` — only ${esc(picksLeft)} pick${picksLeft === 1 ? '' : 's'} left` : ''}</p>`;
+          })()}
+          ${
+            you.roster.length
+              ? `<ul style="margin:0;padding-left:1.1rem">
+                  ${you.roster
+                    .map((p) => `<li>${esc(p.position)} — ${esc(p.name)} <small>${esc(p.proTeam)}</small></li>`)
+                    .join('')}
+                </ul>`
+              : '<p class="stat__note">Nothing yet.</p>'
+          }
+        </div>
+        <div class="card">
+          <h3>Recent picks</h3>
+          ${
+            recent.length
+              ? `<ul style="margin:0;padding-left:1.1rem">
+                  ${recent
+                    .map(
+                      (p) => `<li>${esc(p.overall)}. ${esc(p.teamName)} — ${esc(p.player.name)}
+                        <small>(${esc(p.player.position)})</small></li>`
+                    )
+                    .join('')}
+                </ul>`
+              : '<p class="stat__note">Draft has not started.</p>'
+          }
+        </div>
+      </div>
+    </div>`;
+
+  for (const btn of body.querySelectorAll('.mock-filter')) {
+    btn.addEventListener('click', () => {
+      mockFilter = btn.dataset.pos;
+      renderMock();
+    });
+  }
+  for (const btn of body.querySelectorAll('.mock-pick')) {
+    btn.addEventListener('click', () => {
+      const player = mock.available.find((p) => p.playerId === Number(btn.dataset.id));
+      makePick(mock, player);
+      advanceToUser(mock);
+      $('#route-status').textContent = `Drafted ${player.name}. ${
+        mock.isComplete ? 'Draft complete.' : `Round ${mock.current.round}, your pick.`
+      }`;
+      renderMock();
+    });
+  }
+}
+
+const POSITIONS_ORDER = ['QB', 'RB', 'WR', 'TE', 'D/ST', 'K'];
+
+function startMock(slot) {
+  mock = createMockDraft(state.draftPool, { userSlot: slot });
+  advanceToUser(mock);
+  renderMock();
+}
+
 function renderDraft() {
   const draft = state.draft;
   const league = state.hub.league;
@@ -1098,6 +1388,7 @@ const RENDERERS = {
   teams: renderTeams,
   team: renderTeam,
   draft: renderDraft,
+  mock: renderMock,
   trades: renderTrades,
   prizes: renderPrizes,
   money: renderMoney,
@@ -1189,18 +1480,28 @@ async function boot() {
     state.hub = hub;
 
     const year = hub.league.season ?? hub.seasons?.[hub.seasons.length - 1];
-    const [season, draft, teamDetail, ledger] = await Promise.all([
+    const [season, draft, teamDetail, draftPool, ledger] = await Promise.all([
       loadJson(`data/season-${year}.json`).catch(() => null),
       loadJson(`data/draft-${year}.json`).catch(() => null),
       loadJson(`data/teams-${year}.json`).catch(() => null),
+      loadJson(`data/draftpool-${year}.json`).catch(() => null),
       // Absent on the published site by design — the ledger is never uploaded.
       loadJson('data/money.json').catch(() => null),
     ]);
     state.season = season;
     state.draft = draft;
     state.teamDetail = teamDetail;
+    state.draftPool = draftPool;
     state.money = ledger;
     syncMyTeamNav();
+
+    // The mock draft needs a ranked board; without one there is nothing to
+    // draft from, so the tab stays hidden rather than opening onto an error.
+    if (draftPool?.players?.length) {
+      VIEWS = [...VIEWS, 'mock'];
+      const navItem = document.querySelector('[data-nav="mock"]');
+      if (navItem) navItem.hidden = false;
+    }
 
     // Register the Money view only when its data is actually present, so the
     // public site has no Money tab at all rather than an empty one.

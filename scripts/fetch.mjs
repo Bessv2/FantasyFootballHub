@@ -181,6 +181,19 @@ async function fetchSeason(client, season) {
   }
   await sleep(POLITE_DELAY_MS);
 
+  // ---- Draft pool (for the mock draft) -----------------------------------
+  // Ranked for THIS league's format. Josh Allen is SUPERFLEX #1 but PPR #36 —
+  // a board built with the wrong rankType is one nobody here would draft from.
+  try {
+    const rankType = core.settings?.rosterSettings?.lineupSlotCounts?.['7'] > 0 ? 'SUPERFLEX' : 'PPR';
+    const pool = await client.getDraftPool(season, { limit: 400, rankType });
+    await writeJson(path.join(dir, 'draftpool.json'), { rankType, ...pool });
+    log(`  draft pool: ${pool.players?.length ?? 0} players (${rankType} ranks)`);
+  } catch (error) {
+    log(`  draft pool: unavailable (${error.message})`);
+  }
+  await sleep(POLITE_DELAY_MS);
+
   try {
     const fa = await client.getFreeAgents(season, adviceWeek);
     await writeJson(path.join(dir, "freeagents.json"), { adviceWeek, ...fa });

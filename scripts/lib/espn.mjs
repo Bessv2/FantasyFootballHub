@@ -288,5 +288,31 @@ export function createClient({ leagueId, secrets = null, log = () => {} }) {
     return getView(season, ["mRoster", "mTeam"], { params: { scoringPeriodId } });
   }
 
-  return { getView, getPlayers, getActivity, getFreeAgents, getRostersForWeek, urlFor, hasAuth: Boolean(secrets) };
+  /**
+   * The draftable player pool, ranked for a specific format.
+   *
+   * rankType matters enormously: Josh Allen is SUPERFLEX #1 but PPR #36,
+   * because a QB-eligible flex slot revalues the whole quarterback position.
+   * Passing the wrong rankType here would produce a board nobody in this
+   * league would actually draft from.
+   */
+  async function getDraftPool(season, { limit = 400, rankType = 'PPR' } = {}) {
+    const url = urlFor(season, ['kona_player_info'], { scoringPeriodId: 0 });
+    const response = await fetch(url, {
+      headers: {
+        ...headers,
+        'X-Fantasy-Filter': JSON.stringify({
+          players: {
+            limit,
+            sortDraftRanks: { sortPriority: 100, sortAsc: true, value: rankType },
+          },
+        }),
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`draft pool returned ${response.status} ${response.statusText}`);
+    }
+    return response.json();
+  }
+  return { getView, getPlayers, getActivity, getFreeAgents, getRostersForWeek, getDraftPool, urlFor, hasAuth: Boolean(secrets) };
 }

@@ -34,6 +34,7 @@
           <li><a href="#teams" data-view="teams">Teams</a></li>
           <li data-nav="myteam" hidden><a href="#team" data-view="team">My Team</a></li>
           <li><a href="#draft" data-view="draft">Draft</a></li>
+          <li data-nav="mock" hidden><a href="#mock" data-view="mock">Mock Draft</a></li>
           <li><a href="#trades" data-view="trades">Trades</a></li>
           <li><a href="#prizes" data-view="prizes">Prizes</a></li>
           <li data-nav="money" hidden><a href="#money" data-view="money">Money</a></li>
@@ -83,6 +84,16 @@
           outperformed the cost of the pick.
         </p>
         <div id="draft-body"></div>
+      </section>
+
+      <section class="view" id="view-mock" hidden aria-labelledby="h-mock">
+        <h2 id="h-mock">Mock Draft</h2>
+        <p class="view__intro">
+          Practise this league's exact format — 12 teams, 16 rounds, snake, and
+          <strong>superflex</strong>. The board uses ESPN's superflex rankings, where
+          quarterbacks are worth far more than in a standard league. Nothing here is saved.
+        </p>
+        <div id="mock-body"></div>
       </section>
 
       <section class="view" id="view-trades" hidden aria-labelledby="h-trades">

@@ -37,6 +37,35 @@ section fills in on its own schedule:
 | Team pages: coaching report, week log, head-to-head | After Week 1 |
 | Trades | First completed trade |
 
+## Mock draft
+
+`#mock` runs a full practice draft against 11 AI managers, in **this league's
+exact format** — 12 teams, 16 rounds, snake, superflex. Pick a slot, draft, get
+graded. Nothing is saved; refresh to start over.
+
+The board uses ESPN's **SUPERFLEX** rankings rather than standard PPR, which is
+the entire point:
+
+| Player | Superflex | PPR | Moves |
+| --- | --- | --- | --- |
+| Josh Allen | 1 | 36 | +35 |
+| Jayden Daniels | 3 | 56 | +53 |
+| Drake Maye | 13 | 60 | +47 |
+
+Anyone drafting off default rankings in this league will be catastrophically
+wrong about quarterbacks. ESPN's public mock lobby drafts standard formats, so
+it will not rehearse this.
+
+The AI drafts off those ranks with positional need and a little randomness, so
+no two runs are identical. While drafting you get a live **"still need…"**
+readout of unfilled starting slots, which turns red when you have more holes
+than picks remaining. Grades score the lineup you could actually **start**, not
+the sum of all 16 players — hoarding a fourth quarterback adds nothing on a
+Sunday, and a grade that rewarded it would teach the wrong lesson.
+
+Rebuild the board any time with `npm run update`; rankings shift as the real
+draft approaches.
+
 ## Team pages
 
 Every manager gets their own page at `#team/{id}` — e.g.
