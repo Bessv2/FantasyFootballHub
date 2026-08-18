@@ -32,6 +32,7 @@
           <li><a href="#overview" data-view="overview">Overview</a></li>
           <li><a href="#standings" data-view="standings">Standings</a></li>
           <li><a href="#teams" data-view="teams">Teams</a></li>
+          <li data-nav="myteam" hidden><a href="#team" data-view="team">My Team</a></li>
           <li><a href="#draft" data-view="draft">Draft</a></li>
           <li><a href="#trades" data-view="trades">Trades</a></li>
           <li><a href="#prizes" data-view="prizes">Prizes</a></li>
@@ -67,6 +68,11 @@
         <h2 id="h-teams">Teams</h2>
         <p class="view__intro">Every manager, with the numbers that separate good teams from lucky ones.</p>
         <div id="teams-body"></div>
+      </section>
+
+      <section class="view" id="view-team" hidden aria-labelledby="h-team">
+        <h2 id="h-team">My Team</h2>
+        <div id="team-body"></div>
       </section>
 
       <section class="view" id="view-draft" hidden aria-labelledby="h-draft">

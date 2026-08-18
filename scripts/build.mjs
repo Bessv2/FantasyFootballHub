@@ -25,6 +25,7 @@ import {
 } from './lib/analytics.mjs';
 import { analyzeDraft } from './lib/draft.mjs';
 import { computeLedger } from './lib/money.mjs';
+import { recommendLineup, coachingReport, waiverTargets } from './lib/advisor.mjs';
 
 const ROOT = projectRoot();
 const args = process.argv.slice(2);
@@ -73,6 +74,8 @@ async function loadSeasonRaw(season) {
     transactions: await readJson(path.join(dir, 'transactions.json')),
     activity: await readJson(path.join(dir, 'activity.json')),
     players: await readJson(path.join(dir, 'players.json'), []),
+    current: await readJson(path.join(dir, 'current.json')),
+    freeAgents: await readJson(path.join(dir, 'freeagents.json')),
     weeks,
   };
 }
@@ -89,7 +92,86 @@ function buildSeason(raw, moneyConfig) {
   const draft = analyzeDraft(season);
   const ledger = computeLedger(moneyConfig, season, standings);
 
-  return { season, teamWeeks, teamStats, standings, power, prizes, weeklyHigh, positional, draft, ledger };
+  const teamDetail = buildTeamDetail(season, teamStats, teamWeeks, standings, draft);
+
+  return {
+    season, teamWeeks, teamStats, standings, power, prizes,
+    weeklyHigh, positional, draft, ledger, teamDetail,
+  };
+}
+
+/**
+ * Everything a single manager wants about their own team: the season log, what
+ * they got wrong, what to start next week, and who to pick up.
+ *
+ * Built per team at build time so the site can deep-link straight to it without
+ * shipping the whole league's roster history to every visitor.
+ */
+function buildTeamDetail(season, teamStats, teamWeeks, standings, draft) {
+  const slots = season.league.startingSlots;
+
+  return season.teams
+    .filter((t) => !t.isPlaceholder || teamWeeks.some((r) => r.teamId === t.id))
+    .map((team) => {
+      const stats = teamStats.find((s) => s.teamId === team.id) ?? null;
+      const rows = teamWeeks.filter((r) => r.teamId === team.id).sort((a, b) => a.week - b.week);
+      const standing = standings.find((s) => s.teamId === team.id) ?? null;
+      const roster = season.currentRosters?.[team.id] ?? [];
+
+      // Head-to-head, so "I always lose to that guy" can be checked.
+      const h2h = new Map();
+      for (const row of rows) {
+        if (row.opponentId === null) continue;
+        if (!h2h.has(row.opponentId)) h2h.set(row.opponentId, { wins: 0, losses: 0, ties: 0, pointsFor: 0, pointsAgainst: 0 });
+        const rec = h2h.get(row.opponentId);
+        if (row.result === 'WIN') rec.wins += 1;
+        else if (row.result === 'LOSS') rec.losses += 1;
+        else rec.ties += 1;
+        rec.pointsFor += row.score;
+        rec.pointsAgainst += row.opponentScore;
+      }
+
+      return {
+        teamId: team.id,
+        teamName: team.name,
+        abbrev: team.abbrev,
+        managerName: team.managerName,
+        isPlaceholder: team.isPlaceholder,
+        rank: standing?.rank ?? null,
+        inPlayoffs: standing?.inPlayoffs ?? false,
+        stats: stats ? (({ weeks, ...rest }) => rest)(stats) : null,
+
+        weekLog: rows.map(({ starters, benchPlayers, ...rest }) => rest),
+
+        roster: roster.map((p) => ({
+          playerId: p.playerId, name: p.name, position: p.position,
+          proTeam: p.proTeam, slot: p.slot, slotId: p.slotId,
+          started: p.started, projected: p.projected, injuryStatus: p.injuryStatus,
+        })),
+
+        lineupAdvice: recommendLineup(roster, slots),
+        coaching: coachingReport(rows, slots),
+        waivers: waiverTargets(season.freeAgents, roster, slots),
+
+        draftPicks: draft.held
+          ? draft.picks.filter((p) => p.teamId === team.id).map((p) => ({
+              overall: p.overall, round: p.round, playerName: p.playerName,
+              position: p.position, proTeam: p.proTeam,
+              seasonPoints: p.seasonPoints, valueDelta: p.valueDelta,
+            }))
+          : [],
+
+        transactions: season.transactions.filter((t) => t.teamId === team.id).length,
+
+        headToHead: [...h2h.entries()].map(([opponentId, rec]) => ({
+          opponentId,
+          opponentName: season.teams.find((t) => t.id === opponentId)?.name ?? `Team ${opponentId}`,
+          ...rec,
+          pointsFor: Number(rec.pointsFor.toFixed(2)),
+          pointsAgainst: Number(rec.pointsAgainst.toFixed(2)),
+        })),
+      };
+    });
 }
 
 /**
@@ -226,6 +308,14 @@ async function main() {
     });
 
     await writeJson(path.join(DERIVED, `draft-${b.year}.json`), b.draft);
+
+    // Per-team detail: the personal view each manager lands on.
+    await writeJson(path.join(DERIVED, `teams-${b.year}.json`), {
+      year: b.year,
+      adviceWeek: b.season.adviceWeek,
+      freeAgentCount: b.season.freeAgents.length,
+      teams: b.teamDetail,
+    });
 
     // Full weekly rosters are the heaviest payload — kept separate so the
     // landing page does not pay for them.

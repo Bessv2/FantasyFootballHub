@@ -16,11 +16,22 @@
  *     than advertising that something is being withheld.
  */
 
-const ALL_VIEWS = ['overview', 'standings', 'teams', 'draft', 'trades', 'prizes', 'money'];
+const ALL_VIEWS = ['overview', 'standings', 'teams', 'team', 'draft', 'trades', 'prizes', 'money'];
 let VIEWS = ALL_VIEWS.filter((v) => v !== 'money');
 
-const state = { hub: null, season: null, draft: null, money: null };
+const state = { hub: null, season: null, draft: null, money: null, teamDetail: null };
 let countdownTimer = null;
+
+/** Which team the visitor has claimed as theirs, remembered across visits. */
+const MY_TEAM_KEY = 'ffh-my-team';
+const getMyTeamId = () => {
+  const raw = localStorage.getItem(MY_TEAM_KEY);
+  return raw === null ? null : Number(raw);
+};
+const setMyTeamId = (id) => {
+  if (id === null) localStorage.removeItem(MY_TEAM_KEY);
+  else localStorage.setItem(MY_TEAM_KEY, String(id));
+};
 
 // --- Helpers ---------------------------------------------------------------
 
@@ -379,18 +390,18 @@ function renderTeams() {
   if (!stats.length || stats.every((t) => t.gamesPlayed === 0)) {
     const roster = hub.teams
       .map(
-        (t) => `<div class="card">
+        (t) => `<a class="card" href="#team/${esc(t.id)}" style="text-decoration:none;color:inherit;display:block">
           <h3>${esc(t.name)}</h3>
           <p>${
             t.isPlaceholder
               ? '<span class="pill pill--warn">Open spot</span>'
               : `<span class="pill pill--good">Claimed</span> ${esc(t.managerName ?? '')}`
           }</p>
-        </div>`
+        </a>`
       )
       .join('');
     $('#teams-body').innerHTML = `
-      ${emptyState('🏟️', 'Team stats start after Week 1', 'Until then, here is who has claimed a spot.')}
+      ${emptyState('🏟️', 'Team stats start after Week 1', 'Pick your team below to open its own page — it will be remembered on this device.')}
       <div class="grid" style="margin-top:1.5rem">${roster}</div>`;
     return;
   }
@@ -399,7 +410,7 @@ function renderTeams() {
     .sort((a, b) => b.pointsFor - a.pointsFor)
     .map(
       (t) => `<div class="card">
-        <h3>${esc(t.teamName)}</h3>
+        <h3><a href="#team/${esc(t.teamId)}">${esc(t.teamName)}</a></h3>
         <p class="stat__note">${esc(t.managerName ?? '')}</p>
         <ul class="stats" style="margin:0.75rem 0 0">
           <li class="stat"><span class="stat__label">Record</span>
@@ -419,6 +430,330 @@ function renderTeams() {
     .join('');
 
   $('#teams-body').innerHTML = `<div class="grid">${cards}</div>`;
+}
+
+/**
+ * One manager's own page: their season, what they got wrong, what to do next.
+ *
+ * Reachable at #team/3, so everyone can bookmark their own. There is no login —
+ * a static site has nothing to authenticate against — so these pages are
+ * readable by anyone in the league. For a fantasy league that is arguably the
+ * point; nothing here is more private than what ESPN already shows.
+ */
+function renderTeam(teamId) {
+  const body = $('#team-body');
+  const all = state.teamDetail?.teams ?? [];
+
+  if (!all.length) {
+    body.innerHTML = emptyState(
+      '👤',
+      'No teams yet',
+      'Once managers claim their spots, each gets their own page here.'
+    );
+    return;
+  }
+
+  const id = teamId ?? getMyTeamId();
+  const team = all.find((t) => t.teamId === id);
+
+  if (!team) {
+    body.innerHTML = `
+      ${emptyState('👋', 'Pick your team', 'Choose which team is yours. It will be remembered on this device.')}
+      <div class="grid" style="margin-top:1.5rem">
+        ${all
+          .map(
+            (t) => `<a class="card" href="#team/${esc(t.teamId)}" style="text-decoration:none;color:inherit;display:block">
+              <h3>${esc(t.teamName)}</h3>
+              <p class="stat__note">${esc(t.managerName ?? 'Unclaimed')}</p>
+            </a>`
+          )
+          .join('')}
+      </div>`;
+    return;
+  }
+
+  const isMine = getMyTeamId() === team.teamId;
+  $('#h-team').textContent = team.teamName;
+
+  const parts = [];
+
+  // --- Header -----------------------------------------------------------
+  parts.push(`
+    <section class="hero" aria-labelledby="team-hero">
+      <p class="hero__eyebrow">${esc(team.managerName ?? 'Unclaimed')}</p>
+      <h2 id="team-hero">${esc(team.teamName)}</h2>
+      <p class="hero__sub">
+        ${team.rank ? `Rank ${esc(team.rank)} of ${esc(state.hub.league.size)}` : 'Season has not started'}
+        ${team.stats?.gamesPlayed ? ` · ${esc(team.stats.wins)}-${esc(team.stats.losses)}` : ''}
+        ${team.inPlayoffs ? ' · <span class="pill pill--good">In playoff position</span>' : ''}
+      </p>
+      <p style="margin:0.9rem 0 0">
+        <button type="button" class="theme-toggle" id="claim-team"
+          aria-pressed="${isMine}">
+          ${isMine ? '★ This is my team' : '☆ Set as my team'}
+        </button>
+      </p>
+    </section>`);
+
+  // --- Lineup advice ----------------------------------------------------
+  const advice = team.lineupAdvice;
+  if (advice?.available) {
+    if (advice.alreadyOptimal) {
+      parts.push(`<div class="card" style="margin-bottom:1.5rem">
+        <h3>Week ${esc(state.teamDetail.adviceWeek)} lineup</h3>
+        <p><span class="pill pill--good">Optimal</span>
+        Your lineup is already the best available on projections
+        (${num(advice.projectedTotal, 1)} projected).</p>
+      </div>`);
+    } else {
+      parts.push(`<div class="card" style="margin-bottom:1.5rem">
+        <h3>Week ${esc(state.teamDetail.adviceWeek)} lineup — ${esc(signed(advice.projectedGain, 1))} available</h3>
+        <p class="stat__note">
+          Based on ESPN's projections, which are wrong often enough that this is a
+          nudge rather than an instruction.
+        </p>
+        <div class="grid" style="margin-top:0.75rem">
+          <div>
+            <h4 style="margin:0 0 0.35rem">Start</h4>
+            <ul style="margin:0;padding-left:1.1rem">
+              ${advice.toStart
+                .map((p) => `<li>${esc(p.name)} <small>(${esc(p.position)})</small> — <strong>${num(p.projected, 1)}</strong></li>`)
+                .join('')}
+            </ul>
+          </div>
+          <div>
+            <h4 style="margin:0 0 0.35rem">Sit</h4>
+            <ul style="margin:0;padding-left:1.1rem">
+              ${advice.toSit
+                .map((p) => `<li>${esc(p.name)} <small>(${esc(p.position)})</small> — ${num(p.projected, 1)}</li>`)
+                .join('')}
+            </ul>
+          </div>
+        </div>
+        <p class="stat__note" style="margin:0.75rem 0 0">
+          Current lineup projects ${num(advice.currentProjected, 1)};
+          the recommended one projects ${num(advice.projectedTotal, 1)}.
+        </p>
+      </div>`);
+    }
+  }
+
+  // --- Waivers ----------------------------------------------------------
+  const waivers = team.waivers;
+  if (waivers?.available && (waivers.targets.length || waivers.injuryGaps.length)) {
+    parts.push(`<div class="card" style="margin-bottom:1.5rem">
+      <h3>Waiver wire</h3>
+      ${
+        waivers.injuryGaps.length
+          ? `<p><span class="pill pill--bad">Injured starters</span>
+             ${waivers.injuryGaps.map((g) => `${esc(g.name)} (${esc(g.position)}, ${esc(g.injuryStatus)})`).join(', ')}</p>`
+          : ''
+      }
+      ${
+        waivers.targets.length
+          ? `<div class="table-scroll" style="margin-top:0.6rem">
+              <table>
+                <caption>Available players projected above your weakest starter at that position</caption>
+                <thead><tr>
+                  <th scope="col">Player</th><th scope="col">Pos</th>
+                  <th scope="col" class="num">Projected</th><th scope="col" class="num">Upgrade</th>
+                  <th scope="col" class="num">Owned</th>
+                </tr></thead>
+                <tbody>
+                  ${waivers.targets
+                    .map(
+                      (t) => `<tr>
+                        <th scope="row" class="row-team">${esc(t.name)}<small>${esc(t.proTeam)}</small></th>
+                        <td>${esc(t.position)}</td>
+                        <td class="num">${num(t.projected, 1)}</td>
+                        <td class="num">${deltaPill(t.gain, 1)}</td>
+                        <td class="num">${t.percentOwned === null ? '—' : `${num(t.percentOwned, 0)}%`}</td>
+                      </tr>`
+                    )
+                    .join('')}
+                </tbody>
+              </table>
+            </div>`
+          : '<p class="stat__note">Nothing on the wire clearly beats what you already start.</p>'
+      }
+    </div>`);
+  }
+
+  // --- Season stats -----------------------------------------------------
+  const s = team.stats;
+  if (s && s.gamesPlayed > 0) {
+    parts.push(`
+      <ul class="stats">
+        <li class="stat"><span class="stat__label">Record</span>
+          <span class="stat__value">${esc(s.wins)}-${esc(s.losses)}</span>
+          <span class="stat__note">${num(s.allPlayWinPct, 0)}% all-play</span></li>
+        <li class="stat"><span class="stat__label">Points for</span>
+          <span class="stat__value">${num(s.pointsFor, 0)}</span>
+          <span class="stat__note">${num(s.avgScore, 1)} per week</span></li>
+        <li class="stat"><span class="stat__label">Efficiency</span>
+          <span class="stat__value">${s.efficiency === null ? '—' : `${num(s.efficiency, 0)}%`}</span>
+          <span class="stat__note">${num(s.benchPoints, 0)} left benched</span></li>
+        <li class="stat"><span class="stat__label">Luck</span>
+          <span class="stat__value">${esc(signed(s.luck, 1))}</span>
+          <span class="stat__note">${num(s.expectedWins, 1)} expected wins</span></li>
+      </ul>`);
+  }
+
+  // --- Coaching report --------------------------------------------------
+  const coaching = team.coaching;
+  if (coaching?.available && coaching.worstCalls.length) {
+    parts.push(`<div class="card" style="margin-bottom:1.5rem">
+      <h3>Where the points went</h3>
+      <p class="stat__note">
+        ${num(coaching.totalBenched, 0)} points left on your bench this season.
+        ${coaching.gamesCostByBadLineups > 0
+          ? coaching.gamesCostByBadLineups === 1
+            ? '<strong>1</strong> loss would have been a win with the optimal lineup.'
+            : `<strong>${esc(coaching.gamesCostByBadLineups)}</strong> losses would have been wins with the optimal lineup.`
+          : 'None of it changed a result.'}
+      </p>
+      <div class="table-scroll" style="margin-top:0.6rem">
+        <table>
+          <caption>Biggest start/sit misses — these are actual results, not projections</caption>
+          <thead><tr>
+            <th scope="col" class="num">Wk</th><th scope="col">Should have started</th>
+            <th scope="col">Started instead</th><th scope="col" class="num">Cost</th>
+          </tr></thead>
+          <tbody>
+            ${coaching.worstCalls
+              .map(
+                (c) => `<tr>
+                  <td class="num rank">${esc(c.week)}</td>
+                  <td>${esc(c.benched.name)} <small>(${esc(c.benched.position)}, ${num(c.benched.points, 1)})</small></td>
+                  <td>${esc(c.started.name)} <small>(${esc(c.started.position)}, ${num(c.started.points, 1)})</small></td>
+                  <td class="num">${num(c.cost, 1)}${c.changedResult ? ' <span class="pill pill--bad">Cost the game</span>' : ''}</td>
+                </tr>`
+              )
+              .join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`);
+  }
+
+  // --- Week log ---------------------------------------------------------
+  if (team.weekLog.length) {
+    const maxScore = Math.max(...team.weekLog.map((w) => w.score), 1);
+    parts.push(`
+      <div class="table-scroll" style="margin-bottom:1.5rem">
+        <table>
+          <caption>Week by week</caption>
+          <thead><tr>
+            <th scope="col" class="num">Wk</th><th scope="col">Result</th>
+            <th scope="col" class="bar-cell">Score</th>
+            <th scope="col" class="num">Opponent</th>
+            <th scope="col" class="num">Best possible</th>
+            <th scope="col" class="num">Efficiency</th>
+          </tr></thead>
+          <tbody>
+            ${team.weekLog
+              .map(
+                (w) => `<tr>
+                  <td class="num rank">${esc(w.week)}</td>
+                  <td><span class="pill ${w.result === 'WIN' ? 'pill--good' : w.result === 'LOSS' ? 'pill--bad' : 'pill--neutral'}">${esc(w.result)}</span></td>
+                  <td class="bar-cell">${bar(w.score, maxScore)}</td>
+                  <td class="num">${num(w.opponentScore, 1)}</td>
+                  <td class="num">${num(w.optimalScore, 1)}</td>
+                  <td class="num">${w.efficiency === null ? '—' : `${num(w.efficiency, 0)}%`}</td>
+                </tr>`
+              )
+              .join('')}
+          </tbody>
+        </table>
+      </div>`);
+  }
+
+  // --- Roster -----------------------------------------------------------
+  if (team.roster.length) {
+    const starters = team.roster.filter((p) => p.started);
+    const benched = team.roster.filter((p) => !p.started);
+    const rosterRows = (list) =>
+      list
+        .map(
+          (p) => `<tr>
+            <td>${esc(p.slot)}</td>
+            <th scope="row" class="row-team">${esc(p.name)}<small>${esc(p.proTeam)}</small></th>
+            <td>${esc(p.position)}</td>
+            <td class="num">${num(p.projected, 1)}</td>
+            <td>${p.injuryStatus && p.injuryStatus !== 'ACTIVE' && p.injuryStatus !== 'NORMAL'
+              ? `<span class="pill pill--warn">${esc(p.injuryStatus)}</span>` : ''}</td>
+          </tr>`
+        )
+        .join('');
+
+    parts.push(`
+      <div class="table-scroll">
+        <table>
+          <caption>Roster — projections for week ${esc(state.teamDetail.adviceWeek)}</caption>
+          <thead><tr>
+            <th scope="col">Slot</th><th scope="col">Player</th><th scope="col">Pos</th>
+            <th scope="col" class="num">Projected</th><th scope="col">Status</th>
+          </tr></thead>
+          <tbody>${rosterRows(starters)}${rosterRows(benched)}</tbody>
+        </table>
+      </div>`);
+  }
+
+  // --- Head to head -----------------------------------------------------
+  if (team.headToHead.length) {
+    parts.push(`
+      <div class="table-scroll" style="margin-top:1.5rem">
+        <table>
+          <caption>Head to head</caption>
+          <thead><tr>
+            <th scope="col">Opponent</th><th scope="col" class="num">Record</th>
+            <th scope="col" class="num">Points for</th><th scope="col" class="num">Points against</th>
+          </tr></thead>
+          <tbody>
+            ${team.headToHead
+              .map(
+                (h) => `<tr>
+                  <th scope="row" class="row-team">${esc(h.opponentName)}</th>
+                  <td class="num">${esc(h.wins)}-${esc(h.losses)}${h.ties ? `-${esc(h.ties)}` : ''}</td>
+                  <td class="num">${num(h.pointsFor, 1)}</td>
+                  <td class="num">${num(h.pointsAgainst, 1)}</td>
+                </tr>`
+              )
+              .join('')}
+          </tbody>
+        </table>
+      </div>`);
+  }
+
+  // Nothing above had anything to say yet.
+  if (parts.length <= 1) {
+    parts.push(
+      emptyState(
+        '📅',
+        'Nothing to report yet',
+        'Once the draft happens and Week 1 is played, this page fills with your roster, lineup advice, waiver targets and a breakdown of every start/sit call.'
+      )
+    );
+  }
+
+  body.innerHTML = parts.join('');
+
+  $('#claim-team')?.addEventListener('click', () => {
+    const nowMine = getMyTeamId() === team.teamId;
+    setMyTeamId(nowMine ? null : team.teamId);
+    syncMyTeamNav();
+    renderTeam(team.teamId);
+  });
+}
+
+/** Shows the "My Team" nav shortcut once a team has been claimed. */
+function syncMyTeamNav() {
+  const item = document.querySelector('[data-nav="myteam"]');
+  if (!item) return;
+  const id = getMyTeamId();
+  item.hidden = id === null;
+  const link = item.querySelector('a');
+  if (link && id !== null) link.href = `#team/${id}`;
 }
 
 function renderDraft() {
@@ -761,6 +1096,7 @@ const RENDERERS = {
   overview: renderOverview,
   standings: renderStandings,
   teams: renderTeams,
+  team: renderTeam,
   draft: renderDraft,
   trades: renderTrades,
   prizes: renderPrizes,
@@ -769,9 +1105,11 @@ const RENDERERS = {
 
 // --- Routing ---------------------------------------------------------------
 
-let currentView = null;
+// Keyed by view AND parameter, so navigating team/1 -> team/2 re-renders
+// instead of being treated as "already on the team view".
+let currentRoute = null;
 
-function show(view, { focus = false } = {}) {
+function show(view, { focus = false, param = null } = {}) {
   if (!VIEWS.includes(view)) view = 'overview';
 
   for (const v of ALL_VIEWS) {
@@ -783,9 +1121,10 @@ function show(view, { focus = false } = {}) {
     else link.removeAttribute('aria-current');
   }
 
-  if (view !== currentView) {
+  const routeKey = `${view}/${param ?? ''}`;
+  if (routeKey !== currentRoute) {
     try {
-      RENDERERS[view]();
+      RENDERERS[view](param === null ? undefined : Number(param));
     } catch (error) {
       const body = $(`#view-${view}`)?.querySelector('div[id$="-body"]');
       if (body) {
@@ -793,7 +1132,7 @@ function show(view, { focus = false } = {}) {
       }
       console.error(error);
     }
-    currentView = view;
+    currentRoute = routeKey;
   }
 
   const heading = $(`#view-${view} h2`);
@@ -802,8 +1141,12 @@ function show(view, { focus = false } = {}) {
 }
 
 function onHashChange(isInitial = false) {
-  const view = (location.hash || '#overview').slice(1);
-  show(view, { focus: !isInitial });
+  // Routes are either "#standings" or "#team/3".
+  const raw = (location.hash || '#overview').slice(1);
+  const slash = raw.indexOf('/');
+  const view = slash === -1 ? raw : raw.slice(0, slash);
+  const param = slash === -1 ? null : raw.slice(slash + 1);
+  show(view, { focus: !isInitial, param });
 }
 
 // --- Theme -----------------------------------------------------------------
@@ -846,15 +1189,18 @@ async function boot() {
     state.hub = hub;
 
     const year = hub.league.season ?? hub.seasons?.[hub.seasons.length - 1];
-    const [season, draft, ledger] = await Promise.all([
+    const [season, draft, teamDetail, ledger] = await Promise.all([
       loadJson(`data/season-${year}.json`).catch(() => null),
       loadJson(`data/draft-${year}.json`).catch(() => null),
+      loadJson(`data/teams-${year}.json`).catch(() => null),
       // Absent on the published site by design — the ledger is never uploaded.
       loadJson('data/money.json').catch(() => null),
     ]);
     state.season = season;
     state.draft = draft;
+    state.teamDetail = teamDetail;
     state.money = ledger;
+    syncMyTeamNav();
 
     // Register the Money view only when its data is actually present, so the
     // public site has no Money tab at all rather than an empty one.

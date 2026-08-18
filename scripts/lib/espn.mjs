@@ -253,5 +253,40 @@ export function createClient({ leagueId, secrets = null, log = () => {} }) {
     return response.json();
   }
 
-  return { getView, getPlayers, getActivity, urlFor, hasAuth: Boolean(secrets) };
+  /**
+   * Free agents and waiver-wire players, with ESPN's own projections for the
+   * given week. This is what makes "should I pick anyone up?" answerable.
+   */
+  async function getFreeAgents(season, scoringPeriodId, { limit = 200 } = {}) {
+    const url = urlFor(season, ["kona_player_info"], { scoringPeriodId });
+    const response = await fetch(url, {
+      headers: {
+        ...headers,
+        "X-Fantasy-Filter": JSON.stringify({
+          players: {
+            filterStatus: { value: ["FREEAGENT", "WAIVERS"] },
+            limit,
+            offset: 0,
+            sortPercOwned: { sortPriority: 1, sortAsc: false },
+          },
+        }),
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`free agents returned ${response.status} ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  /**
+   * Current rosters with projections for a specific week. The core mRoster call
+   * returns whoever is rostered now, but its stats are keyed to whatever period
+   * ESPN defaults to — asking for the week explicitly is what makes the
+   * projections line up with the week being advised on.
+   */
+  async function getRostersForWeek(season, scoringPeriodId) {
+    return getView(season, ["mRoster", "mTeam"], { params: { scoringPeriodId } });
+  }
+
+  return { getView, getPlayers, getActivity, getFreeAgents, getRostersForWeek, urlFor, hasAuth: Boolean(secrets) };
 }

@@ -164,6 +164,32 @@ async function fetchSeason(client, season) {
   }
   log(`  box scores: ${fetched} fetched, ${cached} from cache`);
 
+  // ---- Current rosters + free agents (for the roster advisor) -----------
+  // The week to advise on is the next one that has not been played. Fetching
+  // rosters with that scoringPeriodId is what makes ESPN return projections for
+  // the right week rather than whatever period it defaults to.
+  const adviceWeek = Math.min(finalPeriod, lastPlayed + 1);
+  try {
+    const current = await client.getRostersForWeek(season, adviceWeek);
+    await writeJson(path.join(dir, "current.json"), { adviceWeek, ...current });
+    const rostered = (current.teams ?? []).reduce(
+      (total, t) => total + (t.roster?.entries?.length ?? 0), 0
+    );
+    log(`  current rosters: ${rostered} players across ${current.teams?.length ?? 0} teams (week ${adviceWeek})`);
+  } catch (error) {
+    log(`  current rosters: unavailable (${error.message})`);
+  }
+  await sleep(POLITE_DELAY_MS);
+
+  try {
+    const fa = await client.getFreeAgents(season, adviceWeek);
+    await writeJson(path.join(dir, "freeagents.json"), { adviceWeek, ...fa });
+    log(`  free agents: ${fa.players?.length ?? 0}`);
+  } catch (error) {
+    log(`  free agents: unavailable (${error.message})`);
+  }
+  await sleep(POLITE_DELAY_MS);
+
   await writeJson(path.join(dir, 'meta.json'), {
     season,
     fetchedAt: new Date().toISOString(),

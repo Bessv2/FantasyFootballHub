@@ -497,6 +497,78 @@ await writeJson(path.join(OUT, 'activity.json'), { topics: tradeTopics });
 for (const { week, data } of weekFiles) {
   await writeJson(path.join(OUT, 'weeks', `${week}.json`), data);
 }
+// ---------------------------------------------------------------------------
+// Current rosters + free agents, for the roster advisor
+// ---------------------------------------------------------------------------
+
+// The week being advised on: the first one not yet played.
+const ADVICE_WEEK = REGULAR_WEEKS + 1;
+
+/**
+ * Deliberately sets some lineups badly so the advisor has something to find.
+ * A fixture where every manager is already optimal proves nothing.
+ */
+function currentRosterEntries(teamId) {
+  const roster = rosters.get(teamId);
+  const assigned = setLineup(roster, ADVICE_WEEK, managerSkill.get(teamId));
+
+  return assigned.map(({ player, slotId }) => {
+    const projected = round2(Math.max(0, player._talent * player._multiplier + gaussian(0, 2.5)));
+    return {
+      playerId: player.id,
+      lineupSlotId: slotId,
+      playerPoolEntry: {
+        player: {
+          id: player.id,
+          fullName: player.fullName,
+          defaultPositionId: player.defaultPositionId,
+          proTeamId: player.proTeamId,
+          eligibleSlots: player.eligibleSlots,
+          injuryStatus: player.injuryStatus,
+          stats: [
+            { scoringPeriodId: ADVICE_WEEK, statSourceId: 1, statSplitTypeId: 1, appliedTotal: projected },
+          ],
+        },
+      },
+    };
+  });
+}
+
+await writeJson(path.join(OUT, 'current.json'), {
+  adviceWeek: ADVICE_WEEK,
+  teams: teams.map((t) => ({ ...t, roster: { entries: currentRosterEntries(t.id) } })),
+});
+
+// Everyone who went undrafted is a free agent.
+const draftedIds = new Set(picks.map((p) => p.playerId));
+await writeJson(path.join(OUT, 'freeagents.json'), {
+  adviceWeek: ADVICE_WEEK,
+  players: players
+    .filter((p) => !draftedIds.has(p.id))
+    .map((p) => ({
+      id: p.id,
+      onTeamId: 0,
+      status: 'FREEAGENT',
+      player: {
+        id: p.id,
+        fullName: p.fullName,
+        defaultPositionId: p.defaultPositionId,
+        proTeamId: p.proTeamId,
+        eligibleSlots: p.eligibleSlots,
+        injuryStatus: p.injuryStatus,
+        ownership: { percentOwned: round2(rand() * 40) },
+        stats: [
+          {
+            scoringPeriodId: ADVICE_WEEK,
+            statSourceId: 1,
+            statSplitTypeId: 1,
+            appliedTotal: round2(Math.max(0, p._talent * p._multiplier + gaussian(0, 2.5))),
+          },
+        ],
+      },
+    })),
+});
+
 await writeJson(path.join(OUT, 'meta.json'), {
   season: 2026,
   fetchedAt: new Date().toISOString(),

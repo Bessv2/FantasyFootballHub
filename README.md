@@ -32,8 +32,37 @@ section fills in on its own schedule:
 | Prizes (catalogue) | **Now** — see the 18 prizes so you can agree rules early |
 | Teams | As managers claim their spots |
 | Draft | Draft night, **Sept 5 2026** |
+| Team pages: roster, lineup advice, waivers | Once rosters exist (draft night) |
 | Standings, Power, Prizes (winners) | After Week 1 |
+| Team pages: coaching report, week log, head-to-head | After Week 1 |
 | Trades | First completed trade |
+
+## Team pages
+
+Every manager gets their own page at `#team/{id}` — e.g.
+`https://fantasyfootballhub.pages.dev/#team/3`. Tell people to open **Teams**,
+click theirs, and hit **"Set as my team"**; the browser remembers it and a **My
+Team** shortcut appears in the nav from then on.
+
+Each page carries:
+
+- **Start/sit advice for the coming week.** Runs the optimal-lineup solver over
+  ESPN's own projections and reports who should be in and who should be out.
+  Stays quiet unless the change is worth at least a point — projections are not
+  precise enough for a 0.4-point "upgrade" to mean anything.
+- **Waiver targets.** Free agents projected above your weakest starter at that
+  position, plus a flag for any injured starter. Deliberately conservative: a
+  player has to beat what you already start by 2+ points to show up.
+- **A coaching report.** Every start/sit call you got wrong, ranked by cost,
+  with the ones that actually flipped a loss marked. This part is not a
+  projection — those points were scored or they weren't.
+- Week-by-week log, full roster with projections, draft picks, head-to-head.
+
+**There is no login.** A static site has nothing to authenticate against, so any
+team page is readable by anyone with the link. For a fantasy league that is
+arguably the point — none of it is more private than what ESPN already shows the
+whole league. Real per-manager privacy would need a backend and accounts, which
+is a much bigger thing than this project is.
 
 ---
 

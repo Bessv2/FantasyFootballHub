@@ -328,6 +328,52 @@ function normalizeTrades(rawActivity, playerIndex, teams) {
   return trades;
 }
 
+/**
+ * Rosters as they stand right now, carrying ESPN's projections for the week
+ * being advised on. Distinct from the weekly box-score rosters, which are
+ * historical — this is who is on the team today.
+ */
+function normalizeCurrentRosters(current, playerIndex, adviceWeek) {
+  const out = new Map();
+  for (const team of current?.teams ?? []) {
+    const entries = normalizeRosterEntries(team?.roster?.entries, adviceWeek, playerIndex);
+    // ESPN reports actual points for a week that has not happened as 0, which
+    // would read as "everyone scored nothing". Only the projection is
+    // meaningful here, so drop the actual.
+    out.set(
+      team.id,
+      entries.map(({ points, ...rest }) => ({ ...rest, projected: rest.projected ?? 0 }))
+    );
+  }
+  return out;
+}
+
+/** Available players, with projections, for waiver suggestions. */
+function normalizeFreeAgents(freeAgents, adviceWeek) {
+  return (freeAgents?.players ?? [])
+    .map((entry) => {
+      const raw = entry?.player;
+      if (!raw) return null;
+      const stats = raw.stats ?? [];
+      const projected = stats.find(
+        (s) => s.scoringPeriodId === adviceWeek && s.statSourceId === STAT_SOURCE.PROJECTED
+      )?.appliedTotal;
+
+      return {
+        playerId: raw.id,
+        name: raw.fullName ?? `Player ${raw.id}`,
+        position: resolvePosition(raw),
+        proTeam: PRO_TEAM[raw.proTeamId] ?? 'FA',
+        projected: Number.isFinite(projected) ? Number(projected.toFixed(2)) : null,
+        percentOwned: raw.ownership?.percentOwned != null
+          ? Number(raw.ownership.percentOwned.toFixed(1))
+          : null,
+        injuryStatus: raw.injuryStatus ?? null,
+      };
+    })
+    .filter((p) => p && p.projected !== null);
+}
+
 function detectPhase({ status, draft, weeks, teams }) {
   const playedWeeks = weeks.filter((w) => w.played).length;
   const finalPeriod = status?.finalScoringPeriod ?? 17;
@@ -377,6 +423,10 @@ export function normalizeSeason(raw) {
       count,
     }));
 
+  const adviceWeek = raw.current?.adviceWeek ?? (status.latestScoringPeriod ?? 0) + 1;
+  const currentRosters = normalizeCurrentRosters(raw.current, playerIndex, adviceWeek);
+  const freeAgents = normalizeFreeAgents(raw.freeAgents, adviceWeek);
+
   const phase = detectPhase({ status, draft, weeks, teams });
 
   return {
@@ -419,6 +469,9 @@ export function normalizeSeason(raw) {
     weeks,
     transactions,
     trades,
+    adviceWeek,
+    currentRosters: Object.fromEntries(currentRosters),
+    freeAgents,
     playerCount: playerIndex.size,
   };
 }

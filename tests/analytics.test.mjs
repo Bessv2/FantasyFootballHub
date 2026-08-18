@@ -21,6 +21,7 @@ import {
   computePrizes,
 } from '../scripts/lib/analytics.mjs';
 import { computeLedger } from '../scripts/lib/money.mjs';
+import { recommendLineup, coachingReport, waiverTargets } from '../scripts/lib/advisor.mjs';
 import { normalizeSeason, PHASE } from '../scripts/lib/normalize.mjs';
 import { resolvePosition } from '../scripts/lib/constants.mjs';
 
@@ -428,6 +429,136 @@ describe('money ledger', () => {
     const ledger = computeLedger(config, partialLeague, []);
     assert.equal(ledger.expectedTeams, 1);
     assert.equal(ledger.expectedPot, 50);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('roster advisor', () => {
+  /** Roster where the best QB is wrongly benched behind a worse one. */
+  const proj = (playerId, name, position, projected, slotId) => ({
+    playerId, name, position, projected, slotId,
+    slot: slotId === 20 ? 'BE' : position,
+  });
+
+  const SLOTS = [
+    { slotId: 0, count: 1 }, { slotId: 2, count: 2 }, { slotId: 4, count: 2 },
+    { slotId: 6, count: 1 }, { slotId: 23, count: 1 }, { slotId: 16, count: 1 },
+    { slotId: 17, count: 1 },
+  ];
+
+  const badLineup = [
+    proj(1, 'Bad QB', 'QB', 9, 0), // starting
+    proj(2, 'Good QB', 'QB', 24, 20), // benched — should start
+    proj(3, 'RB1', 'RB', 16, 2), proj(4, 'RB2', 'RB', 13, 2),
+    proj(5, 'WR1', 'WR', 15, 4), proj(6, 'WR2', 'WR', 11, 4),
+    proj(7, 'TE1', 'TE', 8, 6), proj(8, 'FLEX', 'RB', 10, 23),
+    proj(9, 'DST', 'D/ST', 7, 16), proj(10, 'K', 'K', 6, 17),
+  ];
+
+  test('recommends the benched player who should be starting', () => {
+    const advice = recommendLineup(badLineup, SLOTS);
+    assert.equal(advice.available, true);
+    assert.equal(advice.alreadyOptimal, false);
+    assert.deepEqual(advice.toStart.map((p) => p.name), ['Good QB']);
+    assert.deepEqual(advice.toSit.map((p) => p.name), ['Bad QB']);
+    assert.equal(advice.projectedGain, 15); // 24 - 9
+  });
+
+  test('never pairs players across incompatible slots', () => {
+    // The failure this guards against: zipping "start" and "sit" lists by index
+    // produces advice like "start this QB instead of that TE", which is not a
+    // legal move. The two lists must stay independent.
+    const advice = recommendLineup(badLineup, SLOTS);
+    assert.ok(!('swaps' in advice), 'must not emit invented 1:1 swaps');
+    assert.equal(advice.toStart.length, advice.toSit.length);
+  });
+
+  test('says nothing when the lineup is already optimal', () => {
+    const good = [
+      proj(1, 'QB', 'QB', 24, 0),
+      proj(3, 'RB1', 'RB', 16, 2), proj(4, 'RB2', 'RB', 13, 2),
+      proj(5, 'WR1', 'WR', 15, 4), proj(6, 'WR2', 'WR', 11, 4),
+      proj(7, 'TE1', 'TE', 8, 6), proj(8, 'FLEX', 'RB', 10, 23),
+      proj(9, 'DST', 'D/ST', 7, 16), proj(10, 'K', 'K', 6, 17),
+      proj(11, 'Scrub', 'WR', 2, 20),
+    ];
+    const advice = recommendLineup(good, SLOTS);
+    assert.equal(advice.alreadyOptimal, true);
+    assert.deepEqual(advice.toStart, []);
+  });
+
+  test('stays quiet about sub-point improvements', () => {
+    const marginal = [
+      proj(1, 'QB', 'QB', 20, 0),
+      proj(3, 'RB1', 'RB', 16, 2), proj(4, 'RB2', 'RB', 13, 2),
+      proj(5, 'WR1', 'WR', 15, 4), proj(6, 'WR2', 'WR', 11, 4),
+      proj(7, 'TE1', 'TE', 8, 6), proj(8, 'FLEX', 'RB', 10, 23),
+      proj(9, 'DST', 'D/ST', 7, 16), proj(10, 'K', 'K', 6, 17),
+      proj(11, 'Barely better', 'RB', 10.4, 20), // +0.4 over the flex
+    ];
+    const advice = recommendLineup(marginal, SLOTS);
+    assert.equal(advice.alreadyOptimal, true, 'a 0.4-point edge is noise, not advice');
+  });
+
+  test('handles an empty roster without throwing', () => {
+    const advice = recommendLineup([], SLOTS);
+    assert.equal(advice.available, false);
+    assert.deepEqual(advice.toStart, []);
+  });
+
+  test('coaching report costs a loss only when the points would have flipped it', () => {
+    const rows = [
+      {
+        week: 1, result: 'LOSS', margin: -5, benchPoints: 20, score: 100, optimalScore: 120,
+        starters: [p(1, 'Started', 'QB', 5)],
+        benchPlayers: [p(2, 'Benched', 'QB', 25)],
+      },
+      {
+        week: 2, result: 'LOSS', margin: -40, benchPoints: 20, score: 100, optimalScore: 120,
+        starters: [p(3, 'Started', 'QB', 5)],
+        benchPlayers: [p(4, 'Benched', 'QB', 25)],
+      },
+    ];
+    const report = coachingReport(rows, [{ slotId: 0, count: 1 }]);
+    assert.equal(report.available, true);
+    assert.equal(report.worstCalls.length, 2);
+    // Week 1 lost by 5 with 20 points benched — the lineup call lost it.
+    // Week 2 lost by 40; the same mistake would not have saved it.
+    assert.equal(report.gamesCostByBadLineups, 1);
+    assert.equal(report.worstCalls.find((c) => c.week === 1).changedResult, true);
+    assert.equal(report.worstCalls.find((c) => c.week === 2).changedResult, false);
+  });
+
+  test('waiver targets must clearly beat the weakest starter', () => {
+    const roster = [
+      proj(1, 'QB', 'QB', 20, 0),
+      proj(3, 'RB1', 'RB', 16, 2), proj(4, 'RB2', 'RB', 8, 2),
+      proj(5, 'WR1', 'WR', 15, 4), proj(6, 'WR2', 'WR', 12, 4),
+      proj(7, 'TE1', 'TE', 9, 6), proj(8, 'FLEX', 'RB', 7, 23),
+      proj(9, 'DST', 'D/ST', 7, 16), proj(10, 'K', 'K', 6, 17),
+    ];
+    const fas = [
+      { playerId: 90, name: 'Clear upgrade', position: 'RB', projected: 14 },
+      { playerId: 91, name: 'Marginal', position: 'RB', projected: 8.5 },
+      { playerId: 92, name: 'Worse', position: 'WR', projected: 3 },
+    ];
+    const result = waiverTargets(fas, roster, SLOTS);
+    assert.equal(result.available, true);
+    const names = result.targets.map((t) => t.name);
+    assert.ok(names.includes('Clear upgrade'));
+    assert.ok(!names.includes('Marginal'), 'a sub-2-point edge is not worth a roster move');
+    assert.ok(!names.includes('Worse'));
+  });
+
+  test('waiver targets flag injured starters', () => {
+    const roster = [{ ...proj(1, 'Hurt QB', 'QB', 18, 0), injuryStatus: 'OUT' }];
+    const result = waiverTargets(
+      [{ playerId: 90, name: 'Healthy QB', position: 'QB', projected: 15 }],
+      roster,
+      [{ slotId: 0, count: 1 }]
+    );
+    assert.equal(result.injuryGaps.length, 1);
+    assert.equal(result.injuryGaps[0].name, 'Hurt QB');
   });
 });
 
