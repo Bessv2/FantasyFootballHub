@@ -48,6 +48,46 @@ section fills in on its own schedule:
 | Team pages: coaching report, week log, head-to-head | After Week 1 |
 | Trades | First completed trade |
 
+## Big Board
+
+`#board` ranks the **top 250 players by value over replacement**, not by ESPN's
+published order — because raw projections are not comparable across positions.
+300 points is elite for a tight end and ordinary for a quarterback.
+
+**Replacement level is derived, never hardcoded.** The build fills all twelve
+starting lineups greedily from the projection-ranked pool and reads off the
+worst starter at each position. In this league that puts QB replacement at
+**QB24**, because all twelve OP slots go to quarterbacks. Change the league back
+to a standard flex and it recomputes to QB12 on its own — there is a test
+pinning both.
+
+Each player carries:
+
+| Column | Meaning |
+| --- | --- |
+| **#** | Rank by value over replacement |
+| **Tier** | Positional tier, broken at the biggest cliffs — TE1–2 then a 33-point drop |
+| **Proj** | ESPN's season projection |
+| **VORP** | Points above the worst starter at that position |
+| **ADP** | Average draft position across ESPN leagues |
+| **Grade** | A+ to F: value versus what the player costs to draft |
+| **Status** | Undrafted, or who took them and at which pick |
+
+Sortable on every numeric column, filterable by position, searchable by name.
+Once the draft happens the Status column fills in automatically and you can hide
+drafted players to see only what's left.
+
+### Two honest caveats
+
+**Kickers and defences grade too well.** VORP counts 26 points above replacement
+the same wherever they come from, but K and D/ST are replaceable off waivers
+most weeks, so that edge does not need a draft pick. Week-to-week volatility
+isn't in ESPN's payload, so the model cannot see it — those positions are
+flagged **Streamable** rather than silently corrected.
+
+**Every grade inherits ESPN's projections.** If ESPN is wrong about a player,
+the board is wrong about them too. It is a pricing model, not a crystal ball.
+
 ## Mock draft
 
 `#mock` runs a full practice draft against 11 AI managers, in **this league's

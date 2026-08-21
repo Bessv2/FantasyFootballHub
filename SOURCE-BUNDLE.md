@@ -2,8 +2,9 @@
 
 Every source file in one place, for reading or for handing to a fresh session.
 
-- **Commit:** `50a6f0d` (2026-08-20 20:24:45 -0400)
-- **Generated:** 2026-08-21T00:24:56.380Z
+- **Commit:** `aa905da` (2026-08-20 20:24:56 -0400)
+- **Generated:** 2026-08-21T00:39:07.403Z
+- **WARNING:** the working tree had uncommitted changes when this was generated, so this may not match any commit.
 - **Regenerate with:** `npm run bundle`
 
 **Read [HANDOFF.md](HANDOFF.md) first.** It carries the ESPN API gotchas,
@@ -22,7 +23,7 @@ fixtures, both regenerable), `docs/data/` (build output).
 
 - **Configuration** — `league.json`, `money.json`, `secrets.example.json`
 - **Data layer — talking to ESPN** — `espn.mjs`, `constants.mjs`, `normalize.mjs`
-- **Analytics** — `lineup.mjs`, `analytics.mjs`, `draft.mjs`, `advisor.mjs`, `money.mjs`
+- **Analytics** — `lineup.mjs`, `analytics.mjs`, `draft.mjs`, `advisor.mjs`, `bigboard.mjs`, `money.mjs`
 - **Pipeline scripts** — `check.mjs`, `fetch.mjs`, `build.mjs`, `serve.mjs`, `ship.mjs`, `myleagues.mjs`, `fixtures.mjs`
 - **Site** — `index.html`, `style.css`, `app.js`, `mock.js`, `_headers`
 - **Tests** — `analytics.test.mjs`
@@ -2380,6 +2381,314 @@ export function waiverTargets(freeAgents, roster, startingSlots, { minGain = 2, 
 }
 ```
 
+### `scripts/lib/bigboard.mjs`
+
+*302 lines*
+
+```javascript
+/**
+ * The big board — every draftable player, graded.
+ *
+ * A grade is only meaningful against a baseline, and the honest baseline is
+ * REPLACEMENT LEVEL: the worst player at a position you would still start.
+ * 300 projected points is elite for a tight end and unremarkable for a
+ * quarterback, so raw projections cannot be compared across positions.
+ *
+ * Replacement level is not hardcoded. It is derived by greedily filling all
+ * twelve starting lineups from the projection-ranked pool, then reading off the
+ * worst starter at each position. That matters enormously here: this league
+ * starts an OP slot, so quarterbacks absorb most of the flex and QB replacement
+ * level sits far deeper than it would in a standard league. Hardcoding "QB12"
+ * would misprice every quarterback on the board.
+ */
+
+const SLOT_ELIGIBILITY = {
+  0: ['QB'], 2: ['RB'], 4: ['WR'], 6: ['TE'], 16: ['D/ST'], 17: ['K'],
+  23: ['RB', 'WR', 'TE'], 7: ['QB', 'RB', 'WR', 'TE'],
+  3: ['RB', 'WR'], 5: ['WR', 'TE'],
+};
+
+const round1 = (n) => Number((n ?? 0).toFixed(1));
+
+/**
+ * Simulates every team filling its starting lineup with the best players
+ * available, then reports the worst starter at each position.
+ *
+ * Self-adjusting: change the league to superflex, or to two flex slots, and the
+ * baselines move on their own.
+ */
+export function computeReplacementLevels(players, startingSlots, teamCount) {
+  const pool = players
+    .filter((p) => Number.isFinite(p.projected))
+    .sort((a, b) => b.projected - a.projected);
+
+  // One entry per starting slot across the whole league, most restrictive
+  // first so flex slots take genuine leftovers rather than premium players.
+  const slots = [];
+  for (const { slotId, count } of startingSlots ?? []) {
+    for (let t = 0; t < teamCount; t += 1) {
+      for (let i = 0; i < count; i += 1) slots.push(slotId);
+    }
+  }
+  slots.sort((a, b) => (SLOT_ELIGIBILITY[a] ?? []).length - (SLOT_ELIGIBILITY[b] ?? []).length);
+
+  const taken = new Set();
+  const startersByPosition = new Map();
+
+  for (const slotId of slots) {
+    const eligible = SLOT_ELIGIBILITY[slotId] ?? [];
+    const pick = pool.find((p) => !taken.has(p.playerId) && eligible.includes(p.position));
+    if (!pick) continue;
+    taken.add(pick.playerId);
+    if (!startersByPosition.has(pick.position)) startersByPosition.set(pick.position, []);
+    startersByPosition.get(pick.position).push(pick);
+  }
+
+  const levels = {};
+  const counts = {};
+  for (const [position, list] of startersByPosition) {
+    counts[position] = list.length;
+    // The worst player still starting at this position.
+    levels[position] = round1(Math.min(...list.map((p) => p.projected)));
+  }
+
+  return { levels, startersNeeded: counts };
+}
+
+/**
+ * Tiers are computed WITHIN each position, at the biggest cliffs.
+ *
+ * Two false starts got here. Tiering the whole board by absolute VORP gap puts
+ * every break in the top ten — gaps between elite players are enormous and
+ * gaps in the middle are fractions of a point — so 240 of 250 players land in
+ * one meaningless bucket. And a global tier answers the wrong question anyway:
+ * `valueRank` already says who is best overall, whereas what a drafter needs at
+ * the table is "how far does it fall if I miss this group of tight ends?"
+ *
+ * So: tier per position, breaking at that position's largest drops.
+ */
+function assignPositionalTiers(sorted, { tiersPerPosition = 6 } = {}) {
+  const byPosition = new Map();
+  for (const p of sorted) {
+    if (!byPosition.has(p.position)) byPosition.set(p.position, []);
+    byPosition.get(p.position).push(p);
+  }
+
+  for (const list of byPosition.values()) {
+    if (list.length < 2) {
+      list.forEach((p) => { p.tier = 1; });
+      continue;
+    }
+
+    const gaps = [];
+    for (let i = 1; i < list.length; i += 1) {
+      gaps.push({ index: i, gap: Math.max(0, list[i - 1].vorp - list[i].vorp) });
+    }
+    const breaks = new Set(
+      [...gaps]
+        .sort((a, b) => b.gap - a.gap)
+        .slice(0, Math.max(0, tiersPerPosition - 1))
+        .map((g) => g.index)
+    );
+
+    let tier = 1;
+    list[0].tier = 1;
+    for (let i = 1; i < list.length; i += 1) {
+      if (breaks.has(i)) tier += 1;
+      list[i].tier = tier;
+    }
+  }
+}
+
+/**
+ * A→F, banded in standard deviations of the actual delta spread.
+ *
+ * Fixed thresholds do not survive a change of scale: ±40 places was calibrated
+ * for a short board and, applied across 250 players where deltas routinely
+ * exceed 100, put 54% of the league at A+ or F. Grading in units of the
+ * observed spread keeps the distribution sane at any board size while
+ * preserving the absolute anchor that matters — a delta of zero means a player
+ * is priced exactly where his value says he belongs, and lands at B-.
+ */
+function gradeFromZ(z) {
+  if (z >= 1.5) return 'A+';
+  if (z >= 1.0) return 'A';
+  if (z >= 0.6) return 'A-';
+  if (z >= 0.3) return 'B+';
+  if (z >= 0.1) return 'B';
+  if (z >= -0.1) return 'B-';
+  if (z >= -0.3) return 'C+';
+  if (z >= -0.6) return 'C';
+  if (z >= -1.0) return 'C-';
+  if (z >= -1.5) return 'D';
+  return 'F';
+}
+
+function standardDeviation(values) {
+  if (values.length < 2) return 1;
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const variance = values.reduce((a, v) => a + (v - mean) ** 2, 0) / values.length;
+  return Math.sqrt(variance) || 1;
+}
+
+/**
+ * @param {object} pool  docs/data/draftpool payload (players, startingSlots, teams)
+ * @param {object} [draft] analyzed draft, so picks can be attached once held
+ * @param {number} [limit] how many players to publish
+ */
+export function buildBigBoard(pool, draft = null, limit = 250) {
+  const all = (pool?.players ?? []).filter((p) => Number.isFinite(p.projected));
+  if (!all.length) {
+    return { available: false, players: [], replacement: {}, scarcity: [], rankType: pool?.rankType ?? null };
+  }
+
+  const teamCount = pool.teams ?? 12;
+  const { levels, startersNeeded } = computeReplacementLevels(all, pool.startingSlots, teamCount);
+
+  // Where each player was actually taken, once a draft exists.
+  const pickByPlayer = new Map();
+  for (const pick of draft?.picks ?? []) {
+    pickByPlayer.set(pick.playerId, pick);
+  }
+
+  const withVorp = all.map((p) => {
+    const replacement = levels[p.position];
+    // A position nobody starts (P, HC) has no replacement level and no VORP.
+    const vorp = replacement === undefined ? null : round1(p.projected - replacement);
+    return { ...p, replacement: replacement ?? null, vorp };
+  });
+
+  // Rank by value, which is the whole point — this is the order the board
+  // *should* be in, as opposed to the order ESPN publishes.
+  const rankable = withVorp.filter((p) => p.vorp !== null).sort((a, b) => b.vorp - a.vorp);
+  rankable.forEach((p, i) => { p.valueRank = i + 1; });
+  assignPositionalTiers(rankable);
+
+  // Positional rank, so "the 4th-best TE" is answerable at a glance.
+  const posCounter = new Map();
+  for (const p of rankable) {
+    const n = (posCounter.get(p.position) ?? 0) + 1;
+    posCounter.set(p.position, n);
+    p.positionRank = n;
+  }
+
+  // Deltas first, so the grade curve can be scaled to their real spread.
+  const published = rankable.slice(0, limit);
+  for (const p of published) {
+    const costRank = p.adp ?? p.rank; // ADP where ESPN has one, else board rank.
+    p.valueDelta = costRank === null ? null : Math.round(costRank - p.valueRank);
+  }
+  const deltaSpread = standardDeviation(
+    published.map((p) => p.valueDelta).filter((d) => d !== null)
+  );
+
+  const players = published
+    .map((p) => {
+      const pick = pickByPlayer.get(p.playerId) ?? null;
+      const delta = p.valueDelta;
+
+      return {
+        playerId: p.playerId,
+        name: p.name,
+        position: p.position,
+        proTeam: p.proTeam,
+        injuryStatus: p.injuryStatus,
+
+        boardRank: p.rank,
+        pprRank: p.pprRank,
+        adp: p.adp,
+        auctionValue: p.auctionValue,
+
+        projected: p.projected,
+        lastSeason: p.lastSeason,
+        replacement: p.replacement,
+        vorp: p.vorp,
+
+        valueRank: p.valueRank,
+        positionRank: p.positionRank,
+        tier: p.tier,
+        streamable: p.position === 'K' || p.position === 'D/ST',
+        valueDelta: delta,
+        grade: delta === null ? null : gradeFromZ(delta / deltaSpread),
+
+        drafted: Boolean(pick),
+        pick: pick
+          ? {
+              overall: pick.overall, round: pick.round,
+              teamId: pick.teamId, teamName: pick.teamName,
+              managerName: pick.managerName ?? null,
+            }
+          : null,
+      };
+    });
+
+  // How thin each position gets, which is what drives draft urgency.
+  const scarcity = Object.entries(startersNeeded)
+    .map(([position, needed]) => {
+      const atPos = rankable.filter((p) => p.position === position);
+      const startable = atPos.slice(0, needed);
+      return {
+        position,
+        startersNeeded: needed,
+        totalRanked: atPos.length,
+        replacement: levels[position],
+        bestProjection: atPos[0]?.projected ?? null,
+        // The drop from the best to the last startable player: a big number
+        // means the position is top-heavy and worth paying up for.
+        eliteAdvantage: startable.length
+          ? round1(startable[0].projected - startable[startable.length - 1].projected)
+          : null,
+      };
+    })
+    .sort((a, b) => (b.eliteAdvantage ?? 0) - (a.eliteAdvantage ?? 0));
+
+  /**
+   * Average value gap by position — the superflex effect, quantified.
+   *
+   * ADP is collected across mostly-standard leagues, so in a superflex format
+   * it systematically underprices quarterbacks. This is not noise to correct
+   * for; it is the single biggest edge available in this draft, and it deserves
+   * to be stated as a number rather than left for someone to infer from 250
+   * individual grades.
+   */
+  const positionValue = [...new Set(players.map((p) => p.position))]
+    .map((position) => {
+      const group = players.filter((p) => p.position === position && p.valueDelta !== null);
+      if (!group.length) return null;
+      const avg = group.reduce((a, p) => a + p.valueDelta, 0) / group.length;
+      return {
+        position,
+        count: group.length,
+        avgValueDelta: Math.round(avg),
+        // Positive = the market drafts this position later than its value warrants.
+        underpriced: avg > 0,
+        // VORP overstates draft-day value for kickers and defences. It treats
+        // 26 points above replacement as 26 points regardless of position, but
+        // K and D/ST are near-freely replaceable off waivers every week, so
+        // that edge is not something you need a draft pick to capture. The
+        // model cannot see this — week-to-week volatility is not in ESPN's
+        // payload — so it is flagged rather than silently corrected.
+        streamable: position === 'K' || position === 'D/ST',
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.avgValueDelta - a.avgValueDelta);
+
+  return {
+    available: true,
+    rankType: pool.rankType ?? null,
+    teamCount,
+    limit,
+    replacement: levels,
+    startersNeeded,
+    scarcity,
+    positionValue,
+    gradeSpread: Math.round(deltaSpread),
+    players,
+  };
+}
+```
+
 ### `scripts/lib/money.mjs`
 
 *109 lines*
@@ -2914,7 +3223,7 @@ main().catch((error) => {
 
 ### `scripts/build.mjs`
 
-*442 lines*
+*453 lines*
 
 ```javascript
 /**
@@ -2946,6 +3255,7 @@ import {
 import { analyzeDraft } from './lib/draft.mjs';
 import { computeLedger } from './lib/money.mjs';
 import { recommendLineup, coachingReport, waiverTargets } from './lib/advisor.mjs';
+import { buildBigBoard } from './lib/bigboard.mjs';
 
 const ROOT = projectRoot();
 const args = process.argv.slice(2);
@@ -3277,7 +3587,7 @@ async function main() {
     // Draft board for the mock draft, ranked for this league's format.
     const pool = buildDraftPool(b.raw);
     if (pool.players.length) {
-      await writeJson(path.join(DERIVED, `draftpool-${b.year}.json`), {
+      const poolPayload = {
         year: b.year,
         rankType: pool.rankType,
         rounds: b.season.draft.rounds || 16,
@@ -3285,6 +3595,16 @@ async function main() {
         startingSlots: b.season.league.startingSlots,
         benchSlots: b.season.league.benchSlots,
         players: pool.players,
+      };
+      await writeJson(path.join(DERIVED, `draftpool-${b.year}.json`), poolPayload);
+
+      // The big board: same players, graded against replacement level and
+      // annotated with who drafted them once the draft has happened.
+      const board = buildBigBoard(poolPayload, b.draft, 250);
+      await writeJson(path.join(DERIVED, `bigboard-${b.year}.json`), {
+        year: b.year,
+        draftHeld: b.draft.held,
+        ...board,
       });
     }
 
@@ -3652,7 +3972,7 @@ console.log();
 
 ### `scripts/fixtures.mjs`
 
-*588 lines*
+*631 lines*
 
 ```javascript
 /**
@@ -4226,6 +4546,49 @@ await writeJson(path.join(OUT, 'freeagents.json'), {
     })),
 });
 
+// ---------------------------------------------------------------------------
+// Draft pool, in kona_player_info shape, so the big board builds end to end
+// ---------------------------------------------------------------------------
+
+// Ranked by talent, with ADP deliberately offset from true value so the value
+// grades have something real to find — a board where cost already equals value
+// would grade every player B- and prove nothing.
+const poolRanked = [...players].sort((a, b) => b._talent * b._multiplier - a._talent * a._multiplier);
+
+await writeJson(path.join(OUT, 'draftpool.json'), {
+  rankType: 'SUPERFLEX',
+  players: poolRanked.slice(0, 400).map((p, i) => {
+    const seasonProjection = round2(p._talent * p._multiplier * REGULAR_WEEKS);
+    // Push QBs later in ADP than their value warrants, mirroring how real ADP
+    // is collected from mostly-standard leagues.
+    const adpBias = p._pos === 'QB' ? 45 : p._pos === 'K' || p._pos === 'D/ST' ? 60 : -8;
+    return {
+      id: p.id,
+      onTeamId: 0,
+      player: {
+        id: p.id,
+        fullName: p.fullName,
+        defaultPositionId: p.defaultPositionId,
+        proTeamId: p.proTeamId,
+        eligibleSlots: p.eligibleSlots,
+        injuryStatus: p.injuryStatus,
+        draftRanksByRankType: {
+          SUPERFLEX: { rank: i + 1, auctionValue: Math.max(1, Math.round(60 - i * 0.3)) },
+          PPR: { rank: i + 1, auctionValue: Math.max(1, Math.round(60 - i * 0.3)) },
+        },
+        ownership: {
+          averageDraftPosition: Math.max(1, round2(i + 1 + adpBias + gaussian(0, 6))),
+          percentOwned: round2(Math.max(0, 100 - i * 0.4)),
+        },
+        stats: [
+          { seasonId: 2026, scoringPeriodId: 0, statSourceId: 1, statSplitTypeId: 0, appliedTotal: seasonProjection },
+          { seasonId: 2025, scoringPeriodId: 0, statSourceId: 0, statSplitTypeId: 0, appliedTotal: round2(seasonProjection * (0.8 + rand() * 0.4)) },
+        ],
+      },
+    };
+  }),
+});
+
 await writeJson(path.join(OUT, 'meta.json'), {
   season: 2026,
   fetchedAt: new Date().toISOString(),
@@ -4250,7 +4613,7 @@ Dependency-free front end. Reads pre-computed JSON from docs/data/ and renders i
 
 ### `docs/index.html`
 
-*140 lines*
+*152 lines*
 
 ```html
 <!doctype html>
@@ -4289,6 +4652,7 @@ Dependency-free front end. Reads pre-computed JSON from docs/data/ and renders i
           <li><a href="#teams" data-view="teams">Teams</a></li>
           <li data-nav="myteam" hidden><a href="#team" data-view="team">My Team</a></li>
           <li><a href="#draft" data-view="draft">Draft</a></li>
+          <li data-nav="board" hidden><a href="#board" data-view="board">Big Board</a></li>
           <li data-nav="mock" hidden><a href="#mock" data-view="mock">Mock Draft</a></li>
           <li><a href="#trades" data-view="trades">Trades</a></li>
           <li><a href="#prizes" data-view="prizes">Prizes</a></li>
@@ -4339,6 +4703,17 @@ Dependency-free front end. Reads pre-computed JSON from docs/data/ and renders i
           outperformed the cost of the pick.
         </p>
         <div id="draft-body"></div>
+      </section>
+
+      <section class="view" id="view-board" hidden aria-labelledby="h-board">
+        <h2 id="h-board">Big Board</h2>
+        <p class="view__intro">
+          The top 250 players, graded against <strong>replacement level</strong> — the worst
+          player at each position you'd still start in this league. Raw projections can't be
+          compared across positions; 300 points is elite for a tight end and ordinary for a
+          quarterback. Every number below is derived from your actual format.
+        </p>
+        <div id="board-body"></div>
       </section>
 
       <section class="view" id="view-mock" hidden aria-labelledby="h-mock">
@@ -4851,7 +5226,7 @@ tr.playoff-cut td, tr.playoff-cut th { border-bottom: 2px solid var(--accent); }
 
 ### `docs/assets/app.js`
 
-*1543 lines*
+*1834 lines*
 
 ```javascript
 import { createMockDraft, advanceToUser, makePick, gradeDraft, rosterNeeds } from './mock.js';
@@ -4874,10 +5249,10 @@ import { createMockDraft, advanceToUser, makePick, gradeDraft, rosterNeeds } fro
  *     than advertising that something is being withheld.
  */
 
-const ALL_VIEWS = ['overview', 'standings', 'teams', 'team', 'draft', 'mock', 'trades', 'prizes', 'money'];
-let VIEWS = ALL_VIEWS.filter((v) => v !== 'money' && v !== 'mock');
+const ALL_VIEWS = ['overview', 'standings', 'teams', 'team', 'draft', 'board', 'mock', 'trades', 'prizes', 'money'];
+let VIEWS = ALL_VIEWS.filter((v) => v !== 'money' && v !== 'mock' && v !== 'board');
 
-const state = { hub: null, season: null, draft: null, money: null, teamDetail: null, draftPool: null };
+const state = { hub: null, season: null, draft: null, money: null, teamDetail: null, draftPool: null, bigBoard: null };
 let countdownTimer = null;
 
 /** Which team the visitor has claimed as theirs, remembered across visits. */
@@ -5614,6 +5989,288 @@ function syncMyTeamNav() {
   if (link && id !== null) link.href = `#team/${id}`;
 }
 
+// --- Big board -------------------------------------------------------------
+
+const boardState = { position: 'ALL', sort: 'valueRank', dir: 'asc', search: '', hideDrafted: false };
+
+const GRADE_ORDER = ['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'C-', 'D', 'F'];
+
+/** Colour reinforces the grade; the letter always carries it. */
+function gradePill(grade) {
+  if (!grade) return '<span class="pill pill--neutral">—</span>';
+  const i = GRADE_ORDER.indexOf(grade);
+  const cls = i <= 2 ? 'pill--good' : i <= 5 ? 'pill--accent' : i <= 7 ? 'pill--neutral' : 'pill--bad';
+  return `<span class="pill ${cls}">${esc(grade)}</span>`;
+}
+
+function sortBoard(players) {
+  const { sort, dir } = boardState;
+  const mult = dir === 'asc' ? 1 : -1;
+  return [...players].sort((a, b) => {
+    let av;
+    let bv;
+    if (sort === 'grade') {
+      av = GRADE_ORDER.indexOf(a.grade);
+      bv = GRADE_ORDER.indexOf(b.grade);
+    } else if (sort === 'name') {
+      return mult * a.name.localeCompare(b.name);
+    } else {
+      av = a[sort];
+      bv = b[sort];
+    }
+    // Missing values sort last regardless of direction.
+    if (av === null || av === undefined) return 1;
+    if (bv === null || bv === undefined) return -1;
+    return mult * (av - bv);
+  });
+}
+
+function renderBoard() {
+  const body = $('#board-body');
+  const board = state.bigBoard;
+
+  if (!board?.available) {
+    body.innerHTML = emptyState(
+      '📖',
+      'Board not available',
+      'Run npm run fetch to pull the ranked player pool from ESPN, then npm run build.'
+    );
+    return;
+  }
+
+  const parts = [];
+
+  // --- The headline insight ---------------------------------------------
+  const qb = board.positionValue.find((p) => p.position === 'QB');
+  if (qb && qb.avgValueDelta > 15) {
+    parts.push(`
+      <section class="hero" style="margin-bottom:1.25rem">
+        <p class="hero__eyebrow">The superflex edge</p>
+        <h2>Quarterbacks are worth ${esc(qb.avgValueDelta)} draft places more than the market thinks</h2>
+        <p class="hero__sub">
+          Average draft position is collected across mostly-standard leagues, where only one
+          QB starts. This league starts two, so all ${esc(board.startersNeeded.QB ?? 24)} startable
+          quarterbacks have real value — and ADP hasn't caught up. That gap is the biggest
+          single edge available to you on draft day.
+        </p>
+      </section>`);
+  }
+
+  // --- Positional value + scarcity --------------------------------------
+  parts.push(`
+    <div class="grid" style="margin-bottom:1.25rem">
+      <div class="card">
+        <h3>Where the value is</h3>
+        <p class="stat__note">
+          Average places of value by position. Positive means the market drafts them later
+          than they're worth.
+        </p>
+        <div class="table-scroll" style="margin-top:0.6rem">
+          <table>
+            <caption>Positional value bias</caption>
+            <thead><tr>
+              <th scope="col">Pos</th><th scope="col" class="num">Value gap</th>
+              <th scope="col" class="num">Starters</th><th scope="col"></th>
+            </tr></thead>
+            <tbody>
+              ${board.positionValue
+                .map(
+                  (p) => `<tr>
+                    <th scope="row">${esc(p.position)}</th>
+                    <td class="num">${deltaPill(p.avgValueDelta, 0)}</td>
+                    <td class="num">${esc(board.startersNeeded[p.position] ?? '—')}</td>
+                    <td>${p.streamable ? '<span class="pill pill--warn">Streamable</span>' : ''}</td>
+                  </tr>`
+                )
+                .join('')}
+            </tbody>
+          </table>
+        </div>
+        <p class="stat__note" style="margin-top:0.6rem">
+          <strong>Streamable</strong> positions overstate their case here. VORP counts 26 points
+          above replacement the same wherever it comes from, but kickers and defences are
+          replaceable off waivers most weeks — so that edge doesn't need a draft pick. The model
+          can't measure week-to-week volatility, so this is flagged rather than silently corrected.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>Positional scarcity</h3>
+        <p class="stat__note">
+          How far the best player at each position sits above the last one you'd start.
+          A big gap means paying up is worth it.
+        </p>
+        <div class="table-scroll" style="margin-top:0.6rem">
+          <table>
+            <caption>Elite advantage over the last startable player</caption>
+            <thead><tr>
+              <th scope="col">Pos</th><th scope="col" class="bar-cell">Elite advantage</th>
+              <th scope="col" class="num">Replacement</th>
+            </tr></thead>
+            <tbody>
+              ${board.scarcity
+                .map(
+                  (s) => `<tr>
+                    <th scope="row">${esc(s.position)}</th>
+                    <td class="bar-cell">${bar(s.eliteAdvantage ?? 0, board.scarcity[0].eliteAdvantage || 1, { digits: 0, suffix: ' pts' })}</td>
+                    <td class="num">${num(s.replacement, 0)}</td>
+                  </tr>`
+                )
+                .join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>`);
+
+  // --- Controls ----------------------------------------------------------
+  const positions = ['ALL', ...POSITIONS_ORDER];
+  parts.push(`
+    <div style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:flex-end;margin-bottom:0.85rem">
+      <div>
+        <label for="board-search" class="stat__label">Search</label>
+        <input type="search" id="board-search" value="${esc(boardState.search)}"
+          placeholder="Player name…"
+          style="font:inherit;padding:0.45rem 0.7rem;border-radius:var(--radius-sm);
+                 border:1px solid var(--border);background:var(--bg-sunken);color:var(--text);min-width:12rem">
+      </div>
+      <div role="group" aria-label="Filter by position" style="display:flex;flex-wrap:wrap;gap:0.25rem">
+        ${positions
+          .map(
+            (pos) => `<button type="button" class="theme-toggle board-pos" data-pos="${esc(pos)}"
+              aria-pressed="${boardState.position === pos}">${esc(pos)}</button>`
+          )
+          .join('')}
+      </div>
+      ${
+        board.draftHeld
+          ? `<button type="button" class="theme-toggle" id="board-hide-drafted"
+              aria-pressed="${boardState.hideDrafted}">
+              ${boardState.hideDrafted ? 'Showing available only' : 'Show available only'}
+            </button>`
+          : ''
+      }
+    </div>`);
+
+  // --- The board ---------------------------------------------------------
+  let rows = board.players;
+  if (boardState.position !== 'ALL') rows = rows.filter((p) => p.position === boardState.position);
+  if (boardState.search) {
+    const q = boardState.search.toLowerCase();
+    rows = rows.filter((p) => p.name.toLowerCase().includes(q) || p.proTeam.toLowerCase().includes(q));
+  }
+  if (boardState.hideDrafted) rows = rows.filter((p) => !p.drafted);
+  rows = sortBoard(rows);
+
+  const maxVorp = Math.max(...board.players.map((p) => p.vorp ?? 0), 1);
+
+  const sortable = (key, label, hint) => {
+    const active = boardState.sort === key;
+    const arrow = active ? (boardState.dir === 'asc' ? ' ▲' : ' ▼') : '';
+    return `<th scope="col" class="num" aria-sort="${active ? (boardState.dir === 'asc' ? 'ascending' : 'descending') : 'none'}">
+      <button type="button" class="board-sort" data-key="${esc(key)}"
+        style="background:none;border:0;color:inherit;font:inherit;cursor:pointer;padding:0;text-transform:inherit;letter-spacing:inherit"
+        ${hint ? `title="${esc(hint)}"` : ''}>${esc(label)}${arrow}</button></th>`;
+  };
+
+  parts.push(`
+    <div class="table-scroll">
+      <table>
+        <caption>
+          ${esc(rows.length)} of ${esc(board.players.length)} players ·
+          ranked by value over replacement, not by ESPN's published order
+          ${board.draftHeld ? '· draft results attached' : ''}
+        </caption>
+        <thead>
+          <tr>
+            ${sortable('valueRank', '#', 'Rank by value over replacement')}
+            <th scope="col">Player</th>
+            <th scope="col">Pos</th>
+            <th scope="col" class="num">Tier</th>
+            ${sortable('projected', 'Proj', 'ESPN season projection')}
+            ${sortable('vorp', 'VORP', 'Points above the worst starter at this position')}
+            ${sortable('adp', 'ADP', 'Average draft position across ESPN leagues')}
+            ${sortable('grade', 'Grade', 'Value versus what the player costs to draft')}
+            <th scope="col">${board.draftHeld ? 'Drafted by' : 'Status'}</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows
+            .slice(0, 250)
+            .map(
+              (p) => `<tr>
+                <td class="num rank">${esc(p.valueRank)}</td>
+                <th scope="row" class="row-team">
+                  ${esc(p.name)}<small>${esc(p.proTeam)}${
+                    p.injuryStatus && !['ACTIVE', 'NORMAL'].includes(p.injuryStatus)
+                      ? ` · ${esc(p.injuryStatus)}`
+                      : ''
+                  }</small>
+                </th>
+                <td>${esc(p.position)}${esc(p.positionRank)}</td>
+                <td class="num">${esc(p.tier)}</td>
+                <td class="num">${num(p.projected, 0)}</td>
+                <td class="bar-cell">${bar(p.vorp ?? 0, maxVorp, { digits: 0 })}</td>
+                <td class="num">${p.adp === null ? '—' : num(p.adp, 1)}</td>
+                <td>${gradePill(p.grade)}${p.streamable ? ' <span class="pill pill--warn">Str</span>' : ''}</td>
+                <td>${
+                  p.drafted
+                    ? `<small>${esc(p.pick.teamName)}<br>pick ${esc(p.pick.overall)} (R${esc(p.pick.round)})</small>`
+                    : board.draftHeld
+                      ? '<span class="pill pill--good">Available</span>'
+                      : '<span class="pill pill--neutral">Undrafted</span>'
+                }</td>
+              </tr>`
+            )
+            .join('')}
+        </tbody>
+      </table>
+    </div>`);
+
+  if (!rows.length) {
+    parts.push(emptyState('🔍', 'No players match', 'Try clearing the search or position filter.'));
+  }
+
+  body.innerHTML = parts.join('');
+
+  // --- Wiring ------------------------------------------------------------
+  for (const btn of body.querySelectorAll('.board-pos')) {
+    btn.addEventListener('click', () => {
+      boardState.position = btn.dataset.pos;
+      renderBoard();
+    });
+  }
+  for (const btn of body.querySelectorAll('.board-sort')) {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.key;
+      if (boardState.sort === key) {
+        boardState.dir = boardState.dir === 'asc' ? 'desc' : 'asc';
+      } else {
+        boardState.sort = key;
+        // Rank-like columns read best ascending; magnitudes descending.
+        boardState.dir = key === 'valueRank' || key === 'adp' || key === 'grade' ? 'asc' : 'desc';
+      }
+      renderBoard();
+    });
+  }
+  $('#board-hide-drafted')?.addEventListener('click', () => {
+    boardState.hideDrafted = !boardState.hideDrafted;
+    renderBoard();
+  });
+
+  const search = $('#board-search');
+  if (search) {
+    search.addEventListener('input', () => {
+      boardState.search = search.value;
+      renderBoard();
+      // Re-rendering blows away focus; put it back where the user was typing.
+      const next = $('#board-search');
+      next.focus();
+      next.setSelectionRange(next.value.length, next.value.length);
+    });
+  }
+}
+
 // --- Mock draft ------------------------------------------------------------
 
 let mock = null;
@@ -6244,6 +6901,7 @@ const RENDERERS = {
   teams: renderTeams,
   team: renderTeam,
   draft: renderDraft,
+  board: renderBoard,
   mock: renderMock,
   trades: renderTrades,
   prizes: renderPrizes,
@@ -6336,11 +6994,12 @@ async function boot() {
     state.hub = hub;
 
     const year = hub.league.season ?? hub.seasons?.[hub.seasons.length - 1];
-    const [season, draft, teamDetail, draftPool, ledger] = await Promise.all([
+    const [season, draft, teamDetail, draftPool, bigBoard, ledger] = await Promise.all([
       loadJson(`data/season-${year}.json`).catch(() => null),
       loadJson(`data/draft-${year}.json`).catch(() => null),
       loadJson(`data/teams-${year}.json`).catch(() => null),
       loadJson(`data/draftpool-${year}.json`).catch(() => null),
+      loadJson(`data/bigboard-${year}.json`).catch(() => null),
       // Absent on the published site by design — the ledger is never uploaded.
       loadJson('data/money.json').catch(() => null),
     ]);
@@ -6348,8 +7007,15 @@ async function boot() {
     state.draft = draft;
     state.teamDetail = teamDetail;
     state.draftPool = draftPool;
+    state.bigBoard = bigBoard;
     state.money = ledger;
     syncMyTeamNav();
+
+    if (bigBoard?.available) {
+      VIEWS = [...VIEWS, 'board'];
+      const navItem = document.querySelector('[data-nav="board"]');
+      if (navItem) navItem.hidden = false;
+    }
 
     // The mock draft needs a ranked board; without one there is nothing to
     // draft from, so the tab stays hidden rather than opening onto an error.
@@ -6701,7 +7367,7 @@ The only thing standing between "the maths is right" and "the maths runs" — th
 
 ### `tests/analytics.test.mjs`
 
-*652 lines*
+*788 lines*
 
 ```javascript
 /**
@@ -6728,6 +7394,7 @@ import {
 } from '../scripts/lib/analytics.mjs';
 import { computeLedger } from '../scripts/lib/money.mjs';
 import { recommendLineup, coachingReport, waiverTargets } from '../scripts/lib/advisor.mjs';
+import { buildBigBoard, computeReplacementLevels } from '../scripts/lib/bigboard.mjs';
 import { normalizeSeason, PHASE } from '../scripts/lib/normalize.mjs';
 import { resolvePosition } from '../scripts/lib/constants.mjs';
 
@@ -7269,6 +7936,141 @@ describe('roster advisor', () => {
 });
 
 // ---------------------------------------------------------------------------
+describe('big board', () => {
+  /** Board with a clear talent gradient at every position. */
+  const makePool = (startingSlots, teams = 12) => {
+    const players = [];
+    let id = 1;
+    const add = (position, count, top, step) => {
+      for (let i = 0; i < count; i += 1) {
+        players.push({
+          playerId: id, name: `${position}${i + 1}`, position,
+          proTeam: 'FA', rank: id, pprRank: id, adp: id,
+          projected: top - i * step, lastSeason: null, auctionValue: null,
+          injuryStatus: null,
+        });
+        id += 1;
+      }
+    };
+    add('QB', 40, 400, 5);
+    add('RB', 60, 350, 4);
+    add('WR', 70, 340, 3);
+    add('TE', 30, 260, 5);
+    add('D/ST', 20, 140, 2);
+    add('K', 20, 150, 1);
+    return { players, startingSlots, teams, rankType: 'SUPERFLEX' };
+  };
+
+  const SUPERFLEX_SLOTS = [
+    { slotId: 0, count: 1 }, { slotId: 2, count: 2 }, { slotId: 4, count: 2 },
+    { slotId: 6, count: 1 }, { slotId: 7, count: 1 }, { slotId: 16, count: 1 },
+    { slotId: 17, count: 1 },
+  ];
+  const STANDARD_FLEX_SLOTS = [
+    { slotId: 0, count: 1 }, { slotId: 2, count: 2 }, { slotId: 4, count: 2 },
+    { slotId: 6, count: 1 }, { slotId: 23, count: 1 }, { slotId: 16, count: 1 },
+    { slotId: 17, count: 1 },
+  ];
+
+  test('superflex pushes QB replacement level to QB24, not QB12', () => {
+    // This is the whole reason replacement level is derived rather than
+    // hardcoded. With an OP slot, quarterbacks absorb all 12 flex spots.
+    const pool = makePool(SUPERFLEX_SLOTS);
+    const { startersNeeded } = computeReplacementLevels(pool.players, SUPERFLEX_SLOTS, 12);
+    assert.equal(startersNeeded.QB, 24, '12 QB slots + 12 OP slots all taken by QBs');
+    assert.equal(startersNeeded.TE, 12);
+  });
+
+  test('a standard FLEX league keeps QB replacement at QB12', () => {
+    const pool = makePool(STANDARD_FLEX_SLOTS);
+    const { startersNeeded } = computeReplacementLevels(pool.players, STANDARD_FLEX_SLOTS, 12);
+    assert.equal(startersNeeded.QB, 12, 'a RB/WR/TE flex must never take a QB');
+    // The flex goes to whichever of RB/WR/TE is best; totals must still add up.
+    assert.equal(startersNeeded.RB + startersNeeded.WR + startersNeeded.TE, 24 + 24 + 12 + 12);
+  });
+
+  test('VORP is measured against the same-position replacement', () => {
+    const pool = makePool(SUPERFLEX_SLOTS);
+    const board = buildBigBoard(pool, null, 250);
+    const qb1 = board.players.find((p) => p.name === 'QB1');
+    // QB24 is replacement: 400 - 23*5 = 285. QB1 projects 400. VORP = 115.
+    assert.equal(qb1.replacement, 285);
+    assert.equal(qb1.vorp, 115);
+  });
+
+  test('a 260-point TE outranks a 300-point QB when replacement says so', () => {
+    // The point of VORP: raw projections are not comparable across positions.
+    const pool = makePool(SUPERFLEX_SLOTS);
+    const board = buildBigBoard(pool, null, 250);
+    const te1 = board.players.find((p) => p.name === 'TE1'); // 260 proj
+    const qb20 = board.players.find((p) => p.name === 'QB20'); // 305 proj
+    assert.ok(te1.projected < qb20.projected, 'the TE really does project lower');
+    assert.ok(te1.vorp > qb20.vorp, 'but is worth more above replacement');
+    assert.ok(te1.valueRank < qb20.valueRank, 'so it must rank higher');
+  });
+
+  test('tiers are per position and produce usable groups, not tiers of one', () => {
+    const pool = makePool(SUPERFLEX_SLOTS);
+    const board = buildBigBoard(pool, null, 250);
+    for (const position of ['QB', 'RB', 'WR']) {
+      const group = board.players.filter((p) => p.position === position);
+      const tiers = new Set(group.map((p) => p.tier));
+      assert.ok(tiers.size >= 2, `${position} should have multiple tiers`);
+      assert.ok(tiers.size <= 6, `${position} should not exceed the tier cap`);
+      assert.equal(Math.min(...tiers), 1, `${position} tiers start at 1`);
+    }
+  });
+
+  test('the grade curve stays sane rather than piling up at the extremes', () => {
+    // The regression this guards: fixed ±40 thresholds applied to a 250-player
+    // board put 54% of players at A+ or F.
+    const pool = makePool(SUPERFLEX_SLOTS);
+    const board = buildBigBoard(pool, null, 250);
+    const extremes = board.players.filter((p) => p.grade === 'A+' || p.grade === 'F').length;
+    assert.ok(
+      extremes / board.players.length < 0.25,
+      `expected under 25% at the extremes, got ${extremes}/${board.players.length}`
+    );
+    assert.ok(board.players.every((p) => p.grade !== null));
+  });
+
+  test('kickers and defences are flagged as streamable', () => {
+    const pool = makePool(SUPERFLEX_SLOTS);
+    const board = buildBigBoard(pool, null, 250);
+    assert.equal(board.players.find((p) => p.position === 'K').streamable, true);
+    assert.equal(board.players.find((p) => p.position === 'RB').streamable, false);
+    assert.equal(board.positionValue.find((p) => p.position === 'K').streamable, true);
+  });
+
+  test('draft picks attach to players once the draft has happened', () => {
+    const pool = makePool(SUPERFLEX_SLOTS);
+    const target = pool.players[0];
+    const draft = {
+      held: true,
+      picks: [{ playerId: target.playerId, overall: 3, round: 1, teamId: 7, teamName: 'Some Team', managerName: 'Sam' }],
+    };
+    const board = buildBigBoard(pool, draft, 250);
+    const drafted = board.players.find((p) => p.playerId === target.playerId);
+    assert.equal(drafted.drafted, true);
+    assert.equal(drafted.pick.overall, 3);
+    assert.equal(drafted.pick.teamName, 'Some Team');
+    assert.equal(board.players.filter((p) => p.drafted).length, 1);
+  });
+
+  test('an empty pool returns unavailable rather than throwing', () => {
+    const board = buildBigBoard({ players: [], startingSlots: SUPERFLEX_SLOTS, teams: 12 }, null, 250);
+    assert.equal(board.available, false);
+    assert.deepEqual(board.players, []);
+  });
+
+  test('honours the publish limit', () => {
+    const pool = makePool(SUPERFLEX_SLOTS);
+    assert.equal(buildBigBoard(pool, null, 50).players.length, 50);
+    assert.equal(buildBigBoard(pool, null, 250).players.length, 240); // pool has 240
+  });
+});
+
+// ---------------------------------------------------------------------------
 describe('position resolution', () => {
   test('uses defaultPositionId, not lineupSlotId', () => {
     // defaultPositionId 3 is WR. On the lineup-slot scale, 3 means RB/WR.
@@ -7512,4 +8314,4 @@ jobs:
 
 ---
 
-*26 files, 7,296 lines.*
+*27 files, 8,091 lines.*

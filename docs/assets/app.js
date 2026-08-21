@@ -18,10 +18,10 @@ import { createMockDraft, advanceToUser, makePick, gradeDraft, rosterNeeds } fro
  *     than advertising that something is being withheld.
  */
 
-const ALL_VIEWS = ['overview', 'standings', 'teams', 'team', 'draft', 'mock', 'trades', 'prizes', 'money'];
-let VIEWS = ALL_VIEWS.filter((v) => v !== 'money' && v !== 'mock');
+const ALL_VIEWS = ['overview', 'standings', 'teams', 'team', 'draft', 'board', 'mock', 'trades', 'prizes', 'money'];
+let VIEWS = ALL_VIEWS.filter((v) => v !== 'money' && v !== 'mock' && v !== 'board');
 
-const state = { hub: null, season: null, draft: null, money: null, teamDetail: null, draftPool: null };
+const state = { hub: null, season: null, draft: null, money: null, teamDetail: null, draftPool: null, bigBoard: null };
 let countdownTimer = null;
 
 /** Which team the visitor has claimed as theirs, remembered across visits. */
@@ -758,6 +758,288 @@ function syncMyTeamNav() {
   if (link && id !== null) link.href = `#team/${id}`;
 }
 
+// --- Big board -------------------------------------------------------------
+
+const boardState = { position: 'ALL', sort: 'valueRank', dir: 'asc', search: '', hideDrafted: false };
+
+const GRADE_ORDER = ['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'C-', 'D', 'F'];
+
+/** Colour reinforces the grade; the letter always carries it. */
+function gradePill(grade) {
+  if (!grade) return '<span class="pill pill--neutral">—</span>';
+  const i = GRADE_ORDER.indexOf(grade);
+  const cls = i <= 2 ? 'pill--good' : i <= 5 ? 'pill--accent' : i <= 7 ? 'pill--neutral' : 'pill--bad';
+  return `<span class="pill ${cls}">${esc(grade)}</span>`;
+}
+
+function sortBoard(players) {
+  const { sort, dir } = boardState;
+  const mult = dir === 'asc' ? 1 : -1;
+  return [...players].sort((a, b) => {
+    let av;
+    let bv;
+    if (sort === 'grade') {
+      av = GRADE_ORDER.indexOf(a.grade);
+      bv = GRADE_ORDER.indexOf(b.grade);
+    } else if (sort === 'name') {
+      return mult * a.name.localeCompare(b.name);
+    } else {
+      av = a[sort];
+      bv = b[sort];
+    }
+    // Missing values sort last regardless of direction.
+    if (av === null || av === undefined) return 1;
+    if (bv === null || bv === undefined) return -1;
+    return mult * (av - bv);
+  });
+}
+
+function renderBoard() {
+  const body = $('#board-body');
+  const board = state.bigBoard;
+
+  if (!board?.available) {
+    body.innerHTML = emptyState(
+      '📖',
+      'Board not available',
+      'Run npm run fetch to pull the ranked player pool from ESPN, then npm run build.'
+    );
+    return;
+  }
+
+  const parts = [];
+
+  // --- The headline insight ---------------------------------------------
+  const qb = board.positionValue.find((p) => p.position === 'QB');
+  if (qb && qb.avgValueDelta > 15) {
+    parts.push(`
+      <section class="hero" style="margin-bottom:1.25rem">
+        <p class="hero__eyebrow">The superflex edge</p>
+        <h2>Quarterbacks are worth ${esc(qb.avgValueDelta)} draft places more than the market thinks</h2>
+        <p class="hero__sub">
+          Average draft position is collected across mostly-standard leagues, where only one
+          QB starts. This league starts two, so all ${esc(board.startersNeeded.QB ?? 24)} startable
+          quarterbacks have real value — and ADP hasn't caught up. That gap is the biggest
+          single edge available to you on draft day.
+        </p>
+      </section>`);
+  }
+
+  // --- Positional value + scarcity --------------------------------------
+  parts.push(`
+    <div class="grid" style="margin-bottom:1.25rem">
+      <div class="card">
+        <h3>Where the value is</h3>
+        <p class="stat__note">
+          Average places of value by position. Positive means the market drafts them later
+          than they're worth.
+        </p>
+        <div class="table-scroll" style="margin-top:0.6rem">
+          <table>
+            <caption>Positional value bias</caption>
+            <thead><tr>
+              <th scope="col">Pos</th><th scope="col" class="num">Value gap</th>
+              <th scope="col" class="num">Starters</th><th scope="col"></th>
+            </tr></thead>
+            <tbody>
+              ${board.positionValue
+                .map(
+                  (p) => `<tr>
+                    <th scope="row">${esc(p.position)}</th>
+                    <td class="num">${deltaPill(p.avgValueDelta, 0)}</td>
+                    <td class="num">${esc(board.startersNeeded[p.position] ?? '—')}</td>
+                    <td>${p.streamable ? '<span class="pill pill--warn">Streamable</span>' : ''}</td>
+                  </tr>`
+                )
+                .join('')}
+            </tbody>
+          </table>
+        </div>
+        <p class="stat__note" style="margin-top:0.6rem">
+          <strong>Streamable</strong> positions overstate their case here. VORP counts 26 points
+          above replacement the same wherever it comes from, but kickers and defences are
+          replaceable off waivers most weeks — so that edge doesn't need a draft pick. The model
+          can't measure week-to-week volatility, so this is flagged rather than silently corrected.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>Positional scarcity</h3>
+        <p class="stat__note">
+          How far the best player at each position sits above the last one you'd start.
+          A big gap means paying up is worth it.
+        </p>
+        <div class="table-scroll" style="margin-top:0.6rem">
+          <table>
+            <caption>Elite advantage over the last startable player</caption>
+            <thead><tr>
+              <th scope="col">Pos</th><th scope="col" class="bar-cell">Elite advantage</th>
+              <th scope="col" class="num">Replacement</th>
+            </tr></thead>
+            <tbody>
+              ${board.scarcity
+                .map(
+                  (s) => `<tr>
+                    <th scope="row">${esc(s.position)}</th>
+                    <td class="bar-cell">${bar(s.eliteAdvantage ?? 0, board.scarcity[0].eliteAdvantage || 1, { digits: 0, suffix: ' pts' })}</td>
+                    <td class="num">${num(s.replacement, 0)}</td>
+                  </tr>`
+                )
+                .join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>`);
+
+  // --- Controls ----------------------------------------------------------
+  const positions = ['ALL', ...POSITIONS_ORDER];
+  parts.push(`
+    <div style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:flex-end;margin-bottom:0.85rem">
+      <div>
+        <label for="board-search" class="stat__label">Search</label>
+        <input type="search" id="board-search" value="${esc(boardState.search)}"
+          placeholder="Player name…"
+          style="font:inherit;padding:0.45rem 0.7rem;border-radius:var(--radius-sm);
+                 border:1px solid var(--border);background:var(--bg-sunken);color:var(--text);min-width:12rem">
+      </div>
+      <div role="group" aria-label="Filter by position" style="display:flex;flex-wrap:wrap;gap:0.25rem">
+        ${positions
+          .map(
+            (pos) => `<button type="button" class="theme-toggle board-pos" data-pos="${esc(pos)}"
+              aria-pressed="${boardState.position === pos}">${esc(pos)}</button>`
+          )
+          .join('')}
+      </div>
+      ${
+        board.draftHeld
+          ? `<button type="button" class="theme-toggle" id="board-hide-drafted"
+              aria-pressed="${boardState.hideDrafted}">
+              ${boardState.hideDrafted ? 'Showing available only' : 'Show available only'}
+            </button>`
+          : ''
+      }
+    </div>`);
+
+  // --- The board ---------------------------------------------------------
+  let rows = board.players;
+  if (boardState.position !== 'ALL') rows = rows.filter((p) => p.position === boardState.position);
+  if (boardState.search) {
+    const q = boardState.search.toLowerCase();
+    rows = rows.filter((p) => p.name.toLowerCase().includes(q) || p.proTeam.toLowerCase().includes(q));
+  }
+  if (boardState.hideDrafted) rows = rows.filter((p) => !p.drafted);
+  rows = sortBoard(rows);
+
+  const maxVorp = Math.max(...board.players.map((p) => p.vorp ?? 0), 1);
+
+  const sortable = (key, label, hint) => {
+    const active = boardState.sort === key;
+    const arrow = active ? (boardState.dir === 'asc' ? ' ▲' : ' ▼') : '';
+    return `<th scope="col" class="num" aria-sort="${active ? (boardState.dir === 'asc' ? 'ascending' : 'descending') : 'none'}">
+      <button type="button" class="board-sort" data-key="${esc(key)}"
+        style="background:none;border:0;color:inherit;font:inherit;cursor:pointer;padding:0;text-transform:inherit;letter-spacing:inherit"
+        ${hint ? `title="${esc(hint)}"` : ''}>${esc(label)}${arrow}</button></th>`;
+  };
+
+  parts.push(`
+    <div class="table-scroll">
+      <table>
+        <caption>
+          ${esc(rows.length)} of ${esc(board.players.length)} players ·
+          ranked by value over replacement, not by ESPN's published order
+          ${board.draftHeld ? '· draft results attached' : ''}
+        </caption>
+        <thead>
+          <tr>
+            ${sortable('valueRank', '#', 'Rank by value over replacement')}
+            <th scope="col">Player</th>
+            <th scope="col">Pos</th>
+            <th scope="col" class="num">Tier</th>
+            ${sortable('projected', 'Proj', 'ESPN season projection')}
+            ${sortable('vorp', 'VORP', 'Points above the worst starter at this position')}
+            ${sortable('adp', 'ADP', 'Average draft position across ESPN leagues')}
+            ${sortable('grade', 'Grade', 'Value versus what the player costs to draft')}
+            <th scope="col">${board.draftHeld ? 'Drafted by' : 'Status'}</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows
+            .slice(0, 250)
+            .map(
+              (p) => `<tr>
+                <td class="num rank">${esc(p.valueRank)}</td>
+                <th scope="row" class="row-team">
+                  ${esc(p.name)}<small>${esc(p.proTeam)}${
+                    p.injuryStatus && !['ACTIVE', 'NORMAL'].includes(p.injuryStatus)
+                      ? ` · ${esc(p.injuryStatus)}`
+                      : ''
+                  }</small>
+                </th>
+                <td>${esc(p.position)}${esc(p.positionRank)}</td>
+                <td class="num">${esc(p.tier)}</td>
+                <td class="num">${num(p.projected, 0)}</td>
+                <td class="bar-cell">${bar(p.vorp ?? 0, maxVorp, { digits: 0 })}</td>
+                <td class="num">${p.adp === null ? '—' : num(p.adp, 1)}</td>
+                <td>${gradePill(p.grade)}${p.streamable ? ' <span class="pill pill--warn">Str</span>' : ''}</td>
+                <td>${
+                  p.drafted
+                    ? `<small>${esc(p.pick.teamName)}<br>pick ${esc(p.pick.overall)} (R${esc(p.pick.round)})</small>`
+                    : board.draftHeld
+                      ? '<span class="pill pill--good">Available</span>'
+                      : '<span class="pill pill--neutral">Undrafted</span>'
+                }</td>
+              </tr>`
+            )
+            .join('')}
+        </tbody>
+      </table>
+    </div>`);
+
+  if (!rows.length) {
+    parts.push(emptyState('🔍', 'No players match', 'Try clearing the search or position filter.'));
+  }
+
+  body.innerHTML = parts.join('');
+
+  // --- Wiring ------------------------------------------------------------
+  for (const btn of body.querySelectorAll('.board-pos')) {
+    btn.addEventListener('click', () => {
+      boardState.position = btn.dataset.pos;
+      renderBoard();
+    });
+  }
+  for (const btn of body.querySelectorAll('.board-sort')) {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.key;
+      if (boardState.sort === key) {
+        boardState.dir = boardState.dir === 'asc' ? 'desc' : 'asc';
+      } else {
+        boardState.sort = key;
+        // Rank-like columns read best ascending; magnitudes descending.
+        boardState.dir = key === 'valueRank' || key === 'adp' || key === 'grade' ? 'asc' : 'desc';
+      }
+      renderBoard();
+    });
+  }
+  $('#board-hide-drafted')?.addEventListener('click', () => {
+    boardState.hideDrafted = !boardState.hideDrafted;
+    renderBoard();
+  });
+
+  const search = $('#board-search');
+  if (search) {
+    search.addEventListener('input', () => {
+      boardState.search = search.value;
+      renderBoard();
+      // Re-rendering blows away focus; put it back where the user was typing.
+      const next = $('#board-search');
+      next.focus();
+      next.setSelectionRange(next.value.length, next.value.length);
+    });
+  }
+}
+
 // --- Mock draft ------------------------------------------------------------
 
 let mock = null;
@@ -1388,6 +1670,7 @@ const RENDERERS = {
   teams: renderTeams,
   team: renderTeam,
   draft: renderDraft,
+  board: renderBoard,
   mock: renderMock,
   trades: renderTrades,
   prizes: renderPrizes,
@@ -1480,11 +1763,12 @@ async function boot() {
     state.hub = hub;
 
     const year = hub.league.season ?? hub.seasons?.[hub.seasons.length - 1];
-    const [season, draft, teamDetail, draftPool, ledger] = await Promise.all([
+    const [season, draft, teamDetail, draftPool, bigBoard, ledger] = await Promise.all([
       loadJson(`data/season-${year}.json`).catch(() => null),
       loadJson(`data/draft-${year}.json`).catch(() => null),
       loadJson(`data/teams-${year}.json`).catch(() => null),
       loadJson(`data/draftpool-${year}.json`).catch(() => null),
+      loadJson(`data/bigboard-${year}.json`).catch(() => null),
       // Absent on the published site by design — the ledger is never uploaded.
       loadJson('data/money.json').catch(() => null),
     ]);
@@ -1492,8 +1776,15 @@ async function boot() {
     state.draft = draft;
     state.teamDetail = teamDetail;
     state.draftPool = draftPool;
+    state.bigBoard = bigBoard;
     state.money = ledger;
     syncMyTeamNav();
+
+    if (bigBoard?.available) {
+      VIEWS = [...VIEWS, 'board'];
+      const navItem = document.querySelector('[data-nav="board"]');
+      if (navItem) navItem.hidden = false;
+    }
 
     // The mock draft needs a ranked board; without one there is nothing to
     // draft from, so the tab stays hidden rather than opening onto an error.

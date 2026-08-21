@@ -27,6 +27,7 @@ import {
 import { analyzeDraft } from './lib/draft.mjs';
 import { computeLedger } from './lib/money.mjs';
 import { recommendLineup, coachingReport, waiverTargets } from './lib/advisor.mjs';
+import { buildBigBoard } from './lib/bigboard.mjs';
 
 const ROOT = projectRoot();
 const args = process.argv.slice(2);
@@ -358,7 +359,7 @@ async function main() {
     // Draft board for the mock draft, ranked for this league's format.
     const pool = buildDraftPool(b.raw);
     if (pool.players.length) {
-      await writeJson(path.join(DERIVED, `draftpool-${b.year}.json`), {
+      const poolPayload = {
         year: b.year,
         rankType: pool.rankType,
         rounds: b.season.draft.rounds || 16,
@@ -366,6 +367,16 @@ async function main() {
         startingSlots: b.season.league.startingSlots,
         benchSlots: b.season.league.benchSlots,
         players: pool.players,
+      };
+      await writeJson(path.join(DERIVED, `draftpool-${b.year}.json`), poolPayload);
+
+      // The big board: same players, graded against replacement level and
+      // annotated with who drafted them once the draft has happened.
+      const board = buildBigBoard(poolPayload, b.draft, 250);
+      await writeJson(path.join(DERIVED, `bigboard-${b.year}.json`), {
+        year: b.year,
+        draftHeld: b.draft.held,
+        ...board,
       });
     }
 

@@ -569,6 +569,49 @@ await writeJson(path.join(OUT, 'freeagents.json'), {
     })),
 });
 
+// ---------------------------------------------------------------------------
+// Draft pool, in kona_player_info shape, so the big board builds end to end
+// ---------------------------------------------------------------------------
+
+// Ranked by talent, with ADP deliberately offset from true value so the value
+// grades have something real to find — a board where cost already equals value
+// would grade every player B- and prove nothing.
+const poolRanked = [...players].sort((a, b) => b._talent * b._multiplier - a._talent * a._multiplier);
+
+await writeJson(path.join(OUT, 'draftpool.json'), {
+  rankType: 'SUPERFLEX',
+  players: poolRanked.slice(0, 400).map((p, i) => {
+    const seasonProjection = round2(p._talent * p._multiplier * REGULAR_WEEKS);
+    // Push QBs later in ADP than their value warrants, mirroring how real ADP
+    // is collected from mostly-standard leagues.
+    const adpBias = p._pos === 'QB' ? 45 : p._pos === 'K' || p._pos === 'D/ST' ? 60 : -8;
+    return {
+      id: p.id,
+      onTeamId: 0,
+      player: {
+        id: p.id,
+        fullName: p.fullName,
+        defaultPositionId: p.defaultPositionId,
+        proTeamId: p.proTeamId,
+        eligibleSlots: p.eligibleSlots,
+        injuryStatus: p.injuryStatus,
+        draftRanksByRankType: {
+          SUPERFLEX: { rank: i + 1, auctionValue: Math.max(1, Math.round(60 - i * 0.3)) },
+          PPR: { rank: i + 1, auctionValue: Math.max(1, Math.round(60 - i * 0.3)) },
+        },
+        ownership: {
+          averageDraftPosition: Math.max(1, round2(i + 1 + adpBias + gaussian(0, 6))),
+          percentOwned: round2(Math.max(0, 100 - i * 0.4)),
+        },
+        stats: [
+          { seasonId: 2026, scoringPeriodId: 0, statSourceId: 1, statSplitTypeId: 0, appliedTotal: seasonProjection },
+          { seasonId: 2025, scoringPeriodId: 0, statSourceId: 0, statSplitTypeId: 0, appliedTotal: round2(seasonProjection * (0.8 + rand() * 0.4)) },
+        ],
+      },
+    };
+  }),
+});
+
 await writeJson(path.join(OUT, 'meta.json'), {
   season: 2026,
   fetchedAt: new Date().toISOString(),

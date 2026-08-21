@@ -34,6 +34,7 @@
           <li><a href="#teams" data-view="teams">Teams</a></li>
           <li data-nav="myteam" hidden><a href="#team" data-view="team">My Team</a></li>
           <li><a href="#draft" data-view="draft">Draft</a></li>
+          <li data-nav="board" hidden><a href="#board" data-view="board">Big Board</a></li>
           <li data-nav="mock" hidden><a href="#mock" data-view="mock">Mock Draft</a></li>
           <li><a href="#trades" data-view="trades">Trades</a></li>
           <li><a href="#prizes" data-view="prizes">Prizes</a></li>
@@ -84,6 +85,17 @@
           outperformed the cost of the pick.
         </p>
         <div id="draft-body"></div>
+      </section>
+
+      <section class="view" id="view-board" hidden aria-labelledby="h-board">
+        <h2 id="h-board">Big Board</h2>
+        <p class="view__intro">
+          The top 250 players, graded against <strong>replacement level</strong> — the worst
+          player at each position you'd still start in this league. Raw projections can't be
+          compared across positions; 300 points is elite for a tight end and ordinary for a
+          quarterback. Every number below is derived from your actual format.
+        </p>
+        <div id="board-body"></div>
       </section>
 
       <section class="view" id="view-mock" hidden aria-labelledby="h-mock">

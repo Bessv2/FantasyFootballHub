@@ -22,6 +22,7 @@ import {
 } from '../scripts/lib/analytics.mjs';
 import { computeLedger } from '../scripts/lib/money.mjs';
 import { recommendLineup, coachingReport, waiverTargets } from '../scripts/lib/advisor.mjs';
+import { buildBigBoard, computeReplacementLevels } from '../scripts/lib/bigboard.mjs';
 import { normalizeSeason, PHASE } from '../scripts/lib/normalize.mjs';
 import { resolvePosition } from '../scripts/lib/constants.mjs';
 
@@ -559,6 +560,141 @@ describe('roster advisor', () => {
     );
     assert.equal(result.injuryGaps.length, 1);
     assert.equal(result.injuryGaps[0].name, 'Hurt QB');
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('big board', () => {
+  /** Board with a clear talent gradient at every position. */
+  const makePool = (startingSlots, teams = 12) => {
+    const players = [];
+    let id = 1;
+    const add = (position, count, top, step) => {
+      for (let i = 0; i < count; i += 1) {
+        players.push({
+          playerId: id, name: `${position}${i + 1}`, position,
+          proTeam: 'FA', rank: id, pprRank: id, adp: id,
+          projected: top - i * step, lastSeason: null, auctionValue: null,
+          injuryStatus: null,
+        });
+        id += 1;
+      }
+    };
+    add('QB', 40, 400, 5);
+    add('RB', 60, 350, 4);
+    add('WR', 70, 340, 3);
+    add('TE', 30, 260, 5);
+    add('D/ST', 20, 140, 2);
+    add('K', 20, 150, 1);
+    return { players, startingSlots, teams, rankType: 'SUPERFLEX' };
+  };
+
+  const SUPERFLEX_SLOTS = [
+    { slotId: 0, count: 1 }, { slotId: 2, count: 2 }, { slotId: 4, count: 2 },
+    { slotId: 6, count: 1 }, { slotId: 7, count: 1 }, { slotId: 16, count: 1 },
+    { slotId: 17, count: 1 },
+  ];
+  const STANDARD_FLEX_SLOTS = [
+    { slotId: 0, count: 1 }, { slotId: 2, count: 2 }, { slotId: 4, count: 2 },
+    { slotId: 6, count: 1 }, { slotId: 23, count: 1 }, { slotId: 16, count: 1 },
+    { slotId: 17, count: 1 },
+  ];
+
+  test('superflex pushes QB replacement level to QB24, not QB12', () => {
+    // This is the whole reason replacement level is derived rather than
+    // hardcoded. With an OP slot, quarterbacks absorb all 12 flex spots.
+    const pool = makePool(SUPERFLEX_SLOTS);
+    const { startersNeeded } = computeReplacementLevels(pool.players, SUPERFLEX_SLOTS, 12);
+    assert.equal(startersNeeded.QB, 24, '12 QB slots + 12 OP slots all taken by QBs');
+    assert.equal(startersNeeded.TE, 12);
+  });
+
+  test('a standard FLEX league keeps QB replacement at QB12', () => {
+    const pool = makePool(STANDARD_FLEX_SLOTS);
+    const { startersNeeded } = computeReplacementLevels(pool.players, STANDARD_FLEX_SLOTS, 12);
+    assert.equal(startersNeeded.QB, 12, 'a RB/WR/TE flex must never take a QB');
+    // The flex goes to whichever of RB/WR/TE is best; totals must still add up.
+    assert.equal(startersNeeded.RB + startersNeeded.WR + startersNeeded.TE, 24 + 24 + 12 + 12);
+  });
+
+  test('VORP is measured against the same-position replacement', () => {
+    const pool = makePool(SUPERFLEX_SLOTS);
+    const board = buildBigBoard(pool, null, 250);
+    const qb1 = board.players.find((p) => p.name === 'QB1');
+    // QB24 is replacement: 400 - 23*5 = 285. QB1 projects 400. VORP = 115.
+    assert.equal(qb1.replacement, 285);
+    assert.equal(qb1.vorp, 115);
+  });
+
+  test('a 260-point TE outranks a 300-point QB when replacement says so', () => {
+    // The point of VORP: raw projections are not comparable across positions.
+    const pool = makePool(SUPERFLEX_SLOTS);
+    const board = buildBigBoard(pool, null, 250);
+    const te1 = board.players.find((p) => p.name === 'TE1'); // 260 proj
+    const qb20 = board.players.find((p) => p.name === 'QB20'); // 305 proj
+    assert.ok(te1.projected < qb20.projected, 'the TE really does project lower');
+    assert.ok(te1.vorp > qb20.vorp, 'but is worth more above replacement');
+    assert.ok(te1.valueRank < qb20.valueRank, 'so it must rank higher');
+  });
+
+  test('tiers are per position and produce usable groups, not tiers of one', () => {
+    const pool = makePool(SUPERFLEX_SLOTS);
+    const board = buildBigBoard(pool, null, 250);
+    for (const position of ['QB', 'RB', 'WR']) {
+      const group = board.players.filter((p) => p.position === position);
+      const tiers = new Set(group.map((p) => p.tier));
+      assert.ok(tiers.size >= 2, `${position} should have multiple tiers`);
+      assert.ok(tiers.size <= 6, `${position} should not exceed the tier cap`);
+      assert.equal(Math.min(...tiers), 1, `${position} tiers start at 1`);
+    }
+  });
+
+  test('the grade curve stays sane rather than piling up at the extremes', () => {
+    // The regression this guards: fixed ±40 thresholds applied to a 250-player
+    // board put 54% of players at A+ or F.
+    const pool = makePool(SUPERFLEX_SLOTS);
+    const board = buildBigBoard(pool, null, 250);
+    const extremes = board.players.filter((p) => p.grade === 'A+' || p.grade === 'F').length;
+    assert.ok(
+      extremes / board.players.length < 0.25,
+      `expected under 25% at the extremes, got ${extremes}/${board.players.length}`
+    );
+    assert.ok(board.players.every((p) => p.grade !== null));
+  });
+
+  test('kickers and defences are flagged as streamable', () => {
+    const pool = makePool(SUPERFLEX_SLOTS);
+    const board = buildBigBoard(pool, null, 250);
+    assert.equal(board.players.find((p) => p.position === 'K').streamable, true);
+    assert.equal(board.players.find((p) => p.position === 'RB').streamable, false);
+    assert.equal(board.positionValue.find((p) => p.position === 'K').streamable, true);
+  });
+
+  test('draft picks attach to players once the draft has happened', () => {
+    const pool = makePool(SUPERFLEX_SLOTS);
+    const target = pool.players[0];
+    const draft = {
+      held: true,
+      picks: [{ playerId: target.playerId, overall: 3, round: 1, teamId: 7, teamName: 'Some Team', managerName: 'Sam' }],
+    };
+    const board = buildBigBoard(pool, draft, 250);
+    const drafted = board.players.find((p) => p.playerId === target.playerId);
+    assert.equal(drafted.drafted, true);
+    assert.equal(drafted.pick.overall, 3);
+    assert.equal(drafted.pick.teamName, 'Some Team');
+    assert.equal(board.players.filter((p) => p.drafted).length, 1);
+  });
+
+  test('an empty pool returns unavailable rather than throwing', () => {
+    const board = buildBigBoard({ players: [], startingSlots: SUPERFLEX_SLOTS, teams: 12 }, null, 250);
+    assert.equal(board.available, false);
+    assert.deepEqual(board.players, []);
+  });
+
+  test('honours the publish limit', () => {
+    const pool = makePool(SUPERFLEX_SLOTS);
+    assert.equal(buildBigBoard(pool, null, 50).players.length, 50);
+    assert.equal(buildBigBoard(pool, null, 250).players.length, 240); // pool has 240
   });
 });
 

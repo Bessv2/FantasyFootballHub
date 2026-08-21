@@ -196,6 +196,31 @@ zero, and every warm body clears it.
 quarterback scores nothing on a Sunday; a grade that rewarded roster hoarding
 would teach the wrong lesson.
 
+**Big board replacement level is derived, not hardcoded** — see
+`computeReplacementLevels()`. It greedily fills all twelve starting lineups and
+reads off the worst starter per position. Hardcoding "QB12" would misprice every
+quarterback in this league, where the OP slot pushes QB replacement to **QB24**.
+Two tests pin this: superflex → 24, standard flex → 12.
+
+**Big board tiers are per position, not global.** Two failed attempts got here.
+Tiering the whole board by absolute VORP gap puts every break in the top ten —
+elite gaps are enormous, mid-board gaps are fractions of a point — leaving 240
+of 250 players in one bucket. And a global tier answers a question `valueRank`
+already answers. Per-position tiers answer the one drafters actually have: how
+far does it fall if I miss this group?
+
+**Big board grades are banded in standard deviations, not fixed thresholds.**
+Fixed ±40 place bands were calibrated on a short board; across 250 players,
+where deltas routinely exceed 100, they put 54% of the league at A+ or F. A
+delta of zero still lands at B-, so the absolute anchor survives.
+
+**K and D/ST are flagged `streamable` rather than corrected.** VORP genuinely
+rates them well — a kicker 26 points above replacement beats the 150th wide
+receiver. But they are replaceable off waivers most weeks, so that edge does not
+need a draft pick. Week-to-week volatility is not in ESPN's payload, so the
+model cannot measure it. Inventing a positional fudge factor would have been
+dishonest; the flag says what is known and what is not.
+
 **The countdown is `aria-hidden` with a static sentence behind it.** A value
 announced every second is unusable with a screen reader.
 

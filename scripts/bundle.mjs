@@ -40,6 +40,7 @@ const SECTIONS = [
       'scripts/lib/analytics.mjs',
       'scripts/lib/draft.mjs',
       'scripts/lib/advisor.mjs',
+      'scripts/lib/bigboard.mjs',
       'scripts/lib/money.mjs',
     ],
   },
