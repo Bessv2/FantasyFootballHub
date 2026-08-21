@@ -2,8 +2,9 @@
 
 Every source file in one place, for reading or for handing to a fresh session.
 
-- **Commit:** `c028770` (2026-08-20 20:48:05 -0400)
-- **Generated:** 2026-08-21T00:48:18.020Z
+- **Commit:** `78af8ad` (2026-08-20 20:48:18 -0400)
+- **Generated:** 2026-08-21T00:55:30.480Z
+- **WARNING:** the working tree had uncommitted changes when this was generated, so this may not match any commit.
 - **Regenerate with:** `npm run bundle`
 
 **Read [HANDOFF.md](HANDOFF.md) first.** It carries the ESPN API gotchas,
@@ -70,35 +71,50 @@ League identity, money rules, and the credentials template. Real credentials liv
 
 ### `config/money.json`
 
-*43 lines*
+*58 lines*
 
 ```json
 {
   "_readme": [
     "The money ledger. ESPN knows nothing about this — it is entirely yours.",
     "",
-    "Everything here is editable in the app itself (Money tab -> Edit), which",
-    "writes a corrected copy you can paste back over this file. You can also",
-    "just edit it by hand.",
+    "PRIVACY: this file is committed, but the LEDGER IT GENERATES is not.",
+    "docs/data/money.json is gitignored, so the Money tab shows locally via",
+    "`npm run serve` and never reaches the public site.",
     "",
-    "PLACEHOLDER VALUES: buyIn is a guess. Replace it with your real number.",
-    "Payouts are percentages so they re-balance automatically if you change the",
-    "buy-in or the league size.",
+    "MEMBERS: list everyone who is in the pot, whether or not they have claimed",
+    "an ESPN team yet. People commit and pay long before they click the invite",
+    "link. Add `teamId` once you know which ESPN team is theirs, and the ledger",
+    "will pull their real team name through.",
     "",
-    "PRIVACY: if you publish the site to GitHub Pages, this file is public.",
-    "Set site.showMoney to false in league.json to keep the ledger local-only."
+    "Payouts are percentages, so changing buyIn or the member count rebalances",
+    "the amounts automatically. They must total 100."
   ],
 
   "currency": "USD",
   "buyIn": 50,
   "buyInDueDate": "2026-09-05",
 
+  "_membersNote": "10 managers, all paid in full. Names are placeholders until teams are claimed — edit them and add teamId as people join.",
+  "members": [
+    { "name": "Geordon Roe", "teamId": 1, "paid": true, "method": "Cash" },
+    { "name": "Manager 2", "paid": true, "method": "Cash" },
+    { "name": "Manager 3", "paid": true, "method": "Cash" },
+    { "name": "Manager 4", "paid": true, "method": "Cash" },
+    { "name": "Manager 5", "paid": true, "method": "Cash" },
+    { "name": "Manager 6", "paid": true, "method": "Cash" },
+    { "name": "Manager 7", "paid": true, "method": "Cash" },
+    { "name": "Manager 8", "paid": true, "method": "Cash" },
+    { "name": "Manager 9", "paid": true, "method": "Cash" },
+    { "name": "Manager 10", "paid": true, "method": "Cash" }
+  ],
+
   "payouts": {
-    "_note": "Percentages of the total pot. Must sum to 100.",
+    "_note": "Percentages of the total pot. Must sum to 100. At 10 x $50 = $500 that is $290 / $125 / $40, with $45 for side prizes.",
     "structure": [
       { "id": "first", "label": "1st Place", "pct": 58, "note": "Champion takes the largest share" },
       { "id": "second", "label": "2nd Place", "pct": 25, "note": "Runner-up" },
-      { "id": "third", "label": "3rd Place", "pct": 8, "note": "Buy-in back" },
+      { "id": "third", "label": "3rd Place", "pct": 8, "note": "Roughly the buy-in back" },
       { "id": "sidePots", "label": "Side Prizes", "pct": 9, "note": "Weekly high score and season awards" }
     ]
   },
@@ -109,7 +125,7 @@ League identity, money rules, and the credentials template. Real credentials liv
     "seasonAwards": []
   },
 
-  "_paymentsNote": "One entry per manager. Set paid=true and fill paidDate as money comes in. teamId matches the ESPN team.",
+  "_paymentsNote": "Only needed for per-team overrides once teams are claimed; `members` above covers the common case.",
   "payments": [],
 
   "_payoutsPaidNote": "Filled in at the end of the season as you pay winners out.",
@@ -2382,7 +2398,7 @@ export function waiverTargets(freeAgents, roster, startingSlots, { minGain = 2, 
 
 ### `scripts/lib/bigboard.mjs`
 
-*410 lines*
+*446 lines*
 
 ```javascript
 /**
@@ -2665,15 +2681,51 @@ export function buildBigBoard(pool, draft = null, limit = 250) {
     rounds,
   });
 
-  // Deltas first, so the grade curve can be scaled to their real spread.
   const published = rankable.slice(0, limit);
+
+  /**
+   * Grades are computed WITHIN each position, not across the board.
+   *
+   * Comparing a player's ADP to his overall value rank sounds right and is
+   * badly misleading in this format. ADP is collected from mostly-standard
+   * leagues, so in superflex every quarterback grades A+ and every receiver
+   * grades F — the grade stops saying "is this player good value" and starts
+   * saying "is this a quarterback", which the reader already knows from the
+   * position column.
+   *
+   * Ranking cost and value separately inside each position cancels that bias
+   * out by construction, so the grade answers the question actually being
+   * asked at the table: among the quarterbacks, is THIS one going later than
+   * he should? The cross-position story is still told, once, in the positional
+   * value card — which is where a league-wide effect belongs, rather than
+   * repeated across 250 rows.
+   */
+  const byPosition = new Map();
   for (const p of published) {
-    const costRank = p.adp ?? p.rank; // ADP where ESPN has one, else board rank.
-    p.valueDelta = costRank === null ? null : Math.round(costRank - p.valueRank);
+    if (!byPosition.has(p.position)) byPosition.set(p.position, []);
+    byPosition.get(p.position).push(p);
   }
-  const deltaSpread = standardDeviation(
-    published.map((p) => p.valueDelta).filter((d) => d !== null)
-  );
+
+  for (const group of byPosition.values()) {
+    // Rank within the position by what he costs...
+    const costOrder = [...group]
+      .filter((p) => (p.adp ?? p.rank) !== null)
+      .sort((a, b) => (a.adp ?? a.rank) - (b.adp ?? b.rank));
+    const costRankInPos = new Map(costOrder.map((p, i) => [p.playerId, i + 1]));
+
+    // ...and by what he is worth. `group` is already in value order.
+    group.forEach((p, i) => {
+      const cost = costRankInPos.get(p.playerId);
+      p.valueDelta = cost === undefined ? null : cost - (i + 1);
+    });
+
+    const spread = standardDeviation(
+      group.map((p) => p.valueDelta).filter((d) => d !== null)
+    );
+    for (const p of group) {
+      p.grade = p.valueDelta === null ? null : gradeFromZ(p.valueDelta / spread);
+    }
+  }
 
   const players = published
     .map((p) => {
@@ -2711,8 +2763,9 @@ export function buildBigBoard(pool, draft = null, limit = 250) {
         positionRank: p.positionRank,
         tier: p.tier,
         streamable: p.position === 'K' || p.position === 'D/ST',
+        // Both measured against others at the same position.
         valueDelta: delta,
-        grade: delta === null ? null : gradeFromZ(delta / deltaSpread),
+        grade: p.grade,
 
         drafted: Boolean(pick),
         pick: pick
@@ -2790,7 +2843,6 @@ export function buildBigBoard(pool, draft = null, limit = 250) {
     picksBySlot: Object.fromEntries(
       Array.from({ length: teamCount }, (_, i) => [i + 1, picksForSlot(i + 1, teamCount, rounds).map((p) => p.overall)])
     ),
-    gradeSpread: Math.round(deltaSpread),
     players,
   };
 }
@@ -2798,7 +2850,7 @@ export function buildBigBoard(pool, draft = null, limit = 250) {
 
 ### `scripts/lib/money.mjs`
 
-*109 lines*
+*135 lines*
 
 ```javascript
 /**
@@ -2815,29 +2867,55 @@ export function computeLedger(moneyConfig, season, standings) {
   const buyIn = Number(moneyConfig.buyIn) || 0;
   const currency = moneyConfig.currency ?? 'USD';
 
-  // Only real, claimed teams owe money.
-  const payingTeams = season.teams.filter((t) => !t.isPlaceholder);
-  const expectedTeams = payingTeams.length || season.league.size;
-
   const paymentByTeam = new Map(
     (moneyConfig.payments ?? []).map((p) => [p.teamId, p])
   );
+  const teamById = new Map(season.teams.map((t) => [t.id, t]));
 
-  const members = payingTeams.map((team) => {
-    const payment = paymentByTeam.get(team.id);
-    const amountPaid = Number(payment?.amountPaid ?? (payment?.paid ? buyIn : 0)) || 0;
+  /**
+   * Who is in the pot.
+   *
+   * Deriving this from claimed ESPN teams alone breaks whenever real life runs
+   * ahead of the league settings — people commit and pay before they click the
+   * invite link, and until they do every team but the commissioner's looks like
+   * an empty placeholder. So the roster of payers comes from `members` in
+   * config when it is present, and falls back to claimed teams otherwise.
+   * Names come from ESPN once a team is actually claimed.
+   */
+  const configured = moneyConfig.members ?? null;
+  const roster = configured
+    ? configured.map((m) => ({
+        teamId: m.teamId ?? null,
+        name: m.name,
+        team: m.teamId ? teamById.get(m.teamId) : null,
+      }))
+    : season.teams
+        .filter((t) => !t.isPlaceholder)
+        .map((t) => ({ teamId: t.id, name: t.managerName, team: t }));
+
+  const expectedTeams = roster.length || season.league.size;
+
+  const members = roster.map((entry) => {
+    const payment = entry.teamId !== null ? paymentByTeam.get(entry.teamId) : null;
+    // A configured member can carry its own paid flag, for people who have
+    // handed over money before claiming a team.
+    const source = payment ?? configured?.find((m) => m.name === entry.name) ?? null;
+    const amountPaid = Number(source?.amountPaid ?? (source?.paid ? buyIn : 0)) || 0;
+
     return {
-      teamId: team.id,
-      teamName: team.name,
-      managerName: team.managerName,
+      teamId: entry.teamId,
+      teamName: entry.team?.name ?? '—',
+      managerName: entry.team?.managerName ?? entry.name ?? '—',
       owes: buyIn,
       amountPaid: round2(amountPaid),
       balance: round2(buyIn - amountPaid),
       paid: amountPaid >= buyIn && buyIn > 0,
       partial: amountPaid > 0 && amountPaid < buyIn,
-      paidDate: payment?.paidDate ?? null,
-      method: payment?.method ?? null,
-      note: payment?.note ?? null,
+      paidDate: source?.paidDate ?? null,
+      method: source?.method ?? null,
+      note: source?.note ?? null,
+      // Paid up but hasn't joined the ESPN league yet — worth chasing.
+      awaitingTeam: entry.team == null,
     };
   });
 
@@ -2917,7 +2995,7 @@ The commands you actually run. fetch -> build -> serve, plus the automation and 
 
 ### `scripts/check.mjs`
 
-*132 lines*
+*155 lines*
 
 ```javascript
 /**
@@ -3025,6 +3103,29 @@ async function main() {
   ok(`reached ESPN — league resolves for ${anchorSeason}`);
   ok(`league name: ${anchor.settings?.name ?? '(unnamed)'}`);
   ok(`size: ${anchor.settings?.size ?? '?'} teams`);
+
+  // ---- League size vs who is actually playing ---------------------------
+  // Everything downstream keys off the ESPN league size: replacement levels,
+  // roster capacity, the snake order, the mock draft, and the recommended pick
+  // for all 250 players. If the real league has a different number of managers,
+  // all of it is quietly computed for the wrong league.
+  const moneyFile = path.join(ROOT, 'config', 'money.json');
+  if (existsSync(moneyFile)) {
+    const money = JSON.parse(await readFile(moneyFile, 'utf8'));
+    const payers = money.members?.length ?? 0;
+    const espnSize = anchor.settings?.size ?? 0;
+
+    console.log('\nLeague size');
+    if (payers && payers !== espnSize) {
+      warn(`ESPN is set to ${espnSize} teams, but config/money.json lists ${payers} managers.`);
+      warn('Change the size in ESPN (League Settings -> Basic Settings -> Number of Teams).');
+      warn('Until then the draft board, mock draft and recommended picks all assume');
+      warn(`${espnSize} teams — and the real draft would run with ${espnSize - payers} auto-drafting`);
+      warn('team(s). This is the one mismatch worth fixing before draft day.');
+    } else if (payers) {
+      ok(`ESPN size (${espnSize}) matches the ${payers} managers in the ledger`);
+    }
+  }
 
   // ESPN reports the league's own history, which beats guessing.
   const previous = anchor.status?.previousSeasons ?? [];
@@ -4720,7 +4821,7 @@ Dependency-free front end. Reads pre-computed JSON from docs/data/ and renders i
 
 ### `docs/index.html`
 
-*152 lines*
+*155 lines*
 
 ```html
 <!doctype html>
@@ -4815,10 +4916,13 @@ Dependency-free front end. Reads pre-computed JSON from docs/data/ and renders i
       <section class="view" id="view-board" hidden aria-labelledby="h-board">
         <h2 id="h-board">Big Board</h2>
         <p class="view__intro">
-          The top 250 players, graded against <strong>replacement level</strong> — the worst
-          player at each position you'd still start in this league. Raw projections can't be
-          compared across positions; 300 points is elite for a tight end and ordinary for a
-          quarterback. Every number below is derived from your actual format.
+          The top 250 players, ranked by value over <strong>replacement level</strong> — the
+          worst player at each position you'd still start in this league. Raw projections can't
+          be compared across positions; 300 points is elite for a tight end and ordinary for a
+          quarterback.
+          <strong>Grades compare a player only to others at his own position</strong>, so an A
+          means "good value for a quarterback", not "quarterbacks are good value". The
+          league-wide positional story is told once, below.
         </p>
         <div id="board-body"></div>
       </section>
@@ -5352,7 +5456,7 @@ tr.playoff-cut td, tr.playoff-cut th { border-bottom: 2px solid var(--accent); }
 
 ### `docs/assets/app.js`
 
-*1956 lines*
+*1958 lines*
 
 ```javascript
 import { createMockDraft, advanceToUser, makePick, gradeDraft, rosterNeeds } from './mock.js';
@@ -6417,10 +6521,9 @@ function renderBoard() {
             <th scope="col" class="num">Tier</th>
             ${sortable('recommendedPick', 'Take at', 'Where this player should go in a well-run draft')}
             ${sortable('adp', 'ADP', 'Average draft position across ESPN leagues')}
-            ${sortable('adpVsRecommended', 'Falls', 'How far past his recommended pick the market lets him slide')}
             ${sortable('projected', 'Proj', 'ESPN season projection')}
             ${sortable('vorp', 'VORP', 'Points above the worst starter at this position')}
-            ${sortable('grade', 'Grade', 'Value versus what the player costs to draft')}
+            ${sortable('grade', 'Grade', 'Value compared to others at the same position')}
             <th scope="col">${board.draftHeld ? 'Drafted by' : 'Status'}</th>
           </tr>
         </thead>
@@ -6445,7 +6548,6 @@ function renderBoard() {
                     : `${esc(p.recommendedPick)}<small style="color:var(--text-dim)"> R${esc(p.recommendedRound)}</small>`
                 }</td>
                 <td class="num">${p.adp === null ? '—' : num(p.adp, 1)}</td>
-                <td class="num">${p.adpVsRecommended === null ? '—' : deltaPill(p.adpVsRecommended, 0)}</td>
                 <td class="num">${num(p.projected, 0)}</td>
                 <td class="bar-cell">${bar(p.vorp ?? 0, maxVorp, { digits: 0 })}</td>
                 <td>${gradePill(p.grade)}${p.streamable ? ' <span class="pill pill--warn">Str</span>' : ''}</td>
@@ -7122,7 +7224,11 @@ function renderMoney() {
               .map(
                 (mem) => `<tr>
                   <th scope="row">${esc(mem.managerName ?? '—')}</th>
-                  <td>${esc(mem.teamName)}</td>
+                  <td>${
+                    mem.awaitingTeam
+                      ? '<span class="pill pill--warn">No ESPN team yet</span>'
+                      : esc(mem.teamName)
+                  }</td>
                   <td class="num">${esc(money(mem.amountPaid, m.currency))}</td>
                   <td class="num">${esc(money(mem.balance, m.currency))}</td>
                   <td>${
@@ -7615,7 +7721,7 @@ The only thing standing between "the maths is right" and "the maths runs" — th
 
 ### `tests/analytics.test.mjs`
 
-*861 lines*
+*895 lines*
 
 ```javascript
 /**
@@ -8042,6 +8148,40 @@ describe('money ledger', () => {
     const bad = { ...config, payouts: { structure: [{ id: 'first', label: '1st', pct: 90 }] } };
     const ledger = computeLedger(bad, season, []);
     assert.ok(ledger.warnings.some((w) => w.includes('not 100')));
+  });
+
+  test('a configured member list works before anyone claims an ESPN team', () => {
+    // Real life runs ahead of the league settings: people pay before clicking
+    // the invite link, so the ledger cannot depend on claimed teams alone.
+    const barelyStarted = {
+      league: { size: 12 },
+      teams: [
+        { id: 1, name: "Commissioner's Team", managerName: 'Geordon Roe', isPlaceholder: false },
+        ...Array.from({ length: 11 }, (_, i) => ({
+          id: i + 2, name: `Team ${i + 2}`, managerName: 'Unclaimed', isPlaceholder: true,
+        })),
+      ],
+    };
+    const tenPaid = {
+      currency: 'USD',
+      buyIn: 50,
+      payouts: { structure: [{ id: 'first', label: '1st', pct: 100 }] },
+      members: [
+        { name: 'Geordon Roe', teamId: 1, paid: true },
+        ...Array.from({ length: 9 }, (_, i) => ({ name: `Manager ${i + 2}`, paid: true })),
+      ],
+    };
+
+    const ledger = computeLedger(tenPaid, barelyStarted, []);
+    assert.equal(ledger.expectedTeams, 10, 'ten payers, not twelve ESPN slots');
+    assert.equal(ledger.expectedPot, 500);
+    assert.equal(ledger.collected, 500);
+    assert.equal(ledger.outstanding, 0);
+    assert.equal(ledger.unpaid.length, 0);
+    // The one who claimed a team gets its real name; the rest are flagged.
+    assert.equal(ledger.members[0].teamName, "Commissioner's Team");
+    assert.equal(ledger.members[0].awaitingTeam, false);
+    assert.equal(ledger.members.filter((m) => m.awaitingTeam).length, 9);
   });
 
   test('placeholder teams do not owe money', () => {
@@ -8635,4 +8775,4 @@ jobs:
 
 ---
 
-*27 files, 8,413 lines.*
+*27 files, 8,552 lines.*

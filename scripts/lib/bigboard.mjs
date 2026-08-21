@@ -278,15 +278,51 @@ export function buildBigBoard(pool, draft = null, limit = 250) {
     rounds,
   });
 
-  // Deltas first, so the grade curve can be scaled to their real spread.
   const published = rankable.slice(0, limit);
+
+  /**
+   * Grades are computed WITHIN each position, not across the board.
+   *
+   * Comparing a player's ADP to his overall value rank sounds right and is
+   * badly misleading in this format. ADP is collected from mostly-standard
+   * leagues, so in superflex every quarterback grades A+ and every receiver
+   * grades F — the grade stops saying "is this player good value" and starts
+   * saying "is this a quarterback", which the reader already knows from the
+   * position column.
+   *
+   * Ranking cost and value separately inside each position cancels that bias
+   * out by construction, so the grade answers the question actually being
+   * asked at the table: among the quarterbacks, is THIS one going later than
+   * he should? The cross-position story is still told, once, in the positional
+   * value card — which is where a league-wide effect belongs, rather than
+   * repeated across 250 rows.
+   */
+  const byPosition = new Map();
   for (const p of published) {
-    const costRank = p.adp ?? p.rank; // ADP where ESPN has one, else board rank.
-    p.valueDelta = costRank === null ? null : Math.round(costRank - p.valueRank);
+    if (!byPosition.has(p.position)) byPosition.set(p.position, []);
+    byPosition.get(p.position).push(p);
   }
-  const deltaSpread = standardDeviation(
-    published.map((p) => p.valueDelta).filter((d) => d !== null)
-  );
+
+  for (const group of byPosition.values()) {
+    // Rank within the position by what he costs...
+    const costOrder = [...group]
+      .filter((p) => (p.adp ?? p.rank) !== null)
+      .sort((a, b) => (a.adp ?? a.rank) - (b.adp ?? b.rank));
+    const costRankInPos = new Map(costOrder.map((p, i) => [p.playerId, i + 1]));
+
+    // ...and by what he is worth. `group` is already in value order.
+    group.forEach((p, i) => {
+      const cost = costRankInPos.get(p.playerId);
+      p.valueDelta = cost === undefined ? null : cost - (i + 1);
+    });
+
+    const spread = standardDeviation(
+      group.map((p) => p.valueDelta).filter((d) => d !== null)
+    );
+    for (const p of group) {
+      p.grade = p.valueDelta === null ? null : gradeFromZ(p.valueDelta / spread);
+    }
+  }
 
   const players = published
     .map((p) => {
@@ -324,8 +360,9 @@ export function buildBigBoard(pool, draft = null, limit = 250) {
         positionRank: p.positionRank,
         tier: p.tier,
         streamable: p.position === 'K' || p.position === 'D/ST',
+        // Both measured against others at the same position.
         valueDelta: delta,
-        grade: delta === null ? null : gradeFromZ(delta / deltaSpread),
+        grade: p.grade,
 
         drafted: Boolean(pick),
         pick: pick
@@ -403,7 +440,6 @@ export function buildBigBoard(pool, draft = null, limit = 250) {
     picksBySlot: Object.fromEntries(
       Array.from({ length: teamCount }, (_, i) => [i + 1, picksForSlot(i + 1, teamCount, rounds).map((p) => p.overall)])
     ),
-    gradeSpread: Math.round(deltaSpread),
     players,
   };
 }

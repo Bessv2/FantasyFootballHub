@@ -12,29 +12,55 @@ export function computeLedger(moneyConfig, season, standings) {
   const buyIn = Number(moneyConfig.buyIn) || 0;
   const currency = moneyConfig.currency ?? 'USD';
 
-  // Only real, claimed teams owe money.
-  const payingTeams = season.teams.filter((t) => !t.isPlaceholder);
-  const expectedTeams = payingTeams.length || season.league.size;
-
   const paymentByTeam = new Map(
     (moneyConfig.payments ?? []).map((p) => [p.teamId, p])
   );
+  const teamById = new Map(season.teams.map((t) => [t.id, t]));
 
-  const members = payingTeams.map((team) => {
-    const payment = paymentByTeam.get(team.id);
-    const amountPaid = Number(payment?.amountPaid ?? (payment?.paid ? buyIn : 0)) || 0;
+  /**
+   * Who is in the pot.
+   *
+   * Deriving this from claimed ESPN teams alone breaks whenever real life runs
+   * ahead of the league settings — people commit and pay before they click the
+   * invite link, and until they do every team but the commissioner's looks like
+   * an empty placeholder. So the roster of payers comes from `members` in
+   * config when it is present, and falls back to claimed teams otherwise.
+   * Names come from ESPN once a team is actually claimed.
+   */
+  const configured = moneyConfig.members ?? null;
+  const roster = configured
+    ? configured.map((m) => ({
+        teamId: m.teamId ?? null,
+        name: m.name,
+        team: m.teamId ? teamById.get(m.teamId) : null,
+      }))
+    : season.teams
+        .filter((t) => !t.isPlaceholder)
+        .map((t) => ({ teamId: t.id, name: t.managerName, team: t }));
+
+  const expectedTeams = roster.length || season.league.size;
+
+  const members = roster.map((entry) => {
+    const payment = entry.teamId !== null ? paymentByTeam.get(entry.teamId) : null;
+    // A configured member can carry its own paid flag, for people who have
+    // handed over money before claiming a team.
+    const source = payment ?? configured?.find((m) => m.name === entry.name) ?? null;
+    const amountPaid = Number(source?.amountPaid ?? (source?.paid ? buyIn : 0)) || 0;
+
     return {
-      teamId: team.id,
-      teamName: team.name,
-      managerName: team.managerName,
+      teamId: entry.teamId,
+      teamName: entry.team?.name ?? '—',
+      managerName: entry.team?.managerName ?? entry.name ?? '—',
       owes: buyIn,
       amountPaid: round2(amountPaid),
       balance: round2(buyIn - amountPaid),
       paid: amountPaid >= buyIn && buyIn > 0,
       partial: amountPaid > 0 && amountPaid < buyIn,
-      paidDate: payment?.paidDate ?? null,
-      method: payment?.method ?? null,
-      note: payment?.note ?? null,
+      paidDate: source?.paidDate ?? null,
+      method: source?.method ?? null,
+      note: source?.note ?? null,
+      // Paid up but hasn't joined the ESPN league yet — worth chasing.
+      awaitingTeam: entry.team == null,
     };
   });
 

@@ -104,6 +104,29 @@ async function main() {
   ok(`league name: ${anchor.settings?.name ?? '(unnamed)'}`);
   ok(`size: ${anchor.settings?.size ?? '?'} teams`);
 
+  // ---- League size vs who is actually playing ---------------------------
+  // Everything downstream keys off the ESPN league size: replacement levels,
+  // roster capacity, the snake order, the mock draft, and the recommended pick
+  // for all 250 players. If the real league has a different number of managers,
+  // all of it is quietly computed for the wrong league.
+  const moneyFile = path.join(ROOT, 'config', 'money.json');
+  if (existsSync(moneyFile)) {
+    const money = JSON.parse(await readFile(moneyFile, 'utf8'));
+    const payers = money.members?.length ?? 0;
+    const espnSize = anchor.settings?.size ?? 0;
+
+    console.log('\nLeague size');
+    if (payers && payers !== espnSize) {
+      warn(`ESPN is set to ${espnSize} teams, but config/money.json lists ${payers} managers.`);
+      warn('Change the size in ESPN (League Settings -> Basic Settings -> Number of Teams).');
+      warn('Until then the draft board, mock draft and recommended picks all assume');
+      warn(`${espnSize} teams — and the real draft would run with ${espnSize - payers} auto-drafting`);
+      warn('team(s). This is the one mismatch worth fixing before draft day.');
+    } else if (payers) {
+      ok(`ESPN size (${espnSize}) matches the ${payers} managers in the ledger`);
+    }
+  }
+
   // ESPN reports the league's own history, which beats guessing.
   const previous = anchor.status?.previousSeasons ?? [];
   const seasons = [...new Set([...previous, anchorSeason])].sort((a, b) => a - b);

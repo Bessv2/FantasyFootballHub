@@ -2,28 +2,43 @@
   "_readme": [
     "The money ledger. ESPN knows nothing about this — it is entirely yours.",
     "",
-    "Everything here is editable in the app itself (Money tab -> Edit), which",
-    "writes a corrected copy you can paste back over this file. You can also",
-    "just edit it by hand.",
+    "PRIVACY: this file is committed, but the LEDGER IT GENERATES is not.",
+    "docs/data/money.json is gitignored, so the Money tab shows locally via",
+    "`npm run serve` and never reaches the public site.",
     "",
-    "PLACEHOLDER VALUES: buyIn is a guess. Replace it with your real number.",
-    "Payouts are percentages so they re-balance automatically if you change the",
-    "buy-in or the league size.",
+    "MEMBERS: list everyone who is in the pot, whether or not they have claimed",
+    "an ESPN team yet. People commit and pay long before they click the invite",
+    "link. Add `teamId` once you know which ESPN team is theirs, and the ledger",
+    "will pull their real team name through.",
     "",
-    "PRIVACY: if you publish the site to GitHub Pages, this file is public.",
-    "Set site.showMoney to false in league.json to keep the ledger local-only."
+    "Payouts are percentages, so changing buyIn or the member count rebalances",
+    "the amounts automatically. They must total 100."
   ],
 
   "currency": "USD",
   "buyIn": 50,
   "buyInDueDate": "2026-09-05",
 
+  "_membersNote": "10 managers, all paid in full. Names are placeholders until teams are claimed — edit them and add teamId as people join.",
+  "members": [
+    { "name": "Geordon Roe", "teamId": 1, "paid": true, "method": "Cash" },
+    { "name": "Manager 2", "paid": true, "method": "Cash" },
+    { "name": "Manager 3", "paid": true, "method": "Cash" },
+    { "name": "Manager 4", "paid": true, "method": "Cash" },
+    { "name": "Manager 5", "paid": true, "method": "Cash" },
+    { "name": "Manager 6", "paid": true, "method": "Cash" },
+    { "name": "Manager 7", "paid": true, "method": "Cash" },
+    { "name": "Manager 8", "paid": true, "method": "Cash" },
+    { "name": "Manager 9", "paid": true, "method": "Cash" },
+    { "name": "Manager 10", "paid": true, "method": "Cash" }
+  ],
+
   "payouts": {
-    "_note": "Percentages of the total pot. Must sum to 100.",
+    "_note": "Percentages of the total pot. Must sum to 100. At 10 x $50 = $500 that is $290 / $125 / $40, with $45 for side prizes.",
     "structure": [
       { "id": "first", "label": "1st Place", "pct": 58, "note": "Champion takes the largest share" },
       { "id": "second", "label": "2nd Place", "pct": 25, "note": "Runner-up" },
-      { "id": "third", "label": "3rd Place", "pct": 8, "note": "Buy-in back" },
+      { "id": "third", "label": "3rd Place", "pct": 8, "note": "Roughly the buy-in back" },
       { "id": "sidePots", "label": "Side Prizes", "pct": 9, "note": "Weekly high score and season awards" }
     ]
   },
@@ -34,7 +49,7 @@
     "seasonAwards": []
   },
 
-  "_paymentsNote": "One entry per manager. Set paid=true and fill paidDate as money comes in. teamId matches the ESPN team.",
+  "_paymentsNote": "Only needed for per-team overrides once teams are claimed; `members` above covers the common case.",
   "payments": [],
 
   "_payoutsPaidNote": "Filled in at the end of the season as you pay winners out.",

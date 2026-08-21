@@ -1060,10 +1060,9 @@ function renderBoard() {
             <th scope="col" class="num">Tier</th>
             ${sortable('recommendedPick', 'Take at', 'Where this player should go in a well-run draft')}
             ${sortable('adp', 'ADP', 'Average draft position across ESPN leagues')}
-            ${sortable('adpVsRecommended', 'Falls', 'How far past his recommended pick the market lets him slide')}
             ${sortable('projected', 'Proj', 'ESPN season projection')}
             ${sortable('vorp', 'VORP', 'Points above the worst starter at this position')}
-            ${sortable('grade', 'Grade', 'Value versus what the player costs to draft')}
+            ${sortable('grade', 'Grade', 'Value compared to others at the same position')}
             <th scope="col">${board.draftHeld ? 'Drafted by' : 'Status'}</th>
           </tr>
         </thead>
@@ -1088,7 +1087,6 @@ function renderBoard() {
                     : `${esc(p.recommendedPick)}<small style="color:var(--text-dim)"> R${esc(p.recommendedRound)}</small>`
                 }</td>
                 <td class="num">${p.adp === null ? '—' : num(p.adp, 1)}</td>
-                <td class="num">${p.adpVsRecommended === null ? '—' : deltaPill(p.adpVsRecommended, 0)}</td>
                 <td class="num">${num(p.projected, 0)}</td>
                 <td class="bar-cell">${bar(p.vorp ?? 0, maxVorp, { digits: 0 })}</td>
                 <td>${gradePill(p.grade)}${p.streamable ? ' <span class="pill pill--warn">Str</span>' : ''}</td>
@@ -1765,7 +1763,11 @@ function renderMoney() {
               .map(
                 (mem) => `<tr>
                   <th scope="row">${esc(mem.managerName ?? '—')}</th>
-                  <td>${esc(mem.teamName)}</td>
+                  <td>${
+                    mem.awaitingTeam
+                      ? '<span class="pill pill--warn">No ESPN team yet</span>'
+                      : esc(mem.teamName)
+                  }</td>
                   <td class="num">${esc(money(mem.amountPaid, m.currency))}</td>
                   <td class="num">${esc(money(mem.balance, m.currency))}</td>
                   <td>${

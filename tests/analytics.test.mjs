@@ -424,6 +424,40 @@ describe('money ledger', () => {
     assert.ok(ledger.warnings.some((w) => w.includes('not 100')));
   });
 
+  test('a configured member list works before anyone claims an ESPN team', () => {
+    // Real life runs ahead of the league settings: people pay before clicking
+    // the invite link, so the ledger cannot depend on claimed teams alone.
+    const barelyStarted = {
+      league: { size: 12 },
+      teams: [
+        { id: 1, name: "Commissioner's Team", managerName: 'Geordon Roe', isPlaceholder: false },
+        ...Array.from({ length: 11 }, (_, i) => ({
+          id: i + 2, name: `Team ${i + 2}`, managerName: 'Unclaimed', isPlaceholder: true,
+        })),
+      ],
+    };
+    const tenPaid = {
+      currency: 'USD',
+      buyIn: 50,
+      payouts: { structure: [{ id: 'first', label: '1st', pct: 100 }] },
+      members: [
+        { name: 'Geordon Roe', teamId: 1, paid: true },
+        ...Array.from({ length: 9 }, (_, i) => ({ name: `Manager ${i + 2}`, paid: true })),
+      ],
+    };
+
+    const ledger = computeLedger(tenPaid, barelyStarted, []);
+    assert.equal(ledger.expectedTeams, 10, 'ten payers, not twelve ESPN slots');
+    assert.equal(ledger.expectedPot, 500);
+    assert.equal(ledger.collected, 500);
+    assert.equal(ledger.outstanding, 0);
+    assert.equal(ledger.unpaid.length, 0);
+    // The one who claimed a team gets its real name; the rest are flagged.
+    assert.equal(ledger.members[0].teamName, "Commissioner's Team");
+    assert.equal(ledger.members[0].awaitingTeam, false);
+    assert.equal(ledger.members.filter((m) => m.awaitingTeam).length, 9);
+  });
+
   test('placeholder teams do not owe money', () => {
     const partialLeague = {
       league: { size: 12 },
