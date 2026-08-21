@@ -71,8 +71,7 @@ Each player carries:
 | **VORP** | Points above the worst starter at that position |
 | **Take at** | The pick where this player *should* go, with round |
 | **ADP** | Average draft position across ESPN leagues |
-| **Falls** | How far past his recommended pick the market lets him slide |
-| **Grade** | A+ to F: value versus what the player costs to draft |
+| **Grade** | A+ to F, **compared only to others at the same position** |
 | **Status** | Undrafted, or who took them and at which pick |
 
 ### Recommended draft position
@@ -86,8 +85,20 @@ one a person could follow. Kickers and defences land in rounds 15–16, where th
 belong.
 
 Pick your **draft slot** and the board lists who should still be on the board at
-each of your sixteen picks. Sorting by **Falls** surfaces the biggest bargains:
-in this format Daniel Jones is recommended at pick 53 and drafted around 160.
+each of your sixteen picks.
+
+### Why grades are per position
+
+Comparing ADP to overall value sounds right and is badly misleading here. ADP is
+collected from mostly-standard leagues, so in superflex **every quarterback
+graded A+ and every receiver graded F** — the grade had stopped saying "is this
+player good value" and started saying "is this a quarterback", which the
+position column already tells you.
+
+Ranking cost and value separately inside each position cancels that out by
+construction. An A now means *good value for a quarterback*. The league-wide
+positional story is still told once, in the **Where the value is** card, which is
+where a league-wide effect belongs rather than repeated down 250 rows.
 
 It is a projection of a well-run draft, not a promise — one manager reaching
 changes everything downstream.

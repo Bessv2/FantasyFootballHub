@@ -17,13 +17,13 @@ the way they are.
 | | |
 | --- | --- |
 | League | **Roe Leauge**, ESPN id `274568741` |
-| Format | 12 teams, PPR, **superflex** (ESPN OP slot), 16-round snake |
+| Format | **10 teams**, PPR, **superflex** (ESPN OP slot), 16-round snake |
 | Lineup | 1 QB, 2 RB, 2 WR, 1 TE, **1 OP**, 1 D/ST, 1 K + 7 bench, 2 IR — **9 starters** |
 | Season | 13 regular-season weeks, 8 playoff teams |
 | Draft | **Sat 5 Sept 2026, 4:00 PM ET** (room opens 3:00 PM) |
 | Trade deadline | 2 Dec 2026 |
-| Managers joined | **1 of 12** as of 20 Aug 2026 |
-| Tests | 42, all passing |
+| Managers | **10 committed, all paid $50** as of 21 Aug 2026. ESPN size changed 12 -> 10. Most have not claimed their ESPN team yet. |
+| Tests | 58, all passing |
 | Automation | GitHub Actions, daily 11:00 UTC — **verified working**, it has pushed real commits |
 
 The league had no rosters, no picks and no games at time of writing. Every

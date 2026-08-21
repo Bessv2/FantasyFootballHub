@@ -2,8 +2,8 @@
 
 Every source file in one place, for reading or for handing to a fresh session.
 
-- **Commit:** `78af8ad` (2026-08-20 20:48:18 -0400)
-- **Generated:** 2026-08-21T00:55:30.480Z
+- **Commit:** `53455f2` (2026-08-20 20:55:30 -0400)
+- **Generated:** 2026-08-21T00:56:00.967Z
 - **WARNING:** the working tree had uncommitted changes when this was generated, so this may not match any commit.
 - **Regenerate with:** `npm run bundle`
 
