@@ -2,8 +2,9 @@
 
 Every source file in one place, for reading or for handing to a fresh session.
 
-- **Commit:** `f04a014` (2026-08-20 20:39:21 -0400)
-- **Generated:** 2026-08-21T00:39:33.458Z
+- **Commit:** `52f5d23` (2026-08-20 20:39:33 -0400)
+- **Generated:** 2026-08-21T00:40:47.046Z
+- **WARNING:** the working tree had uncommitted changes when this was generated, so this may not match any commit.
 - **Regenerate with:** `npm run bundle`
 
 **Read [HANDOFF.md](HANDOFF.md) first.** It carries the ESPN API gotchas,
@@ -4770,7 +4771,7 @@ Dependency-free front end. Reads pre-computed JSON from docs/data/ and renders i
 
 ### `docs/assets/style.css`
 
-*449 lines*
+*468 lines*
 
 ```css
 /* ==========================================================================
@@ -5221,11 +5222,30 @@ tr.playoff-cut td, tr.playoff-cut th { border-bottom: 2px solid var(--accent); }
   .hero { padding: 1.25rem 1.1rem; }
   .countdown li { min-width: 3.9rem; padding: 0.45rem 0.5rem; }
 }
+
+/* --- Sortable column headers --------------------------------------------- */
+/* Bare buttons inside a th collapse to the text box, which on a phone lands
+   under the 24x24 CSS px WCAG 2.2 target minimum. Padding restores a real
+   touch target without changing how the header looks. */
+.sort-btn {
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+  padding: 0.35rem 0.15rem;
+  min-height: 24px;
+  min-width: 24px;
+  white-space: nowrap;
+}
+.sort-btn:hover { color: var(--text); text-decoration: underline; }
 ```
 
 ### `docs/assets/app.js`
 
-*1834 lines*
+*1833 lines*
 
 ```javascript
 import { createMockDraft, advanceToUser, makePick, gradeDraft, rosterNeeds } from './mock.js';
@@ -6167,8 +6187,7 @@ function renderBoard() {
     const active = boardState.sort === key;
     const arrow = active ? (boardState.dir === 'asc' ? ' ▲' : ' ▼') : '';
     return `<th scope="col" class="num" aria-sort="${active ? (boardState.dir === 'asc' ? 'ascending' : 'descending') : 'none'}">
-      <button type="button" class="board-sort" data-key="${esc(key)}"
-        style="background:none;border:0;color:inherit;font:inherit;cursor:pointer;padding:0;text-transform:inherit;letter-spacing:inherit"
+      <button type="button" class="board-sort sort-btn" data-key="${esc(key)}"
         ${hint ? `title="${esc(hint)}"` : ''}>${esc(label)}${arrow}</button></th>`;
   };
 
@@ -8313,4 +8332,4 @@ jobs:
 
 ---
 
-*27 files, 8,091 lines.*
+*27 files, 8,109 lines.*

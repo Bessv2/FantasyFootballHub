@@ -937,8 +937,7 @@ function renderBoard() {
     const active = boardState.sort === key;
     const arrow = active ? (boardState.dir === 'asc' ? ' ▲' : ' ▼') : '';
     return `<th scope="col" class="num" aria-sort="${active ? (boardState.dir === 'asc' ? 'ascending' : 'descending') : 'none'}">
-      <button type="button" class="board-sort" data-key="${esc(key)}"
-        style="background:none;border:0;color:inherit;font:inherit;cursor:pointer;padding:0;text-transform:inherit;letter-spacing:inherit"
+      <button type="button" class="board-sort sort-btn" data-key="${esc(key)}"
         ${hint ? `title="${esc(hint)}"` : ''}>${esc(label)}${arrow}</button></th>`;
   };
 

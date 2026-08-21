@@ -446,3 +446,22 @@ tr.playoff-cut td, tr.playoff-cut th { border-bottom: 2px solid var(--accent); }
   .hero { padding: 1.25rem 1.1rem; }
   .countdown li { min-width: 3.9rem; padding: 0.45rem 0.5rem; }
 }
+
+/* --- Sortable column headers --------------------------------------------- */
+/* Bare buttons inside a th collapse to the text box, which on a phone lands
+   under the 24x24 CSS px WCAG 2.2 target minimum. Padding restores a real
+   touch target without changing how the header looks. */
+.sort-btn {
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+  padding: 0.35rem 0.15rem;
+  min-height: 24px;
+  min-width: 24px;
+  white-space: nowrap;
+}
+.sort-btn:hover { color: var(--text); text-decoration: underline; }
