@@ -144,6 +144,92 @@ function standardDeviation(values) {
 }
 
 /**
+ * How many of each position a team can sensibly roster.
+ *
+ * Derived from the format rather than hardcoded: count the slots each position
+ * can legally fill, then allow bench depth on top. Running backs and receivers
+ * get more because they get hurt and have bye weeks; kickers and defences get
+ * exactly one, because rostering two is throwing a pick away.
+ */
+function rosterCapacity(startingSlots) {
+  const startable = {};
+  for (const { slotId, count } of startingSlots ?? []) {
+    for (const pos of SLOT_ELIGIBILITY[slotId] ?? []) {
+      startable[pos] = (startable[pos] ?? 0) + count;
+    }
+  }
+
+  const capacity = {};
+  for (const [pos, slots] of Object.entries(startable)) {
+    if (pos === 'K' || pos === 'D/ST') capacity[pos] = 1;
+    else if (pos === 'QB' || pos === 'TE') capacity[pos] = slots + 1;
+    else capacity[pos] = slots + 3;
+  }
+  return { startable, capacity };
+}
+
+/**
+ * Where each player *should* go, from a deterministic draft in which all teams
+ * draft well.
+ *
+ * Simply converting value rank into a pick number would be wrong: VORP likes
+ * kickers more than it should (see `streamable`), so the sixth-best kicker
+ * would be "recommended" in round four, which nobody sane would do. Simulating
+ * a real draft applies the constraints that actually govern draft order —
+ * rosters fill up, nobody carries three tight ends, and kickers go last —
+ * so the recommendation is one a person could follow.
+ *
+ * Deterministic by design: no randomness, so the same board always yields the
+ * same recommendations and two people reading the hub see the same advice.
+ */
+export function simulateConsensusDraft(rankedByValue, { startingSlots, teams, rounds }) {
+  const { capacity } = rosterCapacity(startingSlots);
+  const totalPicks = teams * rounds;
+
+  const rosters = Array.from({ length: teams }, () => ({}));
+  const taken = new Set();
+  const result = new Map();
+
+  for (let pickNumber = 1; pickNumber <= totalPicks; pickNumber += 1) {
+    const round = Math.ceil(pickNumber / teams);
+    const indexInRound = (pickNumber - 1) % teams;
+    // Snake order.
+    const teamIndex = round % 2 === 1 ? indexInRound : teams - 1 - indexInRound;
+    const roster = rosters[teamIndex];
+
+    // Kickers and defences are worth exactly one late pick each. Gating them
+    // is what stops VORP from recommending a kicker in the middle rounds.
+    const lateOnly = round >= rounds - 1;
+
+    const pick = rankedByValue.find((p) => {
+      if (taken.has(p.playerId)) return false;
+      const max = capacity[p.position];
+      if (max === undefined) return false;
+      if ((roster[p.position] ?? 0) >= max) return false;
+      if ((p.position === 'K' || p.position === 'D/ST') && !lateOnly) return false;
+      return true;
+    });
+
+    if (!pick) continue;
+    taken.add(pick.playerId);
+    roster[pick.position] = (roster[pick.position] ?? 0) + 1;
+    result.set(pick.playerId, { pick: pickNumber, round });
+  }
+
+  return result;
+}
+
+/** The overall pick numbers belonging to one draft slot in a snake draft. */
+export function picksForSlot(slot, teams, rounds) {
+  const picks = [];
+  for (let round = 1; round <= rounds; round += 1) {
+    const indexInRound = round % 2 === 1 ? slot - 1 : teams - slot;
+    picks.push({ round, overall: (round - 1) * teams + indexInRound + 1 });
+  }
+  return picks;
+}
+
+/**
  * @param {object} pool  docs/data/draftpool payload (players, startingSlots, teams)
  * @param {object} [draft] analyzed draft, so picks can be attached once held
  * @param {number} [limit] how many players to publish
@@ -184,6 +270,14 @@ export function buildBigBoard(pool, draft = null, limit = 250) {
     p.positionRank = n;
   }
 
+  // Where each player should actually go, under real roster constraints.
+  const rounds = pool.rounds ?? 16;
+  const consensus = simulateConsensusDraft(rankable, {
+    startingSlots: pool.startingSlots,
+    teams: teamCount,
+    rounds,
+  });
+
   // Deltas first, so the grade curve can be scaled to their real spread.
   const published = rankable.slice(0, limit);
   for (const p of published) {
@@ -198,8 +292,18 @@ export function buildBigBoard(pool, draft = null, limit = 250) {
     .map((p) => {
       const pick = pickByPlayer.get(p.playerId) ?? null;
       const delta = p.valueDelta;
+      const rec = consensus.get(p.playerId) ?? null;
+      // Positive = the market lets him fall past where he should go.
+      const adpVsRecommended =
+        rec && p.adp !== null ? Math.round(p.adp - rec.pick) : null;
 
       return {
+        recommendedPick: rec?.pick ?? null,
+        recommendedRound: rec?.round ?? null,
+        // Players outside the simulated draft are genuinely undraftable in a
+        // league this size — worth saying so rather than showing a blank.
+        draftable: Boolean(rec),
+        adpVsRecommended,
         playerId: p.playerId,
         name: p.name,
         position: p.position,
@@ -295,6 +399,10 @@ export function buildBigBoard(pool, draft = null, limit = 250) {
     startersNeeded,
     scarcity,
     positionValue,
+    rounds,
+    picksBySlot: Object.fromEntries(
+      Array.from({ length: teamCount }, (_, i) => [i + 1, picksForSlot(i + 1, teamCount, rounds).map((p) => p.overall)])
+    ),
     gradeSpread: Math.round(deltaSpread),
     players,
   };

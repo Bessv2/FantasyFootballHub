@@ -22,7 +22,12 @@ import {
 } from '../scripts/lib/analytics.mjs';
 import { computeLedger } from '../scripts/lib/money.mjs';
 import { recommendLineup, coachingReport, waiverTargets } from '../scripts/lib/advisor.mjs';
-import { buildBigBoard, computeReplacementLevels } from '../scripts/lib/bigboard.mjs';
+import {
+  buildBigBoard,
+  computeReplacementLevels,
+  simulateConsensusDraft,
+  picksForSlot,
+} from '../scripts/lib/bigboard.mjs';
 import { normalizeSeason, PHASE } from '../scripts/lib/normalize.mjs';
 import { resolvePosition } from '../scripts/lib/constants.mjs';
 
@@ -689,6 +694,74 @@ describe('big board', () => {
     const board = buildBigBoard({ players: [], startingSlots: SUPERFLEX_SLOTS, teams: 12 }, null, 250);
     assert.equal(board.available, false);
     assert.deepEqual(board.players, []);
+  });
+
+  test('recommended pick keeps kickers and defences out of the early rounds', () => {
+    // The reason this is a simulation and not just "value rank as a pick
+    // number": VORP rates kickers highly, so a naive mapping would recommend
+    // one in round four. Nobody would follow that.
+    const pool = makePool(SUPERFLEX_SLOTS);
+    const board = buildBigBoard({ ...pool, rounds: 16 }, null, 250);
+    const lateOnly = board.players.filter(
+      (p) => (p.position === 'K' || p.position === 'D/ST') && p.recommendedPick !== null
+    );
+    assert.ok(lateOnly.length > 0, 'some kickers should be draftable');
+    for (const p of lateOnly) {
+      assert.ok(
+        p.recommendedRound >= 15,
+        `${p.name} recommended in round ${p.recommendedRound}, should be 15+`
+      );
+    }
+  });
+
+  test('recommended picks are unique and never exceed the draft', () => {
+    const pool = makePool(SUPERFLEX_SLOTS);
+    const board = buildBigBoard({ ...pool, rounds: 16 }, null, 250);
+    const picks = board.players.map((p) => p.recommendedPick).filter((n) => n !== null);
+    assert.equal(new Set(picks).size, picks.length, 'two players cannot share a pick');
+    assert.ok(Math.max(...picks) <= 16 * 12);
+  });
+
+  test('the consensus draft respects roster capacity', () => {
+    const pool = makePool(SUPERFLEX_SLOTS);
+    const ranked = buildBigBoard({ ...pool, rounds: 16 }, null, 400).players;
+    const result = simulateConsensusDraft(
+      ranked.map((p) => ({ playerId: p.playerId, position: p.position })),
+      { startingSlots: SUPERFLEX_SLOTS, teams: 12, rounds: 16 }
+    );
+    // Rebuild each roster from the pick order and check nobody hoarded.
+    const positionOf = new Map(ranked.map((p) => [p.playerId, p.position]));
+    const rosters = Array.from({ length: 12 }, () => ({}));
+    for (const [playerId, { pick, round }] of result) {
+      const idx = (pick - 1) % 12;
+      const teamIndex = round % 2 === 1 ? idx : 11 - idx;
+      const pos = positionOf.get(playerId);
+      rosters[teamIndex][pos] = (rosters[teamIndex][pos] ?? 0) + 1;
+    }
+    for (const roster of rosters) {
+      assert.ok((roster.K ?? 0) <= 1, 'never more than one kicker');
+      assert.ok((roster['D/ST'] ?? 0) <= 1, 'never more than one defence');
+      assert.ok((roster.QB ?? 0) <= 3, 'superflex allows 2 starters plus a backup');
+      assert.ok((roster.TE ?? 0) <= 3);
+    }
+  });
+
+  test('undraftable players are flagged rather than left blank', () => {
+    const pool = makePool(SUPERFLEX_SLOTS);
+    const board = buildBigBoard({ ...pool, rounds: 16 }, null, 250);
+    const undraftable = board.players.filter((p) => !p.draftable);
+    assert.ok(undraftable.length > 0, 'a 250-deep board exceeds 192 picks');
+    for (const p of undraftable) assert.equal(p.recommendedPick, null);
+  });
+
+  test('snake pick numbers are right for the turn slots', () => {
+    // Slot 1 picks first then waits the longest; slot 12 picks back to back.
+    const first = picksForSlot(1, 12, 4).map((p) => p.overall);
+    assert.deepEqual(first, [1, 24, 25, 48]);
+    const last = picksForSlot(12, 12, 4).map((p) => p.overall);
+    assert.deepEqual(last, [12, 13, 36, 37]);
+    const middle = picksForSlot(6, 12, 3).map((p) => p.overall);
+    assert.deepEqual(middle, [6, 19, 30]);
   });
 
   test('honours the publish limit', () => {

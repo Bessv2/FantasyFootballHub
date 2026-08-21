@@ -762,6 +762,48 @@ function syncMyTeamNav() {
 
 const boardState = { position: 'ALL', sort: 'valueRank', dir: 'asc', search: '', hideDrafted: false };
 
+/** Draft slot the visitor expects to pick from, remembered across visits. */
+const DRAFT_SLOT_KEY = 'ffh-draft-slot';
+const getDraftSlot = () => {
+  const raw = localStorage.getItem(DRAFT_SLOT_KEY);
+  return raw === null ? null : Number(raw);
+};
+
+/**
+ * Who should still be on the board at each of your picks.
+ *
+ * A player is "gone" if his recommended pick lands before your turn. This is a
+ * projection of a well-run draft, not a promise — one manager reaching changes
+ * everything downstream — but it answers the question you actually have while
+ * waiting: is it worth hoping he falls to me?
+ */
+function targetsForSlot(board, slot) {
+  const picks = board.picksBySlot?.[slot] ?? [];
+  const draftable = board.players.filter((p) => p.draftable);
+
+  return picks.map((overall) => {
+    // Anyone recommended before your turn has already been taken. Comparing
+    // against the previous pick instead of this one was wrong: it listed the
+    // first overall pick as "should be there" at pick 7.
+    //
+    // Ordered by recommended pick, not by value rank. Sorting by value surfaces
+    // whoever has the best VORP among everyone still on the board — which put
+    // three defences at the top of a round-five pick, because their recommended
+    // slot is round fifteen and nothing had taken them yet. What you want at
+    // pick N is the players actually due to come off the board around then.
+    const available = draftable
+      .filter((p) => p.recommendedPick >= overall)
+      .sort((a, b) => a.recommendedPick - b.recommendedPick);
+    return {
+      overall,
+      round: Math.ceil(overall / board.teamCount),
+      best: available.slice(0, 3),
+      // The player the simulation says goes exactly here.
+      onTheClock: draftable.find((p) => p.recommendedPick === overall) ?? null,
+    };
+  });
+}
+
 const GRADE_ORDER = ['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'C-', 'D', 'F'];
 
 /** Colour reinforces the grade; the letter always carries it. */
@@ -892,6 +934,67 @@ function renderBoard() {
       </div>
     </div>`);
 
+  // --- Your draft slot ---------------------------------------------------
+  const slot = getDraftSlot();
+  if (slot && board.picksBySlot?.[slot]) {
+    const targets = targetsForSlot(board, slot);
+    parts.push(`
+      <div class="card" style="margin-bottom:1.25rem">
+        <h3>Drafting from slot ${esc(slot)}</h3>
+        <p class="stat__note">
+          Your picks, and who the board says should still be there. A projection of a
+          well-run draft — one manager reaching changes everything after it.
+          <button type="button" class="theme-toggle" id="board-clear-slot"
+            style="margin-left:0.4rem">Change slot</button>
+        </p>
+        <div class="table-scroll" style="margin-top:0.6rem;max-height:22rem;overflow-y:auto">
+          <table>
+            <caption>Best available at each of your picks</caption>
+            <thead><tr>
+              <th scope="col" class="num">Rd</th><th scope="col" class="num">Pick</th>
+              <th scope="col">Should be there</th>
+            </tr></thead>
+            <tbody>
+              ${targets
+                .map(
+                  (t) => `<tr>
+                    <td class="num rank">${esc(t.round)}</td>
+                    <td class="num rank">${esc(t.overall)}</td>
+                    <td>${
+                      t.best.length
+                        ? t.best
+                            .map(
+                              (p) => `${esc(p.name)} <small>(${esc(p.position)}${esc(p.positionRank)})</small>`
+                            )
+                            .join(' · ')
+                        : '<span class="stat__note">board exhausted</span>'
+                    }</td>
+                  </tr>`
+                )
+                .join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>`);
+  } else {
+    parts.push(`
+      <div class="card" style="margin-bottom:1.25rem">
+        <h3>Which slot are you drafting from?</h3>
+        <p class="stat__note">
+          Pick your slot and the board will show who should still be available at each of
+          your ${esc(board.rounds ?? 16)} picks. Remembered on this device.
+        </p>
+        <div class="draft-picks" style="margin-top:0.75rem">
+          ${Array.from({ length: board.teamCount }, (_, i) => i + 1)
+            .map(
+              (n) => `<button type="button" class="theme-toggle board-slot" data-slot="${n}"
+                style="width:100%">Slot ${n}</button>`
+            )
+            .join('')}
+        </div>
+      </div>`);
+  }
+
   // --- Controls ----------------------------------------------------------
   const positions = ['ALL', ...POSITIONS_ORDER];
   parts.push(`
@@ -955,9 +1058,11 @@ function renderBoard() {
             <th scope="col">Player</th>
             <th scope="col">Pos</th>
             <th scope="col" class="num">Tier</th>
+            ${sortable('recommendedPick', 'Take at', 'Where this player should go in a well-run draft')}
+            ${sortable('adp', 'ADP', 'Average draft position across ESPN leagues')}
+            ${sortable('adpVsRecommended', 'Falls', 'How far past his recommended pick the market lets him slide')}
             ${sortable('projected', 'Proj', 'ESPN season projection')}
             ${sortable('vorp', 'VORP', 'Points above the worst starter at this position')}
-            ${sortable('adp', 'ADP', 'Average draft position across ESPN leagues')}
             ${sortable('grade', 'Grade', 'Value versus what the player costs to draft')}
             <th scope="col">${board.draftHeld ? 'Drafted by' : 'Status'}</th>
           </tr>
@@ -977,9 +1082,15 @@ function renderBoard() {
                 </th>
                 <td>${esc(p.position)}${esc(p.positionRank)}</td>
                 <td class="num">${esc(p.tier)}</td>
+                <td class="num">${
+                  p.recommendedPick === null
+                    ? '<span class="pill pill--neutral">Undraftable</span>'
+                    : `${esc(p.recommendedPick)}<small style="color:var(--text-dim)"> R${esc(p.recommendedRound)}</small>`
+                }</td>
+                <td class="num">${p.adp === null ? '—' : num(p.adp, 1)}</td>
+                <td class="num">${p.adpVsRecommended === null ? '—' : deltaPill(p.adpVsRecommended, 0)}</td>
                 <td class="num">${num(p.projected, 0)}</td>
                 <td class="bar-cell">${bar(p.vorp ?? 0, maxVorp, { digits: 0 })}</td>
-                <td class="num">${p.adp === null ? '—' : num(p.adp, 1)}</td>
                 <td>${gradePill(p.grade)}${p.streamable ? ' <span class="pill pill--warn">Str</span>' : ''}</td>
                 <td>${
                   p.drafted
@@ -1015,14 +1126,26 @@ function renderBoard() {
         boardState.dir = boardState.dir === 'asc' ? 'desc' : 'asc';
       } else {
         boardState.sort = key;
-        // Rank-like columns read best ascending; magnitudes descending.
-        boardState.dir = key === 'valueRank' || key === 'adp' || key === 'grade' ? 'asc' : 'desc';
+        // Rank-like columns read best ascending (pick 1 first); magnitudes and
+        // deltas descending (biggest first).
+        const ascending = ['valueRank', 'adp', 'grade', 'recommendedPick'];
+        boardState.dir = ascending.includes(key) ? 'asc' : 'desc';
       }
       renderBoard();
     });
   }
   $('#board-hide-drafted')?.addEventListener('click', () => {
     boardState.hideDrafted = !boardState.hideDrafted;
+    renderBoard();
+  });
+  for (const btn of body.querySelectorAll('.board-slot')) {
+    btn.addEventListener('click', () => {
+      localStorage.setItem(DRAFT_SLOT_KEY, btn.dataset.slot);
+      renderBoard();
+    });
+  }
+  $('#board-clear-slot')?.addEventListener('click', () => {
+    localStorage.removeItem(DRAFT_SLOT_KEY);
     renderBoard();
   });
 

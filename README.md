@@ -69,9 +69,28 @@ Each player carries:
 | **Tier** | Positional tier, broken at the biggest cliffs — TE1–2 then a 33-point drop |
 | **Proj** | ESPN's season projection |
 | **VORP** | Points above the worst starter at that position |
+| **Take at** | The pick where this player *should* go, with round |
 | **ADP** | Average draft position across ESPN leagues |
+| **Falls** | How far past his recommended pick the market lets him slide |
 | **Grade** | A+ to F: value versus what the player costs to draft |
 | **Status** | Undrafted, or who took them and at which pick |
+
+### Recommended draft position
+
+"Take at" comes from a **deterministic simulation of a well-run draft**, not from
+converting value rank into a pick number. That distinction matters: VORP rates
+kickers highly, so a naive mapping would recommend one in round four. Simulating
+a real draft applies the constraints that actually govern draft order — rosters
+fill up, nobody carries three tight ends, and kickers go last — so the answer is
+one a person could follow. Kickers and defences land in rounds 15–16, where they
+belong.
+
+Pick your **draft slot** and the board lists who should still be on the board at
+each of your sixteen picks. Sorting by **Falls** surfaces the biggest bargains:
+in this format Daniel Jones is recommended at pick 53 and drafted around 160.
+
+It is a projection of a well-run draft, not a promise — one manager reaching
+changes everything downstream.
 
 Sortable on every numeric column, filterable by position, searchable by name.
 Once the draft happens the Status column fills in automatically and you can hide

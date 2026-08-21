@@ -2,8 +2,8 @@
 
 Every source file in one place, for reading or for handing to a fresh session.
 
-- **Commit:** `52f5d23` (2026-08-20 20:39:33 -0400)
-- **Generated:** 2026-08-21T00:40:47.046Z
+- **Commit:** `b933f13` (2026-08-20 20:40:47 -0400)
+- **Generated:** 2026-08-21T00:48:04.918Z
 - **WARNING:** the working tree had uncommitted changes when this was generated, so this may not match any commit.
 - **Regenerate with:** `npm run bundle`
 
@@ -2383,7 +2383,7 @@ export function waiverTargets(freeAgents, roster, startingSlots, { minGain = 2, 
 
 ### `scripts/lib/bigboard.mjs`
 
-*302 lines*
+*410 lines*
 
 ```javascript
 /**
@@ -2532,6 +2532,92 @@ function standardDeviation(values) {
 }
 
 /**
+ * How many of each position a team can sensibly roster.
+ *
+ * Derived from the format rather than hardcoded: count the slots each position
+ * can legally fill, then allow bench depth on top. Running backs and receivers
+ * get more because they get hurt and have bye weeks; kickers and defences get
+ * exactly one, because rostering two is throwing a pick away.
+ */
+function rosterCapacity(startingSlots) {
+  const startable = {};
+  for (const { slotId, count } of startingSlots ?? []) {
+    for (const pos of SLOT_ELIGIBILITY[slotId] ?? []) {
+      startable[pos] = (startable[pos] ?? 0) + count;
+    }
+  }
+
+  const capacity = {};
+  for (const [pos, slots] of Object.entries(startable)) {
+    if (pos === 'K' || pos === 'D/ST') capacity[pos] = 1;
+    else if (pos === 'QB' || pos === 'TE') capacity[pos] = slots + 1;
+    else capacity[pos] = slots + 3;
+  }
+  return { startable, capacity };
+}
+
+/**
+ * Where each player *should* go, from a deterministic draft in which all teams
+ * draft well.
+ *
+ * Simply converting value rank into a pick number would be wrong: VORP likes
+ * kickers more than it should (see `streamable`), so the sixth-best kicker
+ * would be "recommended" in round four, which nobody sane would do. Simulating
+ * a real draft applies the constraints that actually govern draft order —
+ * rosters fill up, nobody carries three tight ends, and kickers go last —
+ * so the recommendation is one a person could follow.
+ *
+ * Deterministic by design: no randomness, so the same board always yields the
+ * same recommendations and two people reading the hub see the same advice.
+ */
+export function simulateConsensusDraft(rankedByValue, { startingSlots, teams, rounds }) {
+  const { capacity } = rosterCapacity(startingSlots);
+  const totalPicks = teams * rounds;
+
+  const rosters = Array.from({ length: teams }, () => ({}));
+  const taken = new Set();
+  const result = new Map();
+
+  for (let pickNumber = 1; pickNumber <= totalPicks; pickNumber += 1) {
+    const round = Math.ceil(pickNumber / teams);
+    const indexInRound = (pickNumber - 1) % teams;
+    // Snake order.
+    const teamIndex = round % 2 === 1 ? indexInRound : teams - 1 - indexInRound;
+    const roster = rosters[teamIndex];
+
+    // Kickers and defences are worth exactly one late pick each. Gating them
+    // is what stops VORP from recommending a kicker in the middle rounds.
+    const lateOnly = round >= rounds - 1;
+
+    const pick = rankedByValue.find((p) => {
+      if (taken.has(p.playerId)) return false;
+      const max = capacity[p.position];
+      if (max === undefined) return false;
+      if ((roster[p.position] ?? 0) >= max) return false;
+      if ((p.position === 'K' || p.position === 'D/ST') && !lateOnly) return false;
+      return true;
+    });
+
+    if (!pick) continue;
+    taken.add(pick.playerId);
+    roster[pick.position] = (roster[pick.position] ?? 0) + 1;
+    result.set(pick.playerId, { pick: pickNumber, round });
+  }
+
+  return result;
+}
+
+/** The overall pick numbers belonging to one draft slot in a snake draft. */
+export function picksForSlot(slot, teams, rounds) {
+  const picks = [];
+  for (let round = 1; round <= rounds; round += 1) {
+    const indexInRound = round % 2 === 1 ? slot - 1 : teams - slot;
+    picks.push({ round, overall: (round - 1) * teams + indexInRound + 1 });
+  }
+  return picks;
+}
+
+/**
  * @param {object} pool  docs/data/draftpool payload (players, startingSlots, teams)
  * @param {object} [draft] analyzed draft, so picks can be attached once held
  * @param {number} [limit] how many players to publish
@@ -2572,6 +2658,14 @@ export function buildBigBoard(pool, draft = null, limit = 250) {
     p.positionRank = n;
   }
 
+  // Where each player should actually go, under real roster constraints.
+  const rounds = pool.rounds ?? 16;
+  const consensus = simulateConsensusDraft(rankable, {
+    startingSlots: pool.startingSlots,
+    teams: teamCount,
+    rounds,
+  });
+
   // Deltas first, so the grade curve can be scaled to their real spread.
   const published = rankable.slice(0, limit);
   for (const p of published) {
@@ -2586,8 +2680,18 @@ export function buildBigBoard(pool, draft = null, limit = 250) {
     .map((p) => {
       const pick = pickByPlayer.get(p.playerId) ?? null;
       const delta = p.valueDelta;
+      const rec = consensus.get(p.playerId) ?? null;
+      // Positive = the market lets him fall past where he should go.
+      const adpVsRecommended =
+        rec && p.adp !== null ? Math.round(p.adp - rec.pick) : null;
 
       return {
+        recommendedPick: rec?.pick ?? null,
+        recommendedRound: rec?.round ?? null,
+        // Players outside the simulated draft are genuinely undraftable in a
+        // league this size — worth saying so rather than showing a blank.
+        draftable: Boolean(rec),
+        adpVsRecommended,
         playerId: p.playerId,
         name: p.name,
         position: p.position,
@@ -2683,6 +2787,10 @@ export function buildBigBoard(pool, draft = null, limit = 250) {
     startersNeeded,
     scarcity,
     positionValue,
+    rounds,
+    picksBySlot: Object.fromEntries(
+      Array.from({ length: teamCount }, (_, i) => [i + 1, picksForSlot(i + 1, teamCount, rounds).map((p) => p.overall)])
+    ),
     gradeSpread: Math.round(deltaSpread),
     players,
   };
@@ -5245,7 +5353,7 @@ tr.playoff-cut td, tr.playoff-cut th { border-bottom: 2px solid var(--accent); }
 
 ### `docs/assets/app.js`
 
-*1833 lines*
+*1956 lines*
 
 ```javascript
 import { createMockDraft, advanceToUser, makePick, gradeDraft, rosterNeeds } from './mock.js';
@@ -6012,6 +6120,48 @@ function syncMyTeamNav() {
 
 const boardState = { position: 'ALL', sort: 'valueRank', dir: 'asc', search: '', hideDrafted: false };
 
+/** Draft slot the visitor expects to pick from, remembered across visits. */
+const DRAFT_SLOT_KEY = 'ffh-draft-slot';
+const getDraftSlot = () => {
+  const raw = localStorage.getItem(DRAFT_SLOT_KEY);
+  return raw === null ? null : Number(raw);
+};
+
+/**
+ * Who should still be on the board at each of your picks.
+ *
+ * A player is "gone" if his recommended pick lands before your turn. This is a
+ * projection of a well-run draft, not a promise — one manager reaching changes
+ * everything downstream — but it answers the question you actually have while
+ * waiting: is it worth hoping he falls to me?
+ */
+function targetsForSlot(board, slot) {
+  const picks = board.picksBySlot?.[slot] ?? [];
+  const draftable = board.players.filter((p) => p.draftable);
+
+  return picks.map((overall) => {
+    // Anyone recommended before your turn has already been taken. Comparing
+    // against the previous pick instead of this one was wrong: it listed the
+    // first overall pick as "should be there" at pick 7.
+    //
+    // Ordered by recommended pick, not by value rank. Sorting by value surfaces
+    // whoever has the best VORP among everyone still on the board — which put
+    // three defences at the top of a round-five pick, because their recommended
+    // slot is round fifteen and nothing had taken them yet. What you want at
+    // pick N is the players actually due to come off the board around then.
+    const available = draftable
+      .filter((p) => p.recommendedPick >= overall)
+      .sort((a, b) => a.recommendedPick - b.recommendedPick);
+    return {
+      overall,
+      round: Math.ceil(overall / board.teamCount),
+      best: available.slice(0, 3),
+      // The player the simulation says goes exactly here.
+      onTheClock: draftable.find((p) => p.recommendedPick === overall) ?? null,
+    };
+  });
+}
+
 const GRADE_ORDER = ['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'C-', 'D', 'F'];
 
 /** Colour reinforces the grade; the letter always carries it. */
@@ -6142,6 +6292,67 @@ function renderBoard() {
       </div>
     </div>`);
 
+  // --- Your draft slot ---------------------------------------------------
+  const slot = getDraftSlot();
+  if (slot && board.picksBySlot?.[slot]) {
+    const targets = targetsForSlot(board, slot);
+    parts.push(`
+      <div class="card" style="margin-bottom:1.25rem">
+        <h3>Drafting from slot ${esc(slot)}</h3>
+        <p class="stat__note">
+          Your picks, and who the board says should still be there. A projection of a
+          well-run draft — one manager reaching changes everything after it.
+          <button type="button" class="theme-toggle" id="board-clear-slot"
+            style="margin-left:0.4rem">Change slot</button>
+        </p>
+        <div class="table-scroll" style="margin-top:0.6rem;max-height:22rem;overflow-y:auto">
+          <table>
+            <caption>Best available at each of your picks</caption>
+            <thead><tr>
+              <th scope="col" class="num">Rd</th><th scope="col" class="num">Pick</th>
+              <th scope="col">Should be there</th>
+            </tr></thead>
+            <tbody>
+              ${targets
+                .map(
+                  (t) => `<tr>
+                    <td class="num rank">${esc(t.round)}</td>
+                    <td class="num rank">${esc(t.overall)}</td>
+                    <td>${
+                      t.best.length
+                        ? t.best
+                            .map(
+                              (p) => `${esc(p.name)} <small>(${esc(p.position)}${esc(p.positionRank)})</small>`
+                            )
+                            .join(' · ')
+                        : '<span class="stat__note">board exhausted</span>'
+                    }</td>
+                  </tr>`
+                )
+                .join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>`);
+  } else {
+    parts.push(`
+      <div class="card" style="margin-bottom:1.25rem">
+        <h3>Which slot are you drafting from?</h3>
+        <p class="stat__note">
+          Pick your slot and the board will show who should still be available at each of
+          your ${esc(board.rounds ?? 16)} picks. Remembered on this device.
+        </p>
+        <div class="draft-picks" style="margin-top:0.75rem">
+          ${Array.from({ length: board.teamCount }, (_, i) => i + 1)
+            .map(
+              (n) => `<button type="button" class="theme-toggle board-slot" data-slot="${n}"
+                style="width:100%">Slot ${n}</button>`
+            )
+            .join('')}
+        </div>
+      </div>`);
+  }
+
   // --- Controls ----------------------------------------------------------
   const positions = ['ALL', ...POSITIONS_ORDER];
   parts.push(`
@@ -6205,9 +6416,11 @@ function renderBoard() {
             <th scope="col">Player</th>
             <th scope="col">Pos</th>
             <th scope="col" class="num">Tier</th>
+            ${sortable('recommendedPick', 'Take at', 'Where this player should go in a well-run draft')}
+            ${sortable('adp', 'ADP', 'Average draft position across ESPN leagues')}
+            ${sortable('adpVsRecommended', 'Falls', 'How far past his recommended pick the market lets him slide')}
             ${sortable('projected', 'Proj', 'ESPN season projection')}
             ${sortable('vorp', 'VORP', 'Points above the worst starter at this position')}
-            ${sortable('adp', 'ADP', 'Average draft position across ESPN leagues')}
             ${sortable('grade', 'Grade', 'Value versus what the player costs to draft')}
             <th scope="col">${board.draftHeld ? 'Drafted by' : 'Status'}</th>
           </tr>
@@ -6227,9 +6440,15 @@ function renderBoard() {
                 </th>
                 <td>${esc(p.position)}${esc(p.positionRank)}</td>
                 <td class="num">${esc(p.tier)}</td>
+                <td class="num">${
+                  p.recommendedPick === null
+                    ? '<span class="pill pill--neutral">Undraftable</span>'
+                    : `${esc(p.recommendedPick)}<small style="color:var(--text-dim)"> R${esc(p.recommendedRound)}</small>`
+                }</td>
+                <td class="num">${p.adp === null ? '—' : num(p.adp, 1)}</td>
+                <td class="num">${p.adpVsRecommended === null ? '—' : deltaPill(p.adpVsRecommended, 0)}</td>
                 <td class="num">${num(p.projected, 0)}</td>
                 <td class="bar-cell">${bar(p.vorp ?? 0, maxVorp, { digits: 0 })}</td>
-                <td class="num">${p.adp === null ? '—' : num(p.adp, 1)}</td>
                 <td>${gradePill(p.grade)}${p.streamable ? ' <span class="pill pill--warn">Str</span>' : ''}</td>
                 <td>${
                   p.drafted
@@ -6265,14 +6484,26 @@ function renderBoard() {
         boardState.dir = boardState.dir === 'asc' ? 'desc' : 'asc';
       } else {
         boardState.sort = key;
-        // Rank-like columns read best ascending; magnitudes descending.
-        boardState.dir = key === 'valueRank' || key === 'adp' || key === 'grade' ? 'asc' : 'desc';
+        // Rank-like columns read best ascending (pick 1 first); magnitudes and
+        // deltas descending (biggest first).
+        const ascending = ['valueRank', 'adp', 'grade', 'recommendedPick'];
+        boardState.dir = ascending.includes(key) ? 'asc' : 'desc';
       }
       renderBoard();
     });
   }
   $('#board-hide-drafted')?.addEventListener('click', () => {
     boardState.hideDrafted = !boardState.hideDrafted;
+    renderBoard();
+  });
+  for (const btn of body.querySelectorAll('.board-slot')) {
+    btn.addEventListener('click', () => {
+      localStorage.setItem(DRAFT_SLOT_KEY, btn.dataset.slot);
+      renderBoard();
+    });
+  }
+  $('#board-clear-slot')?.addEventListener('click', () => {
+    localStorage.removeItem(DRAFT_SLOT_KEY);
     renderBoard();
   });
 
@@ -7385,7 +7616,7 @@ The only thing standing between "the maths is right" and "the maths runs" — th
 
 ### `tests/analytics.test.mjs`
 
-*788 lines*
+*861 lines*
 
 ```javascript
 /**
@@ -7412,7 +7643,12 @@ import {
 } from '../scripts/lib/analytics.mjs';
 import { computeLedger } from '../scripts/lib/money.mjs';
 import { recommendLineup, coachingReport, waiverTargets } from '../scripts/lib/advisor.mjs';
-import { buildBigBoard, computeReplacementLevels } from '../scripts/lib/bigboard.mjs';
+import {
+  buildBigBoard,
+  computeReplacementLevels,
+  simulateConsensusDraft,
+  picksForSlot,
+} from '../scripts/lib/bigboard.mjs';
 import { normalizeSeason, PHASE } from '../scripts/lib/normalize.mjs';
 import { resolvePosition } from '../scripts/lib/constants.mjs';
 
@@ -8081,6 +8317,74 @@ describe('big board', () => {
     assert.deepEqual(board.players, []);
   });
 
+  test('recommended pick keeps kickers and defences out of the early rounds', () => {
+    // The reason this is a simulation and not just "value rank as a pick
+    // number": VORP rates kickers highly, so a naive mapping would recommend
+    // one in round four. Nobody would follow that.
+    const pool = makePool(SUPERFLEX_SLOTS);
+    const board = buildBigBoard({ ...pool, rounds: 16 }, null, 250);
+    const lateOnly = board.players.filter(
+      (p) => (p.position === 'K' || p.position === 'D/ST') && p.recommendedPick !== null
+    );
+    assert.ok(lateOnly.length > 0, 'some kickers should be draftable');
+    for (const p of lateOnly) {
+      assert.ok(
+        p.recommendedRound >= 15,
+        `${p.name} recommended in round ${p.recommendedRound}, should be 15+`
+      );
+    }
+  });
+
+  test('recommended picks are unique and never exceed the draft', () => {
+    const pool = makePool(SUPERFLEX_SLOTS);
+    const board = buildBigBoard({ ...pool, rounds: 16 }, null, 250);
+    const picks = board.players.map((p) => p.recommendedPick).filter((n) => n !== null);
+    assert.equal(new Set(picks).size, picks.length, 'two players cannot share a pick');
+    assert.ok(Math.max(...picks) <= 16 * 12);
+  });
+
+  test('the consensus draft respects roster capacity', () => {
+    const pool = makePool(SUPERFLEX_SLOTS);
+    const ranked = buildBigBoard({ ...pool, rounds: 16 }, null, 400).players;
+    const result = simulateConsensusDraft(
+      ranked.map((p) => ({ playerId: p.playerId, position: p.position })),
+      { startingSlots: SUPERFLEX_SLOTS, teams: 12, rounds: 16 }
+    );
+    // Rebuild each roster from the pick order and check nobody hoarded.
+    const positionOf = new Map(ranked.map((p) => [p.playerId, p.position]));
+    const rosters = Array.from({ length: 12 }, () => ({}));
+    for (const [playerId, { pick, round }] of result) {
+      const idx = (pick - 1) % 12;
+      const teamIndex = round % 2 === 1 ? idx : 11 - idx;
+      const pos = positionOf.get(playerId);
+      rosters[teamIndex][pos] = (rosters[teamIndex][pos] ?? 0) + 1;
+    }
+    for (const roster of rosters) {
+      assert.ok((roster.K ?? 0) <= 1, 'never more than one kicker');
+      assert.ok((roster['D/ST'] ?? 0) <= 1, 'never more than one defence');
+      assert.ok((roster.QB ?? 0) <= 3, 'superflex allows 2 starters plus a backup');
+      assert.ok((roster.TE ?? 0) <= 3);
+    }
+  });
+
+  test('undraftable players are flagged rather than left blank', () => {
+    const pool = makePool(SUPERFLEX_SLOTS);
+    const board = buildBigBoard({ ...pool, rounds: 16 }, null, 250);
+    const undraftable = board.players.filter((p) => !p.draftable);
+    assert.ok(undraftable.length > 0, 'a 250-deep board exceeds 192 picks');
+    for (const p of undraftable) assert.equal(p.recommendedPick, null);
+  });
+
+  test('snake pick numbers are right for the turn slots', () => {
+    // Slot 1 picks first then waits the longest; slot 12 picks back to back.
+    const first = picksForSlot(1, 12, 4).map((p) => p.overall);
+    assert.deepEqual(first, [1, 24, 25, 48]);
+    const last = picksForSlot(12, 12, 4).map((p) => p.overall);
+    assert.deepEqual(last, [12, 13, 36, 37]);
+    const middle = picksForSlot(6, 12, 3).map((p) => p.overall);
+    assert.deepEqual(middle, [6, 19, 30]);
+  });
+
   test('honours the publish limit', () => {
     const pool = makePool(SUPERFLEX_SLOTS);
     assert.equal(buildBigBoard(pool, null, 50).players.length, 50);
@@ -8332,4 +8636,4 @@ jobs:
 
 ---
 
-*27 files, 8,109 lines.*
+*27 files, 8,413 lines.*
