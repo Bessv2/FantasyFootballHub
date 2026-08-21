@@ -249,21 +249,30 @@ These cookies expire every few months. When `npm run fetch` starts returning
   "buyIn": 50,
   "payouts": {
     "structure": [
-      { "id": "first",    "label": "1st Place",   "pct": 58 },
-      { "id": "second",   "label": "2nd Place",   "pct": 25 },
-      { "id": "third",    "label": "3rd Place",   "pct": 8  },  // ~buy-in back
-      { "id": "sidePots", "label": "Side Prizes", "pct": 9  }
+      { "id": "first",    "label": "1st Place",   "amount": 275 },
+      { "id": "second",   "label": "2nd Place",   "amount": 125 },
+      { "id": "third",    "label": "3rd Place",   "amount": 50  },
+      { "id": "sidePots", "label": "Side Prizes", "remainder": true }
     ]
   }
 }
 ```
 
-Payouts are percentages, so changing the buy-in re-balances everything
-automatically. They must total 100 — the site shows a warning if they don't.
+A slot can be defined three ways:
 
-At `$50 × 12 = $600`, that's **$348 / $150 / $48**, with `$54` for side pots.
-This matches what you described (1st takes most, 2nd less, 3rd roughly their
-buy-in back), but the exact split is yours to set.
+| Field | Behaviour |
+| --- | --- |
+| `"amount": 275` | A fixed sum, unchanged if the pot moves |
+| `"pct": 25` | A share of the pot, rebalances automatically |
+| `"remainder": true` | Whatever is left after the others |
+
+Current league: **10 × $50 = $500**, paying **$275 / $125 / $50** with **$50**
+left for side prizes.
+
+The remainder slot is the useful part. If an eleventh manager joins, the three
+places stay exactly as announced and the side-prize pot grows to $100 — rather
+than every prize shifting by a few dollars. The site warns if the fixed amounts
+exceed the pot, or if nothing absorbs the difference.
 
 Record payments as they come in:
 

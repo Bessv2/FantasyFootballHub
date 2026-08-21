@@ -418,10 +418,83 @@ describe('money ledger', () => {
     assert.equal(ledger.unpaid.length, 11);
   });
 
-  test('warns when payout percentages do not total 100', () => {
+  test('warns when the payouts do not add up to the pot', () => {
     const bad = { ...config, payouts: { structure: [{ id: 'first', label: '1st', pct: 90 }] } };
     const ledger = computeLedger(bad, season, []);
-    assert.ok(ledger.warnings.some((w) => w.includes('not 100')));
+    assert.ok(ledger.warnings.some((w) => w.includes('but the pot is')));
+  });
+
+  test('fixed amounts plus a remainder slot', () => {
+    // What this league actually agreed: 275 / 125 / 50, rest to side prizes.
+    const fixed = {
+      currency: 'USD',
+      buyIn: 50,
+      members: Array.from({ length: 10 }, (_, i) => ({ name: `M${i + 1}`, paid: true })),
+      payouts: {
+        structure: [
+          { id: 'first', label: '1st', amount: 275 },
+          { id: 'second', label: '2nd', amount: 125 },
+          { id: 'third', label: '3rd', amount: 50 },
+          { id: 'sidePots', label: 'Side', remainder: true },
+        ],
+      },
+    };
+    const ledger = computeLedger(fixed, season, []);
+    assert.equal(ledger.expectedPot, 500);
+    const byId = Object.fromEntries(ledger.payouts.map((p) => [p.id, p]));
+    assert.equal(byId.first.amount, 275);
+    assert.equal(byId.second.amount, 125);
+    assert.equal(byId.third.amount, 50);
+    assert.equal(byId.sidePots.amount, 50, 'side prizes take what is left');
+    assert.equal(byId.sidePots.isRemainder, true);
+    assert.equal(
+      ledger.payouts.reduce((a, p) => a + p.amount, 0),
+      500,
+      'the pot must be fully allocated'
+    );
+    assert.deepEqual(ledger.warnings, []);
+    // A percentage is still reported for display even on fixed slots.
+    assert.equal(byId.first.pct, 55);
+  });
+
+  test('the remainder absorbs a change in league size', () => {
+    // An eleventh manager joins: the three places stay put, side prizes grow.
+    // This is the reason for a remainder slot rather than four fixed amounts.
+    const fixed = {
+      currency: 'USD',
+      buyIn: 50,
+      members: Array.from({ length: 11 }, (_, i) => ({ name: `M${i + 1}`, paid: true })),
+      payouts: {
+        structure: [
+          { id: 'first', label: '1st', amount: 275 },
+          { id: 'second', label: '2nd', amount: 125 },
+          { id: 'third', label: '3rd', amount: 50 },
+          { id: 'sidePots', label: 'Side', remainder: true },
+        ],
+      },
+    };
+    const ledger = computeLedger(fixed, season, []);
+    assert.equal(ledger.expectedPot, 550);
+    const side = ledger.payouts.find((p) => p.id === 'sidePots');
+    assert.equal(side.amount, 100, 'the extra buy-in lands in the side pot');
+    assert.deepEqual(ledger.warnings, []);
+  });
+
+  test('warns when fixed payouts exceed the pot', () => {
+    const greedy = {
+      currency: 'USD',
+      buyIn: 50,
+      members: Array.from({ length: 4 }, (_, i) => ({ name: `M${i + 1}`, paid: true })),
+      payouts: {
+        structure: [
+          { id: 'first', label: '1st', amount: 275 },
+          { id: 'sidePots', label: 'Side', remainder: true },
+        ],
+      },
+    };
+    const ledger = computeLedger(greedy, season, []);
+    assert.equal(ledger.expectedPot, 200); // 4 x 50
+    assert.ok(ledger.warnings.some((w) => w.includes('more than the')));
   });
 
   test('a configured member list works before anyone claims an ESPN team', () => {

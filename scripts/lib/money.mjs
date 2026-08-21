@@ -69,18 +69,46 @@ export function computeLedger(moneyConfig, season, standings) {
   const outstanding = round2(expectedPot - collected);
 
   // ---- Payout structure ---------------------------------------------------
+  //
+  // A slot can be defined three ways, so the config can say what the league
+  // actually agreed rather than being forced into one shape:
+  //
+  //   amount: 275      a fixed sum, unchanged if the pot moves
+  //   pct: 25          a share of the pot, rebalances automatically
+  //   remainder: true  whatever is left after the others
+  //
+  // Fixed amounts are what people actually announce ("winner gets 275"), while
+  // a remainder slot means the side-prize pot absorbs any drift rather than
+  // the numbers silently failing to add up.
   const structure = moneyConfig.payouts?.structure ?? [];
-  const pctTotal = structure.reduce((a, s) => a + (Number(s.pct) || 0), 0);
 
-  const payouts = structure.map((slot) => ({
-    id: slot.id,
-    label: slot.label,
-    pct: Number(slot.pct) || 0,
-    note: slot.note ?? null,
-    // Payouts are computed off the full expected pot, not what has been
-    // collected so far — otherwise the numbers move every time someone pays.
-    amount: round2((expectedPot * (Number(slot.pct) || 0)) / 100),
-  }));
+  // Payouts are computed off the full expected pot, not what has been collected
+  // so far, otherwise every prize moves each time somebody pays.
+  const fixedTotal = structure.reduce((a, s) => a + (Number(s.amount) || 0), 0);
+  const pctTotal = structure.reduce((a, s) => a + (Number(s.pct) || 0), 0);
+  const pctAmount = round2((expectedPot * pctTotal) / 100);
+
+  const remainderSlots = structure.filter((s) => s.remainder);
+  const leftOver = round2(expectedPot - fixedTotal - pctAmount);
+  const perRemainder = remainderSlots.length ? round2(leftOver / remainderSlots.length) : 0;
+
+  const payouts = structure.map((slot) => {
+    let amount;
+    if (slot.remainder) amount = perRemainder;
+    else if (slot.amount !== undefined) amount = round2(Number(slot.amount) || 0);
+    else amount = round2((expectedPot * (Number(slot.pct) || 0)) / 100);
+
+    return {
+      id: slot.id,
+      label: slot.label,
+      note: slot.note ?? null,
+      isRemainder: Boolean(slot.remainder),
+      // Share of the pot, whichever way the slot was defined — so the UI can
+      // always show a percentage even for fixed amounts.
+      pct: expectedPot ? Number(((amount / expectedPot) * 100).toFixed(1)) : 0,
+      amount,
+    };
+  });
 
   // ---- Who currently occupies each paying place --------------------------
   const placeOrder = ['first', 'second', 'third'];
@@ -107,8 +135,21 @@ export function computeLedger(moneyConfig, season, standings) {
   if (buyIn <= 0) {
     warnings.push('No buy-in amount set — edit config/money.json to enable the ledger.');
   }
-  if (structure.length && Math.abs(pctTotal - 100) > 0.01) {
-    warnings.push(`Payout percentages total ${pctTotal}%, not 100%. Amounts will be off.`);
+
+  // A remainder slot absorbs any slack, so percentages only need to total 100
+  // when nothing is picking up the difference.
+  const allocated = round2(payouts.reduce((a, p) => a + p.amount, 0));
+  if (structure.length && !remainderSlots.length && Math.abs(allocated - expectedPot) > 0.01) {
+    warnings.push(
+      `Payouts total ${allocated} but the pot is ${expectedPot}. ` +
+        'Adjust the amounts, or mark one slot "remainder": true to absorb the difference.'
+    );
+  }
+  if (leftOver < 0) {
+    warnings.push(
+      `Fixed payouts total ${round2(fixedTotal + pctAmount)}, which is more than the ` +
+        `${expectedPot} pot. Something has to give.`
+    );
   }
   if (collected > expectedPot) {
     warnings.push('More money collected than expected — check for a duplicate payment entry.');

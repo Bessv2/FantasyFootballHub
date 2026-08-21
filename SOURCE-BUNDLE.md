@@ -2,8 +2,8 @@
 
 Every source file in one place, for reading or for handing to a fresh session.
 
-- **Commit:** `53455f2` (2026-08-20 20:55:30 -0400)
-- **Generated:** 2026-08-21T00:56:00.967Z
+- **Commit:** `90464f9` (2026-08-20 20:56:01 -0400)
+- **Generated:** 2026-08-21T01:00:14.841Z
 - **WARNING:** the working tree had uncommitted changes when this was generated, so this may not match any commit.
 - **Regenerate with:** `npm run bundle`
 
@@ -71,7 +71,7 @@ League identity, money rules, and the credentials template. Real credentials liv
 
 ### `config/money.json`
 
-*58 lines*
+*65 lines*
 
 ```json
 {
@@ -98,7 +98,7 @@ League identity, money rules, and the credentials template. Real credentials liv
   "_membersNote": "10 managers, all paid in full. Names are placeholders until teams are claimed — edit them and add teamId as people join.",
   "members": [
     { "name": "Geordon Roe", "teamId": 1, "paid": true, "method": "Cash" },
-    { "name": "Manager 2", "paid": true, "method": "Cash" },
+    { "name": "Anthony Steff", "teamId": 8, "paid": true, "method": "Cash" },
     { "name": "Manager 3", "paid": true, "method": "Cash" },
     { "name": "Manager 4", "paid": true, "method": "Cash" },
     { "name": "Manager 5", "paid": true, "method": "Cash" },
@@ -110,12 +110,19 @@ League identity, money rules, and the credentials template. Real credentials liv
   ],
 
   "payouts": {
-    "_note": "Percentages of the total pot. Must sum to 100. At 10 x $50 = $500 that is $290 / $125 / $40, with $45 for side prizes.",
+    "_note": [
+      "A slot can be a fixed 'amount', a 'pct' share of the pot, or",
+      "'remainder': true to absorb whatever is left.",
+      "",
+      "At 10 x $50 = $500: 275 + 125 + 50 = 450, leaving $50 for side prizes.",
+      "If a manager joins or drops, the three places stay fixed and the side",
+      "prize pot moves — which is usually what a league actually wants."
+    ],
     "structure": [
-      { "id": "first", "label": "1st Place", "pct": 58, "note": "Champion takes the largest share" },
-      { "id": "second", "label": "2nd Place", "pct": 25, "note": "Runner-up" },
-      { "id": "third", "label": "3rd Place", "pct": 8, "note": "Roughly the buy-in back" },
-      { "id": "sidePots", "label": "Side Prizes", "pct": 9, "note": "Weekly high score and season awards" }
+      { "id": "first", "label": "1st Place", "amount": 275, "note": "Champion" },
+      { "id": "second", "label": "2nd Place", "amount": 125, "note": "Runner-up" },
+      { "id": "third", "label": "3rd Place", "amount": 50, "note": "Buy-in back" },
+      { "id": "sidePots", "label": "Side Prizes", "remainder": true, "note": "Weekly high score and season awards" }
     ]
   },
 
@@ -2850,7 +2857,7 @@ export function buildBigBoard(pool, draft = null, limit = 250) {
 
 ### `scripts/lib/money.mjs`
 
-*135 lines*
+*176 lines*
 
 ```javascript
 /**
@@ -2924,18 +2931,46 @@ export function computeLedger(moneyConfig, season, standings) {
   const outstanding = round2(expectedPot - collected);
 
   // ---- Payout structure ---------------------------------------------------
+  //
+  // A slot can be defined three ways, so the config can say what the league
+  // actually agreed rather than being forced into one shape:
+  //
+  //   amount: 275      a fixed sum, unchanged if the pot moves
+  //   pct: 25          a share of the pot, rebalances automatically
+  //   remainder: true  whatever is left after the others
+  //
+  // Fixed amounts are what people actually announce ("winner gets 275"), while
+  // a remainder slot means the side-prize pot absorbs any drift rather than
+  // the numbers silently failing to add up.
   const structure = moneyConfig.payouts?.structure ?? [];
-  const pctTotal = structure.reduce((a, s) => a + (Number(s.pct) || 0), 0);
 
-  const payouts = structure.map((slot) => ({
-    id: slot.id,
-    label: slot.label,
-    pct: Number(slot.pct) || 0,
-    note: slot.note ?? null,
-    // Payouts are computed off the full expected pot, not what has been
-    // collected so far — otherwise the numbers move every time someone pays.
-    amount: round2((expectedPot * (Number(slot.pct) || 0)) / 100),
-  }));
+  // Payouts are computed off the full expected pot, not what has been collected
+  // so far, otherwise every prize moves each time somebody pays.
+  const fixedTotal = structure.reduce((a, s) => a + (Number(s.amount) || 0), 0);
+  const pctTotal = structure.reduce((a, s) => a + (Number(s.pct) || 0), 0);
+  const pctAmount = round2((expectedPot * pctTotal) / 100);
+
+  const remainderSlots = structure.filter((s) => s.remainder);
+  const leftOver = round2(expectedPot - fixedTotal - pctAmount);
+  const perRemainder = remainderSlots.length ? round2(leftOver / remainderSlots.length) : 0;
+
+  const payouts = structure.map((slot) => {
+    let amount;
+    if (slot.remainder) amount = perRemainder;
+    else if (slot.amount !== undefined) amount = round2(Number(slot.amount) || 0);
+    else amount = round2((expectedPot * (Number(slot.pct) || 0)) / 100);
+
+    return {
+      id: slot.id,
+      label: slot.label,
+      note: slot.note ?? null,
+      isRemainder: Boolean(slot.remainder),
+      // Share of the pot, whichever way the slot was defined — so the UI can
+      // always show a percentage even for fixed amounts.
+      pct: expectedPot ? Number(((amount / expectedPot) * 100).toFixed(1)) : 0,
+      amount,
+    };
+  });
 
   // ---- Who currently occupies each paying place --------------------------
   const placeOrder = ['first', 'second', 'third'];
@@ -2962,8 +2997,21 @@ export function computeLedger(moneyConfig, season, standings) {
   if (buyIn <= 0) {
     warnings.push('No buy-in amount set — edit config/money.json to enable the ledger.');
   }
-  if (structure.length && Math.abs(pctTotal - 100) > 0.01) {
-    warnings.push(`Payout percentages total ${pctTotal}%, not 100%. Amounts will be off.`);
+
+  // A remainder slot absorbs any slack, so percentages only need to total 100
+  // when nothing is picking up the difference.
+  const allocated = round2(payouts.reduce((a, p) => a + p.amount, 0));
+  if (structure.length && !remainderSlots.length && Math.abs(allocated - expectedPot) > 0.01) {
+    warnings.push(
+      `Payouts total ${allocated} but the pot is ${expectedPot}. ` +
+        'Adjust the amounts, or mark one slot "remainder": true to absorb the difference.'
+    );
+  }
+  if (leftOver < 0) {
+    warnings.push(
+      `Fixed payouts total ${round2(fixedTotal + pctAmount)}, which is more than the ` +
+        `${expectedPot} pot. Something has to give.`
+    );
   }
   if (collected > expectedPot) {
     warnings.push('More money collected than expected — check for a duplicate payment entry.');
@@ -5456,7 +5504,7 @@ tr.playoff-cut td, tr.playoff-cut th { border-bottom: 2px solid var(--accent); }
 
 ### `docs/assets/app.js`
 
-*1958 lines*
+*1962 lines*
 
 ```javascript
 import { createMockDraft, advanceToUser, makePick, gradeDraft, rosterNeeds } from './mock.js';
@@ -7193,14 +7241,18 @@ function renderMoney() {
   parts.push(`
     <div class="table-scroll" style="margin-bottom:1.5rem">
       <table>
-        <caption>Payout structure — percentages of the full pot</caption>
+        <caption>
+          Payout structure. "Currently" shows who occupies each paying place right now.
+        </caption>
         <thead><tr><th scope="col">Place</th><th scope="col" class="num">Share</th>
           <th scope="col" class="num">Amount</th><th scope="col">Currently</th></tr></thead>
         <tbody>
           ${m.payouts
             .map(
               (p) => `<tr>
-                <th scope="row">${esc(p.label)}</th>
+                <th scope="row">${esc(p.label)}${
+                  p.isRemainder ? ' <span class="pill pill--neutral">Remainder</span>' : ''
+                }</th>
                 <td class="num">${esc(p.pct)}%</td>
                 <td class="num">${esc(money(p.amount, m.currency))}</td>
                 <td>${p.teamName ? esc(p.teamName) : '<span class="stat__note">—</span>'}</td>
@@ -7721,7 +7773,7 @@ The only thing standing between "the maths is right" and "the maths runs" — th
 
 ### `tests/analytics.test.mjs`
 
-*895 lines*
+*968 lines*
 
 ```javascript
 /**
@@ -8144,10 +8196,83 @@ describe('money ledger', () => {
     assert.equal(ledger.unpaid.length, 11);
   });
 
-  test('warns when payout percentages do not total 100', () => {
+  test('warns when the payouts do not add up to the pot', () => {
     const bad = { ...config, payouts: { structure: [{ id: 'first', label: '1st', pct: 90 }] } };
     const ledger = computeLedger(bad, season, []);
-    assert.ok(ledger.warnings.some((w) => w.includes('not 100')));
+    assert.ok(ledger.warnings.some((w) => w.includes('but the pot is')));
+  });
+
+  test('fixed amounts plus a remainder slot', () => {
+    // What this league actually agreed: 275 / 125 / 50, rest to side prizes.
+    const fixed = {
+      currency: 'USD',
+      buyIn: 50,
+      members: Array.from({ length: 10 }, (_, i) => ({ name: `M${i + 1}`, paid: true })),
+      payouts: {
+        structure: [
+          { id: 'first', label: '1st', amount: 275 },
+          { id: 'second', label: '2nd', amount: 125 },
+          { id: 'third', label: '3rd', amount: 50 },
+          { id: 'sidePots', label: 'Side', remainder: true },
+        ],
+      },
+    };
+    const ledger = computeLedger(fixed, season, []);
+    assert.equal(ledger.expectedPot, 500);
+    const byId = Object.fromEntries(ledger.payouts.map((p) => [p.id, p]));
+    assert.equal(byId.first.amount, 275);
+    assert.equal(byId.second.amount, 125);
+    assert.equal(byId.third.amount, 50);
+    assert.equal(byId.sidePots.amount, 50, 'side prizes take what is left');
+    assert.equal(byId.sidePots.isRemainder, true);
+    assert.equal(
+      ledger.payouts.reduce((a, p) => a + p.amount, 0),
+      500,
+      'the pot must be fully allocated'
+    );
+    assert.deepEqual(ledger.warnings, []);
+    // A percentage is still reported for display even on fixed slots.
+    assert.equal(byId.first.pct, 55);
+  });
+
+  test('the remainder absorbs a change in league size', () => {
+    // An eleventh manager joins: the three places stay put, side prizes grow.
+    // This is the reason for a remainder slot rather than four fixed amounts.
+    const fixed = {
+      currency: 'USD',
+      buyIn: 50,
+      members: Array.from({ length: 11 }, (_, i) => ({ name: `M${i + 1}`, paid: true })),
+      payouts: {
+        structure: [
+          { id: 'first', label: '1st', amount: 275 },
+          { id: 'second', label: '2nd', amount: 125 },
+          { id: 'third', label: '3rd', amount: 50 },
+          { id: 'sidePots', label: 'Side', remainder: true },
+        ],
+      },
+    };
+    const ledger = computeLedger(fixed, season, []);
+    assert.equal(ledger.expectedPot, 550);
+    const side = ledger.payouts.find((p) => p.id === 'sidePots');
+    assert.equal(side.amount, 100, 'the extra buy-in lands in the side pot');
+    assert.deepEqual(ledger.warnings, []);
+  });
+
+  test('warns when fixed payouts exceed the pot', () => {
+    const greedy = {
+      currency: 'USD',
+      buyIn: 50,
+      members: Array.from({ length: 4 }, (_, i) => ({ name: `M${i + 1}`, paid: true })),
+      payouts: {
+        structure: [
+          { id: 'first', label: '1st', amount: 275 },
+          { id: 'sidePots', label: 'Side', remainder: true },
+        ],
+      },
+    };
+    const ledger = computeLedger(greedy, season, []);
+    assert.equal(ledger.expectedPot, 200); // 4 x 50
+    assert.ok(ledger.warnings.some((w) => w.includes('more than the')));
   });
 
   test('a configured member list works before anyone claims an ESPN team', () => {
@@ -8775,4 +8900,4 @@ jobs:
 
 ---
 
-*27 files, 8,552 lines.*
+*27 files, 8,677 lines.*

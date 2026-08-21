@@ -1732,14 +1732,18 @@ function renderMoney() {
   parts.push(`
     <div class="table-scroll" style="margin-bottom:1.5rem">
       <table>
-        <caption>Payout structure — percentages of the full pot</caption>
+        <caption>
+          Payout structure. "Currently" shows who occupies each paying place right now.
+        </caption>
         <thead><tr><th scope="col">Place</th><th scope="col" class="num">Share</th>
           <th scope="col" class="num">Amount</th><th scope="col">Currently</th></tr></thead>
         <tbody>
           ${m.payouts
             .map(
               (p) => `<tr>
-                <th scope="row">${esc(p.label)}</th>
+                <th scope="row">${esc(p.label)}${
+                  p.isRemainder ? ' <span class="pill pill--neutral">Remainder</span>' : ''
+                }</th>
                 <td class="num">${esc(p.pct)}%</td>
                 <td class="num">${esc(money(p.amount, m.currency))}</td>
                 <td>${p.teamName ? esc(p.teamName) : '<span class="stat__note">—</span>'}</td>
