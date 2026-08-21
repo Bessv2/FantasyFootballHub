@@ -7,13 +7,24 @@ Nothing here talks to ESPN from the browser (their API sends no CORS headers, so
 it can't). Instead a Node script pulls the data down, a build step computes every
 statistic ahead of time, and the site just renders the results.
 
+> **Coming back to this later?** Read **[HANDOFF.md](HANDOFF.md)** first — the
+> architecture, the ESPN API traps that each cost real debugging time, the
+> decisions that look wrong until explained, and an honest line between what is
+> verified and what is merely assumed. None of it is inferable from the code.
+>
+> **[SOURCE-BUNDLE.md](SOURCE-BUNDLE.md)** is the entire codebase in one file,
+> for reading end to end or handing to a fresh session. Refresh it with
+> `npm run bundle`, and check its commit SHA before trusting it.
+
 ```
 npm run check     # verify config + cookies + connectivity
 npm run fetch     # pull the latest from ESPN  -> data/raw/
 npm run build     # compute everything         -> docs/data/
 npm run serve     # preview at http://localhost:4173
-npm run update    # fetch + build in one go (what you'll run weekly)
+npm run update    # fetch + build in one go
+npm run ship      # fetch + build + commit + push (the weekly one-liner)
 npm test          # verify the analytics math
+npm run bundle    # regenerate SOURCE-BUNDLE.md
 ```
 
 ---
