@@ -285,6 +285,7 @@ export function computePrizes(season, teamStats, teamWeeks) {
     teamStats.find((t) => t.teamId === teamId)?.teamName ?? `Team ${teamId}`;
   const managerOf = (teamId) =>
     teamStats.find((t) => t.teamId === teamId)?.managerName ?? null;
+  const logoOf = (teamId) => teamStats.find((t) => t.teamId === teamId)?.logo ?? null;
 
   if (teamWeeks.length === 0) return prizes;
 
@@ -295,6 +296,7 @@ export function computePrizes(season, teamStats, teamWeeks) {
           teamId: row.teamId,
           teamName: nameOf(row.teamId),
           managerName: managerOf(row.teamId),
+          logo: logoOf(row.teamId),
           week: row.week,
           value,
           detail,
@@ -412,6 +414,7 @@ export function computePrizes(season, teamStats, teamWeeks) {
       teamId: bestPlayer?.teamId,
       teamName: bestPlayer ? nameOf(bestPlayer.teamId) : null,
       managerName: bestPlayer ? managerOf(bestPlayer.teamId) : null,
+      logo: bestPlayer ? logoOf(bestPlayer.teamId) : null,
       week: bestPlayer?.week,
       value: bestPlayer?.points,
       detail: bestPlayer
@@ -424,6 +427,7 @@ export function computePrizes(season, teamStats, teamWeeks) {
       teamId: worstStart?.teamId,
       teamName: worstStart ? nameOf(worstStart.teamId) : null,
       managerName: worstStart ? managerOf(worstStart.teamId) : null,
+      logo: worstStart ? logoOf(worstStart.teamId) : null,
       week: worstStart?.week,
       value: worstStart?.points,
       detail: worstStart
@@ -442,6 +446,7 @@ export function computePrizes(season, teamStats, teamWeeks) {
         teamId: w.teamId,
         teamName: w.teamName,
         managerName: w.managerName,
+        logo: w.logo ?? null,
         week: null,
         value: format(w).value,
         detail: format(w).detail,
@@ -554,6 +559,7 @@ export function computeWeeklyHighScores(teamWeeks, teamStats) {
         teamId: top.teamId,
         teamName: team?.teamName ?? `Team ${top.teamId}`,
         managerName: team?.managerName ?? null,
+        logo: team?.logo ?? null,
         score: top.score,
       };
     });

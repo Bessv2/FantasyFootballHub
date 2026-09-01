@@ -38,9 +38,11 @@ const SECTIONS = [
     files: [
       'scripts/lib/lineup.mjs',
       'scripts/lib/analytics.mjs',
+      'scripts/lib/challenges.mjs',
       'scripts/lib/draft.mjs',
       'scripts/lib/advisor.mjs',
       'scripts/lib/bigboard.mjs',
+      'scripts/lib/images.mjs',
       'scripts/lib/money.mjs',
     ],
   },
@@ -65,7 +67,7 @@ const SECTIONS = [
   {
     title: 'Tests',
     blurb: 'The only thing standing between "the maths is right" and "the maths runs" — the league has no real data until the Sept 5 2026 draft.',
-    files: ['tests/analytics.test.mjs'],
+    files: ['tests/analytics.test.mjs', 'tests/challenges.test.mjs', 'tests/images.test.mjs'],
   },
   {
     title: 'Automation',

@@ -37,6 +37,7 @@
           <li data-nav="board" hidden><a href="#board" data-view="board">Big Board</a></li>
           <li data-nav="mock" hidden><a href="#mock" data-view="mock">Mock Draft</a></li>
           <li><a href="#trades" data-view="trades">Trades</a></li>
+          <li><a href="#challenges" data-view="challenges">Challenges</a></li>
           <li><a href="#prizes" data-view="prizes">Prizes</a></li>
           <li data-nav="money" hidden><a href="#money" data-view="money">Money</a></li>
         </ul>
@@ -115,6 +116,18 @@
         <h2 id="h-trades">Trades &amp; Transactions</h2>
         <p class="view__intro">Every completed trade, plus waiver and free-agent activity.</p>
         <div id="trades-body"></div>
+      </section>
+
+      <section class="view" id="view-challenges" hidden aria-labelledby="h-challenges">
+        <h2 id="h-challenges">Weekly Challenges</h2>
+        <p class="view__intro">
+          One challenge is drawn at random for each week of the regular season, and it pays
+          cash. The draw is <strong>seeded and dealt once</strong> — no challenge repeats, and
+          none of them can change after the games are played. Future weeks stay sealed until
+          the week they are played, so there is something to find out every Sunday even if
+          your season is over.
+        </p>
+        <div id="challenges-body"></div>
       </section>
 
       <section class="view" id="view-prizes" hidden aria-labelledby="h-prizes">

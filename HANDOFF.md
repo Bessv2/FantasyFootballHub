@@ -22,8 +22,10 @@ the way they are.
 | Season | 13 regular-season weeks, 8 playoff teams |
 | Draft | **Sat 5 Sept 2026, 4:00 PM ET** (room opens 3:00 PM) |
 | Trade deadline | 2 Dec 2026 |
-| Managers | **10 committed, all paid $50** as of 21 Aug 2026. ESPN size changed 12 -> 10. Most have not claimed their ESPN team yet. |
-| Tests | 58, all passing |
+| Managers | **10 committed.** ESPN size changed 12 -> 10. Most have not claimed their ESPN team yet. |
+| Buy-in | **$75** (was $50). Payouts **350 / 130 / 75** + **$195** funding weekly challenges at $15/wk. |
+| Money owed | Everyone paid **$50** under the old buy-in. The ledger shows each of them **$25 short** until somebody confirms otherwise — see below. |
+| Tests | 112, all passing |
 | Automation | GitHub Actions, daily 11:00 UTC — **verified working**, it has pushed real commits |
 
 The league had no rosters, no picks and no games at time of writing. Every
@@ -224,6 +226,58 @@ dishonest; the flag says what is known and what is not.
 **The countdown is `aria-hidden` with a static sentence behind it.** A value
 announced every second is unusable with a screen reader.
 
+**The weekly challenge draw is seeded, and that is load-bearing.** The schedule
+is a Fisher-Yates shuffle over `CHALLENGE_DECK` driven by mulberry32 seeded on
+`roe-challenge:{leagueId}:{season}{:salt}`. `Math.random()` here would not be a
+style problem — the build runs daily, *after* the games, so a non-reproducible
+draw would silently re-pick Week 4's challenge with Week 4's results already
+known. That is indistinguishable from rigging it. `tests/challenges.test.mjs`
+pins reproducibility; do not "simplify" those tests away, and do not swap the
+generator for something whose output varies across Node versions.
+
+**Challenges are dealt without replacement, in packs.** Nothing repeats inside a
+season. If a season ever ran longer than the 23-card deck, the deck reshuffles
+and deals again — with a *different* shuffle, so the second pass is not a rerun
+of the first in the same order.
+
+**Future challenges are sealed, and a sealed week emits `label: null`.** Not
+hidden with CSS — the payload genuinely does not contain the answer, because
+"hidden" in a static site means "in the JSON anyone can open". The current week
+is always revealed: you cannot play for a target you don't know.
+
+**The challenge payout is computed twice, from one function.** `docs/data/money.json`
+is gitignored, so the ledger never reaches the public site — but the league still
+has to see what this week is worth. So `build.mjs` computes the amounts for the
+public payload and `computeLedger` computes them for the private one, both via
+`computePayouts()` + `splitPot()` in `money.mjs`. Two implementations would
+eventually disagree, and the week they disagreed would be the week somebody got
+paid the wrong number.
+
+**`splitPot` works in whole cents.** $195 over 13 weeks is a clean $15, but the
+remainder slot moves whenever the league size changes — $200 over 13 rounds to
+$15.38, which totals $199.94. The leftover cents go to the earliest weeks so the
+parts always add back up to the whole.
+
+**Photos are hotlinked, and `sanitizeTeamLogo()` is a security control, not
+tidiness.** Headshots come from `a.espncdn.com/i/headshots/nfl/players/full/{id}.png`
+and D/ST gets its NFL team's shield instead, because a defence has a real
+`playerId` whose headshot URL builds fine and then 404s forever. Fantasy team
+logos are different: `team.logo` is a URL ESPN hands back, and ESPN's classic UI
+lets a manager paste in *any* URL. Rendering it unchecked would let one manager
+point every visitor's browser at a server of their choosing and harvest the IP
+and user-agent of everyone in the league. So logos are filtered against
+`ESPN_IMAGE_HOSTS` at build time, `docs/_headers` names the same hosts in
+`img-src`, and a test asserts the two lists match — widening one without the
+other either breaks every image or removes the guard, and neither announces
+itself.
+
+**The image error handler is a single capture-phase listener, not `onerror=`.**
+An inline `onerror` attribute needs `script-src 'unsafe-inline'`, which is the
+one CSP relaxation this app refuses to make. `error` does not bubble from
+`<img>`, hence capture phase. The monogram underneath is always rendered, so a
+404 hides the `<img>` and reveals what was already there — no layout shift, no
+broken-image icon.
+
 **Draft value is measured inside the draft itself** — rank every drafted player
 by points actually scored, compare to where they were taken. No external ADP
 feed needed, self-normalising, and it answers the question people actually argue
@@ -240,7 +294,9 @@ league, the player pool, free agents with projections, the superflex-ranked
 draft board, league settings, phase detection.
 
 **Verified only against synthetic fixtures** (`npm run fixtures`): every
-analytics engine, the advisor, draft grading, prizes, the money ledger.
+analytics engine, the advisor, draft grading, prizes, the money ledger, and
+every one of the 23 weekly challenges — a fixtures build settles all of them and
+each was checked to produce a sane winner and detail line.
 `fixtures.mjs` generates a deterministic full 12-team season — draft, 14 weeks
 of box scores, deliberately imperfect lineups, trades, waivers — and runs it
 through the real pipeline.
@@ -259,9 +315,14 @@ documented API and on `espn-api`'s behaviour, not observed here.
 ## Draft day runbook — 5 Sept 2026
 
 **Before:**
-- Confirm all 12 managers have joined (`npm run check`, or the Overview page)
-- Set the real buy-in in `config/money.json` — it is still a `$50` placeholder
-- Agree which of the 18 side prizes actually pay out
+- Confirm all 10 managers have joined (`npm run check`, or the Overview page)
+- Collect the **$25 difference** from the buy-in going $50 -> $75, then update
+  `config/money.json`
+- Agree the weekly challenge rules — the deck, the $15/week, and that the draw
+  is fixed once the season starts. Change `weeklyChallenge.salt` now if anyone
+  wants a reshuffle; **never** after Week 1
+- Agree which of the 18 season prizes actually pay out (they are bragging
+  rights now that the cash funds the weekly challenges)
 - Run a few reps of `#mock` — the board auto-refreshes daily, so it tracks the
   real market as the date approaches
 
@@ -283,11 +344,25 @@ and the coaching report all light up on their own.
 
 ## Known gaps / next steps
 
+- **The $25 buy-in difference is unreconciled.** The buy-in went from $50 to
+  $75 after all ten managers had already paid $50. `config/money.json` records
+  what is actually known — `amountPaid: 50` each — so the ledger shows $250
+  outstanding. If everyone has since settled up, change those to
+  `"paid": true` and the ledger balances. **Do not mark them paid to make the
+  warning go away**; the whole point of the ledger is that it says what is true.
 - **Manager real names are public** on the site (pulled from ESPN member
   profiles). Never resolved with the owner. If it matters, render team names and
   ESPN display names only — the change is confined to `normalizeTeams()`.
-- **Buy-in is still a `$50` placeholder.** Payouts are percentage-based so they
-  re-balance automatically once the real number is set.
+- **Challenge payouts are not tracked as paid.** Winners are computed, but
+  settling one means adding a row to `payoutsPaid` in `config/money.json` by
+  hand. A `payoutsPaid` entry keyed to a challenge week would close the loop.
+- **Nothing verifies an ESPN headshot exists** before rendering it. The fallback
+  handles it, but a player ESPN has no photo of shows initials with no
+  indication of why. That is the right behaviour; it is only worth noting so a
+  future session does not treat it as a bug.
+- **Challenge cadence is weekly-or-biweekly only.** `buildChallengeSchedule`
+  takes a `step`, so "every third week" is a one-line change, but the config
+  vocabulary does not expose it.
 - **No playoff odds simulation.** The scaffolding is there (`computeAllPlay`,
   schedule data) but a Monte Carlo over the remaining schedule was never built.
 - **Trade analysis is descriptive only.** It lists what moved; it does not
