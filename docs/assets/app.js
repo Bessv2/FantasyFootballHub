@@ -21,7 +21,7 @@ import { createMockDraft, advanceToUser, makePick, gradeDraft, rosterNeeds } fro
 const ALL_VIEWS = ['overview', 'standings', 'teams', 'team', 'draft', 'board', 'mock', 'trades', 'challenges', 'prizes', 'money'];
 let VIEWS = ALL_VIEWS.filter((v) => v !== 'money' && v !== 'mock' && v !== 'board');
 
-const state = { hub: null, season: null, draft: null, money: null, teamDetail: null, draftPool: null, bigBoard: null };
+const state = { hub: null, season: null, draft: null, money: null, teamDetail: null, draftPool: null, bigBoard: null, playerCards: null };
 let countdownTimer = null;
 
 /** Which team the visitor has claimed as theirs, remembered across visits. */
@@ -166,14 +166,31 @@ function avatar(src, name, { variant = 'player', size = null } = {}) {
   </span>`;
 }
 
-/** A player's picture next to their name — the shape used in every table. */
-const playerCell = (player, sub = null) => `
+/**
+ * A player's picture next to their name — the shape used in every table.
+ *
+ * When a card exists for this player the name becomes a <button>, which is what
+ * makes the card reachable by keyboard and tappable on a phone rather than
+ * hover-only. Players with no card stay plain text: a control that opens
+ * nothing is worse than no control.
+ */
+const playerCell = (player, sub = null) => {
+  const label = esc(player?.name ?? '—');
+  const tail = sub === null ? '' : `<small>${esc(sub)}</small>`;
+  const name = hasCard(player?.playerId)
+    ? `<button type="button" class="pcard-trigger"
+         data-player-id="${esc(player.playerId)}"
+         data-player-name="${esc(player.name ?? '')}"
+         data-player-pos="${esc(player.position ?? '')}"
+         data-player-team="${esc(player.proTeam ?? '')}"
+         aria-describedby="player-card" aria-expanded="false">${label}</button>`
+    : label;
+  return `
   <span class="named">
     ${avatar(playerImage(player), player?.name, { variant: 'player' })}
-    <span class="named__text">${esc(player?.name ?? '—')}${
-      sub === null ? '' : `<small>${esc(sub)}</small>`
-    }</span>
+    <span class="named__text">${name}${tail}</span>
   </span>`;
+};
 
 /** A fantasy team's logo next to its name. */
 const teamCell = (team, sub = null, href = null) => {
@@ -185,6 +202,225 @@ const teamCell = (team, sub = null, href = null) => {
     }${sub === null ? '' : `<small>${esc(sub)}</small>`}</span>`;
   return `<span class="named">${inner}</span>`;
 };
+
+// --- Player cards ----------------------------------------------------------
+//
+// Hover a player to see last season's production, their injury status and any
+// news. Three interaction notes, none of them optional:
+//
+//   Hover is not enough. This site is meant to be opened on a phone — the
+//   README says so — and a phone has no hover. So the same card opens on tap,
+//   and closes on the next tap outside it.
+//
+//   Keyboard users get it too. The trigger is a <button>, so it is focusable
+//   and the card opens on focus and closes on Escape. A div with a mouseover
+//   handler would have shipped this feature to two-thirds of the ways people
+//   read a web page.
+//
+//   One card element, moved and refilled. Rendering 250 popovers into the Big
+//   Board and hiding them would put a quarter of a megabyte of hidden DOM on
+//   the page for the one card anybody looks at.
+
+const STAT_LINES = {
+  QB: [['passingYards', 'Pass yds'], ['passingTouchdowns', 'Pass TD'], ['passingInterceptions', 'INT'],
+       ['rushingYards', 'Rush yds'], ['rushingTouchdowns', 'Rush TD']],
+  RB: [['rushingAttempts', 'Carries'], ['rushingYards', 'Rush yds'], ['rushingTouchdowns', 'Rush TD'],
+       ['receptions', 'Rec'], ['receivingYards', 'Rec yds'], ['receivingTouchdowns', 'Rec TD']],
+  WR: [['receivingTargets', 'Targets'], ['receptions', 'Rec'], ['receivingYards', 'Rec yds'],
+       ['receivingTouchdowns', 'Rec TD'], ['rushingYards', 'Rush yds']],
+  TE: [['receivingTargets', 'Targets'], ['receptions', 'Rec'], ['receivingYards', 'Rec yds'],
+       ['receivingTouchdowns', 'Rec TD']],
+  K: [['madeFieldGoalsFromUnder40', 'FG <40'], ['madeFieldGoalsFrom40To49', 'FG 40-49'],
+      ['madeFieldGoalsFrom50Plus', 'FG 50+'], ['missedFieldGoals', 'Missed'], ['madeExtraPoints', 'XP']],
+  'D/ST': [['defensiveSacks', 'Sacks'], ['defensiveInterceptions', 'INT'], ['defensiveFumbles', 'Fum rec'],
+           ['defensivePointsAllowed', 'Pts allowed'], ['defensiveYardsAllowed', 'Yds allowed']],
+};
+
+let cardEl = null;
+let cardOwner = null;
+
+/** "3 days ago" — news that cannot say when it is from is news you cannot use. */
+function timeAgo(iso) {
+  if (!iso) return null;
+  const then = new Date(iso);
+  if (Number.isNaN(then.getTime())) return null;
+  const mins = Math.round((Date.now() - then.getTime()) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  return days === 1 ? 'yesterday' : `${days}d ago`;
+}
+
+function cardHtml(player, card) {
+  const parts = [];
+
+  parts.push(`<p class="pcard__name">${esc(player.name)}
+    <span class="pcard__meta">${esc(player.position ?? '')}${
+      player.proTeam ? ` · ${esc(player.proTeam)}` : ''
+    }</span></p>`);
+
+  if (card.injury && card.injury !== 'Active') {
+    parts.push(`<p class="pcard__injury"><span class="pill pill--warn">${esc(card.injury)}</span></p>`);
+  }
+
+  const prior = card.lastSeason;
+  const line = prior ? (STAT_LINES[player.position] ?? []).filter(([k]) => prior.stats[k] != null) : [];
+
+  if (line.length) {
+    parts.push(`<p class="pcard__heading">${esc(prior.season)} season${
+      prior.fantasyPoints != null ? ` · ${esc(num(prior.fantasyPoints, 1))} fantasy pts` : ''
+    }</p>`);
+    parts.push(`<dl class="pcard__stats">${line
+      .map(([key, label]) => `<div><dt>${esc(label)}</dt><dd>${esc(num(prior.stats[key], 0))}</dd></div>`)
+      .join('')}</dl>`);
+  } else {
+    parts.push(`<p class="pcard__empty">No ${esc(state.playerCards?.priorSeason ?? 'prior')} stats — rookie, or did not play.</p>`);
+  }
+
+  if (card.news?.length) {
+    parts.push('<p class="pcard__heading">Latest news</p>');
+    parts.push(`<ul class="pcard__news">${card.news
+      .map((item) => {
+        const when = timeAgo(item.published);
+        return `<li>${esc(item.headline)}${
+          when ? `<small>${esc(when)}${item.source ? ` · ${esc(item.source)}` : ''}</small>` : ''
+        }</li>`;
+      })
+      .join('')}</ul>`);
+  }
+
+  return parts.join('');
+}
+
+function positionCard(trigger) {
+  const rect = trigger.getBoundingClientRect();
+  const width = cardEl.offsetWidth;
+  const height = cardEl.offsetHeight;
+  const margin = 8;
+
+  // Below the name by default, above it when there is no room — a card that
+  // opens off the bottom of a phone screen is a card nobody reads.
+  let top = rect.bottom + window.scrollY + 6;
+  if (rect.bottom + height + margin > window.innerHeight && rect.top - height - margin > 0) {
+    top = rect.top + window.scrollY - height - 6;
+  }
+
+  let left = rect.left + window.scrollX;
+  const maxLeft = window.scrollX + document.documentElement.clientWidth - width - margin;
+  left = Math.max(window.scrollX + margin, Math.min(left, maxLeft));
+
+  cardEl.style.top = `${Math.round(top)}px`;
+  cardEl.style.left = `${Math.round(left)}px`;
+}
+
+function showCard(trigger) {
+  if (cardOwner === trigger && !cardEl.hidden) return;
+  const id = Number(trigger.dataset.playerId);
+  const card = state.playerCards?.cards?.[id];
+  if (!card) return;
+
+  const player = {
+    name: trigger.dataset.playerName ?? '',
+    position: trigger.dataset.playerPos ?? '',
+    proTeam: trigger.dataset.playerTeam ?? '',
+  };
+
+  cardEl.innerHTML = cardHtml(player, card);
+  cardEl.hidden = false;
+  positionCard(trigger);
+  trigger.setAttribute('aria-expanded', 'true');
+  cardOwner = trigger;
+}
+
+function hideCard() {
+  if (!cardEl || cardEl.hidden) return;
+  cardEl.hidden = true;
+  cardOwner?.setAttribute('aria-expanded', 'false');
+  cardOwner = null;
+}
+
+/**
+ * One set of listeners on the document, delegated, so cards keep working on
+ * content rendered after boot — every view replaces its own innerHTML, and
+ * per-element listeners would die with it.
+ */
+function initPlayerCards() {
+  cardEl = document.createElement('div');
+  cardEl.className = 'pcard';
+  cardEl.id = 'player-card';
+  cardEl.setAttribute('role', 'tooltip');
+  cardEl.hidden = true;
+  document.body.appendChild(cardEl);
+
+  const triggerFor = (target) => target?.closest?.('[data-player-id]');
+  const insideCard = (target) => Boolean(target?.closest?.('.pcard'));
+
+  // Was the last thing the user did a pointer action? Focus follows a tap or a
+  // click as well as a Tab key, and without knowing which, the focus handler
+  // fights the click handler: the tap focuses the button (card opens), then the
+  // click toggles it (card closes), and a phone user sees nothing at all.
+  let pointerIntent = false;
+  document.addEventListener('pointerdown', () => { pointerIntent = true; }, true);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Tab') pointerIntent = false; }, true);
+
+  // Enter and leave are both decided here rather than with a matching
+  // pointerout handler. pointerout fires while the pointer is still logically
+  // over the trigger — crossing between the button and the card counts as
+  // leaving — which closed the card the instant it opened. Since every element
+  // fires pointerover, "the pointer is now over something that is neither a
+  // trigger nor the card" is a complete and much less fragile leave condition.
+  document.addEventListener('pointerover', (e) => {
+    if (e.pointerType === 'touch') return;
+    const trigger = triggerFor(e.target);
+    if (trigger) showCard(trigger);
+    else if (!insideCard(e.target)) hideCard();
+  });
+
+  document.addEventListener('click', (e) => {
+    const trigger = triggerFor(e.target);
+    if (!trigger) {
+      if (!insideCard(e.target)) hideCard();
+      return;
+    }
+    e.preventDefault();
+    // On touch this is the only way in, so it toggles. The focus that arrived
+    // with the same tap has already been ignored, so `cardOwner` here really
+    // does mean "this card was open before you tapped".
+    if (cardOwner === trigger) hideCard();
+    else showCard(trigger);
+  });
+
+  document.addEventListener('focusin', (e) => {
+    if (pointerIntent) return;
+    const trigger = triggerFor(e.target);
+    if (trigger) showCard(trigger);
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      const owner = cardOwner;
+      hideCard();
+      owner?.focus();
+    }
+  });
+
+  // No scroll handler on purpose. The card is positioned in *document*
+  // coordinates (the scroll offset is baked into top/left at open time), so it
+  // scrolls with its trigger and stays glued to the right name for free.
+  // Closing on scroll instead looks reasonable and is not: anything that
+  // scrolls the page while opening — a browser bringing a focused element into
+  // view, a tap near the bottom of a phone screen — dismisses the card the
+  // instant it appears.
+  //
+  // Resize is different: it reflows the page, so the coordinates the card was
+  // given no longer point at anything.
+  window.addEventListener('resize', hideCard);
+}
+
+/** Whether this player has a card worth opening. */
+const hasCard = (playerId) => Boolean(state.playerCards?.cards?.[Number(playerId)]);
 
 function emptyState(icon, title, message) {
   return `<div class="empty">
@@ -1646,7 +1882,16 @@ function renderDraft() {
                   p.playerName,
                   { variant: 'player', size: 44 }
                 )}
-                <span class="pick__player">${esc(p.playerName)}</span>
+                <span class="pick__player">${
+                  hasCard(p.playerId)
+                    ? `<button type="button" class="pcard-trigger"
+                         data-player-id="${esc(p.playerId)}"
+                         data-player-name="${esc(p.playerName)}"
+                         data-player-pos="${esc(p.position)}"
+                         data-player-team="${esc(p.proTeam)}"
+                         aria-describedby="player-card" aria-expanded="false">${esc(p.playerName)}</button>`
+                    : esc(p.playerName)
+                }</span>
                 <span class="pick__meta">${esc(p.position)} · ${esc(p.proTeam)}</span><br>
                 <span class="pick__meta">${esc(p.teamName)}</span>
                 ${draft.hasResults ? `<br>${deltaPill(p.valueDelta, 0)}` : ''}
@@ -2112,13 +2357,14 @@ function initTheme() {
 async function boot() {
   initTheme();
   initImageFallbacks();
+  initPlayerCards();
 
   try {
     const hub = await loadJson('data/hub.json');
     state.hub = hub;
 
     const year = hub.league.season ?? hub.seasons?.[hub.seasons.length - 1];
-    const [season, draft, teamDetail, draftPool, bigBoard, ledger] = await Promise.all([
+    const [season, draft, teamDetail, draftPool, bigBoard, ledger, playerCards] = await Promise.all([
       loadJson(`data/season-${year}.json`).catch(() => null),
       loadJson(`data/draft-${year}.json`).catch(() => null),
       loadJson(`data/teams-${year}.json`).catch(() => null),
@@ -2126,6 +2372,9 @@ async function boot() {
       loadJson(`data/bigboard-${year}.json`).catch(() => null),
       // Absent on the published site by design — the ledger is never uploaded.
       loadJson('data/money.json').catch(() => null),
+      // Hover cards. Optional: an older build has no such file, and every
+      // player name simply stays plain text.
+      loadJson(`data/players-${year}.json`).catch(() => null),
     ]);
     state.season = season;
     state.draft = draft;
@@ -2133,6 +2382,7 @@ async function boot() {
     state.draftPool = draftPool;
     state.bigBoard = bigBoard;
     state.money = ledger;
+    state.playerCards = playerCards;
     syncMyTeamNav();
 
     if (bigBoard?.available) {

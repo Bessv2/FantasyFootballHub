@@ -40,6 +40,7 @@ section fills in on its own schedule:
 | Section | Unlocks |
 | --- | --- |
 | Money | **Now** — set the buy-in and start tracking payments |
+| Player cards | After one `npm run update` — needs a fetch to build |
 | Challenges | **Now** — Week 1's challenge is drawn; the rest stay sealed |
 | Prizes (catalogue) | **Now** — see the 18 prizes so you can agree rules early |
 | Teams | As managers claim their spots |
@@ -219,6 +220,56 @@ To add a challenge of your own, append to `CHALLENGE_DECK` in
 English, a function that scores one team's week (highest wins, `null` means
 "did not qualify"), and a function that explains the number. It can only read
 what the box score proves.
+
+## Player cards
+
+Hover any player name — on the Big Board, a roster, the draft board or the mock
+draft — and a card shows **last season's real production**, their **injury
+status**, and any **news**.
+
+| | |
+| --- | --- |
+| **Stat line** | Position-appropriate: a quarterback gets passing yards, TDs and picks; a running back gets carries and receptions; a kicker gets field goals by distance. A field with no data is left out rather than printed as a zero — "0 rushing TDs" and "we have no rushing data" look identical on screen and are not the same claim. |
+| **Injury** | Only shown when it is not "Active", so the card stays quiet for healthy players. |
+| **News** | Up to three headlines, newest first, **each stamped with its age**. |
+
+### It is not hover-only
+
+Hover alone would have shipped this to whoever happens to be at a desk. The same
+card opens on **tap** (this site is meant to be read on a phone) and on
+**keyboard focus**, and closes on Escape with focus returned to the name you
+came from. Player names with a card are `<button>`s for exactly that reason;
+players with nothing to show stay plain text, because a control that opens
+nothing is worse than no control.
+
+### About the news timestamps
+
+The site rebuilds once a day. Last season's stat line is as true tomorrow as it
+is today, but **an injury note is the most perishable thing in fantasy
+football** — "limited in practice" is worth nothing by Sunday afternoon. So
+every headline carries its own age ("3h ago", "yesterday") rather than being
+presented as current. Stale news that admits it is stale is useful; stale news
+wearing a confident face is worse than none, because somebody starts a player
+who was ruled out that morning.
+
+**Treat the card as background, not as a start/sit source.** For a live inactive
+list, check ESPN.
+
+### Where the data comes from
+
+Stats and injury status were **already in ESPN's payload** — the build was
+keeping only the fantasy-point total and discarding the per-stat breakdown
+sitting next to it. That part costs no extra requests.
+
+News is a separate endpoint, fetched one player at a time for the top 300 of the
+draft pool plus everyone rostered. It is entirely optional: if it is
+unreachable, rate-limited or moved, cards still show stats and injury.
+
+Cards live in `docs/data/players-{year}.json`, keyed by player id and loaded
+separately from the landing payload — the same player appears on four different
+screens, and inlining the card in each would multiply every payload that carries
+a player list. **The file only exists after a fetch**, so run `npm run update`
+once to turn the feature on; until then names simply stay plain text.
 
 ## Team pages
 
@@ -517,9 +568,10 @@ scripts/
     challenges.mjs the weekly challenge deck and its seeded draw
     draft.mjs      draft value and grading
     images.mjs     headshot/logo URLs and the team-logo allowlist
+    playercard.mjs hover-card stats, injury and news
     money.mjs      the ledger
 docs/            the published site (this is what GitHub Pages serves)
-tests/           112 tests covering the analytics, challenges and images
+tests/           141 tests covering the analytics, challenges, images and cards
 ```
 
 ## The stats, briefly

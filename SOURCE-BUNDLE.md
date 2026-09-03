@@ -2,8 +2,9 @@
 
 Every source file in one place, for reading or for handing to a fresh session.
 
-- **Commit:** `55da40e` (2026-09-01 18:10:28 +0000)
-- **Generated:** 2026-09-01T18:10:28.577Z
+- **Commit:** `50472d1` (2026-09-03 03:09:58 +0000)
+- **Generated:** 2026-09-03T03:40:01.779Z
+- **WARNING:** the working tree had uncommitted changes when this was generated, so this may not match any commit.
 - **Regenerate with:** `npm run bundle`
 
 **Read [HANDOFF.md](HANDOFF.md) first.** It carries the ESPN API gotchas,
@@ -22,10 +23,10 @@ fixtures, both regenerable), `docs/data/` (build output).
 
 - **Configuration** — `league.json`, `money.json`, `secrets.example.json`
 - **Data layer — talking to ESPN** — `espn.mjs`, `constants.mjs`, `normalize.mjs`
-- **Analytics** — `lineup.mjs`, `analytics.mjs`, `challenges.mjs`, `draft.mjs`, `advisor.mjs`, `bigboard.mjs`, `images.mjs`, `money.mjs`
+- **Analytics** — `lineup.mjs`, `analytics.mjs`, `challenges.mjs`, `draft.mjs`, `advisor.mjs`, `bigboard.mjs`, `images.mjs`, `playercard.mjs`, `money.mjs`
 - **Pipeline scripts** — `check.mjs`, `fetch.mjs`, `build.mjs`, `serve.mjs`, `ship.mjs`, `myleagues.mjs`, `fixtures.mjs`
 - **Site** — `index.html`, `style.css`, `app.js`, `mock.js`, `_headers`
-- **Tests** — `analytics.test.mjs`, `challenges.test.mjs`, `images.test.mjs`
+- **Tests** — `analytics.test.mjs`, `challenges.test.mjs`, `images.test.mjs`, `playercard.test.mjs`
 - **Automation** — `update.yml`, `package.json`
 
 ---
@@ -199,7 +200,7 @@ Everything that knows ESPN exists. The API is undocumented, so most of the hard-
 
 ### `scripts/lib/espn.mjs`
 
-*319 lines*
+*347 lines*
 
 ```javascript
 /**
@@ -426,6 +427,34 @@ export function createClient({ leagueId, secrets = null, log = () => {} }) {
   }
 
   /**
+   * Player news, for the hover cards.
+   *
+   * This is the one endpoint here that is NOT part of the fantasy league API —
+   * it hangs off ESPN's public site API, takes no auth, and is the only source
+   * for "why is this player questionable". It is fetched one player at a time,
+   * so callers must pass a short list (the drafted/rostered players), never the
+   * whole 11,600-player pool.
+   *
+   * Deliberately soft-failing: a null return means "no news for this player",
+   * which is also what an unreachable endpoint looks like. News is a garnish on
+   * the card, and the card must still render its stat line without it.
+   */
+  async function getPlayerNews(playerId, { limit = 3 } = {}) {
+    const url =
+      `https://site.api.espn.com/apis/fantasy/v2/games/ffl/news/players` +
+      `?playerId=${encodeURIComponent(playerId)}&limit=${limit}`;
+    try {
+      const response = await fetch(url, { headers });
+      if (!response.ok) return null;
+      const json = await response.json();
+      const feed = json?.feed ?? json?.items ?? [];
+      return Array.isArray(feed) && feed.length ? { playerId, items: feed } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * The league activity feed, which is where trade detail actually lives.
    *
    * This hangs off a `/communication/` sub-path. Requesting the same view on
@@ -518,13 +547,13 @@ export function createClient({ leagueId, secrets = null, log = () => {} }) {
     }
     return response.json();
   }
-  return { getView, getPlayers, getActivity, getFreeAgents, getRostersForWeek, getDraftPool, urlFor, hasAuth: Boolean(secrets) };
+  return { getView, getPlayers, getActivity, getFreeAgents, getRostersForWeek, getDraftPool, getPlayerNews, urlFor, hasAuth: Boolean(secrets) };
 }
 ```
 
 ### `scripts/lib/constants.mjs`
 
-*216 lines*
+*222 lines*
 
 ```javascript
 /**
@@ -703,9 +732,15 @@ export const INJURY_STATUS = {
 export const STAT_SOURCE = { ACTUAL: 0, PROJECTED: 1 };
 
 /**
- * `stats[].statSplitTypeId` — 0 is a single week, 1 is a season total.
+ * `stats[].statSplitTypeId` — 0 is a season total, 1 is a single week.
+ *
+ * This reads backwards from what you would guess, which is why it is spelled
+ * out here and in HANDOFF.md: a season total is `scoringPeriodId 0` +
+ * `statSplitTypeId 0`, and one week is `scoringPeriodId > 0` +
+ * `statSplitTypeId 1`. Reversing them returns real data of the wrong kind, so
+ * nothing crashes and every downstream number is quietly wrong.
  */
-export const STAT_SPLIT = { WEEK: 0, SEASON: 1 };
+export const STAT_SPLIT = { SEASON: 0, WEEK: 1 };
 
 /** Selected `stats` keys worth surfacing. ESPN defines 200+; these are the ones
  *  that make readable "fine detail" for a league hub. */
@@ -3501,6 +3536,230 @@ export function sanitizeTeamLogo(url) {
 }
 ```
 
+### `scripts/lib/playercard.mjs`
+
+*218 lines*
+
+```javascript
+/**
+ * Player cards: what shows up when you hover (or tap) a name anywhere on the
+ * site.
+ *
+ * Three things go on a card, and they come from three different places:
+ *
+ *   Last season's real production   ESPN's payload, already fetched. The draft
+ *                                   pool carries a full per-stat breakdown for
+ *                                   every player and the build was throwing all
+ *                                   but the fantasy-point total away.
+ *   Injury status                   Already normalized; just needed surfacing.
+ *   News                            A separate ESPN endpoint, fetched at build
+ *                                   time because the browser cannot reach ESPN.
+ *
+ * The cards are emitted as one index keyed by player id rather than embedded in
+ * each view. The same player appears on the big board, a roster, the draft board
+ * and the mock draft; inlining the card four times would bloat every payload
+ * that carries a player list, and the landing page would pay for data almost
+ * nobody hovers.
+ *
+ * A NOTE ON NEWS AND TIME. The site rebuilds once a day. A stat line from last
+ * season is as true tomorrow as it is today, but an injury note is the most
+ * perishable thing in fantasy football — "limited in practice" is worth nothing
+ * on Sunday afternoon. So every news item carries its own published timestamp
+ * and the card shows it. Stale news that admits it is stale is useful; stale
+ * news wearing a confident face is worse than none, because somebody starts a
+ * player who was ruled out that morning.
+ */
+
+import { STAT_KEYS, INJURY_STATUS, STAT_SOURCE, STAT_SPLIT } from './constants.mjs';
+
+const round1 = (n) => Number((n ?? 0).toFixed(1));
+
+/**
+ * Turns ESPN's numeric stat map into named fields.
+ *
+ * `stats` arrives as `{"3": 4306, "24": 421, ...}` — the keys are the ids
+ * STAT_KEYS names. Anything not in STAT_KEYS is dropped rather than passed
+ * through under a numeric key, so a card can never render "58: 141" at someone.
+ *
+ * Two ids (89 and 123) both mean points allowed. They do not co-occur in
+ * practice; if they ever did, the later key wins, which is the same thing the
+ * object literal in constants.mjs already does.
+ */
+export function nameStats(stats) {
+  const out = {};
+  for (const [id, value] of Object.entries(stats ?? {})) {
+    const name = STAT_KEYS[Number(id)];
+    if (!name) continue;
+    if (typeof value !== 'number' || Number.isNaN(value)) continue;
+    out[name] = round1(value);
+  }
+  return out;
+}
+
+/**
+ * Which numbers actually belong on a card, per position.
+ *
+ * A quarterback's card showing "0 receptions" is noise; a kicker's showing
+ * passing yards is worse. Each position gets the line a person would actually
+ * read, and any field with no value is dropped at render time rather than
+ * printed as a zero — "0 rushing TDs" and "we have no rushing data" look
+ * identical on screen and are not the same claim.
+ */
+export const STAT_LINES = {
+  QB: [
+    ['passingYards', 'Pass yds'],
+    ['passingTouchdowns', 'Pass TD'],
+    ['passingInterceptions', 'INT'],
+    ['rushingYards', 'Rush yds'],
+    ['rushingTouchdowns', 'Rush TD'],
+  ],
+  RB: [
+    ['rushingAttempts', 'Carries'],
+    ['rushingYards', 'Rush yds'],
+    ['rushingTouchdowns', 'Rush TD'],
+    ['receptions', 'Rec'],
+    ['receivingYards', 'Rec yds'],
+    ['receivingTouchdowns', 'Rec TD'],
+  ],
+  WR: [
+    ['receivingTargets', 'Targets'],
+    ['receptions', 'Rec'],
+    ['receivingYards', 'Rec yds'],
+    ['receivingTouchdowns', 'Rec TD'],
+    ['rushingYards', 'Rush yds'],
+  ],
+  TE: [
+    ['receivingTargets', 'Targets'],
+    ['receptions', 'Rec'],
+    ['receivingYards', 'Rec yds'],
+    ['receivingTouchdowns', 'Rec TD'],
+  ],
+  K: [
+    ['madeFieldGoalsFromUnder40', 'FG <40'],
+    ['madeFieldGoalsFrom40To49', 'FG 40-49'],
+    ['madeFieldGoalsFrom50Plus', 'FG 50+'],
+    ['missedFieldGoals', 'Missed'],
+    ['madeExtraPoints', 'XP'],
+  ],
+  'D/ST': [
+    ['defensiveSacks', 'Sacks'],
+    ['defensiveInterceptions', 'INT'],
+    ['defensiveFumbles', 'Fum rec'],
+    ['defensivePointsAllowed', 'Pts allowed'],
+    ['defensiveYardsAllowed', 'Yds allowed'],
+  ],
+};
+
+/** The stat line for a position, with empty fields dropped. */
+export function statLine(position, stats) {
+  const spec = STAT_LINES[position];
+  if (!spec || !stats) return [];
+  return spec
+    .filter(([key]) => stats[key] !== undefined && stats[key] !== null)
+    .map(([key, label]) => ({ key, label, value: stats[key] }));
+}
+
+/**
+ * Pulls a season's actual production out of a player's `stats[]`.
+ *
+ * The four-way key is the classic trap in this API — see HANDOFF.md. A season
+ * total of what really happened is `statSourceId 0` + `statSplitTypeId 0`, and
+ * getting any one of those wrong silently returns a projection or a single
+ * week instead.
+ */
+export function seasonActuals(player, seasonId) {
+  const entry = (player?.stats ?? []).find(
+    (s) =>
+      s.seasonId === seasonId &&
+      s.statSourceId === STAT_SOURCE.ACTUAL &&
+      s.statSplitTypeId === STAT_SPLIT.SEASON
+  );
+  if (!entry) return null;
+
+  return {
+    season: seasonId,
+    fantasyPoints: entry.appliedTotal != null ? round1(entry.appliedTotal) : null,
+    stats: nameStats(entry.stats),
+  };
+}
+
+/**
+ * One card per player.
+ *
+ * `players` is the merged pool the build already has (draft pool entries and
+ * roster entries both carry a full player object). `news` is keyed by player id
+ * and may be empty — the endpoint is optional and its absence must degrade to a
+ * card with stats and injury on it, not to a broken card.
+ */
+export function buildPlayerCards({ players = [], seasonId, news = {} } = {}) {
+  const cards = {};
+  const lastSeason = seasonId - 1;
+
+  for (const player of players) {
+    const id = player?.id ?? player?.playerId;
+    if (!id || id <= 0) continue;
+    if (cards[id]) continue;
+
+    const prior = seasonActuals(player, lastSeason);
+    const items = news[id] ?? [];
+    const injury = player.injuryStatus ?? null;
+
+    // A card with nothing on it is not worth shipping — it would render an
+    // empty popover and teach people the feature is broken.
+    const hasSomething =
+      (prior && Object.keys(prior.stats).length > 0) ||
+      items.length > 0 ||
+      (injury && injury !== 'ACTIVE' && injury !== 'NORMAL');
+    if (!hasSomething) continue;
+
+    cards[id] = {
+      playerId: id,
+      injury: injury ? (INJURY_STATUS[injury] ?? injury) : null,
+      lastSeason: prior && Object.keys(prior.stats).length ? prior : null,
+      news: items,
+    };
+  }
+
+  return cards;
+}
+
+/**
+ * Normalizes ESPN's news payload into what a card renders.
+ *
+ * Kept deliberately small: a headline, when it was published, and the source.
+ * The full body is often several paragraphs of wire copy, which is not what a
+ * hover card is for.
+ */
+export function normalizeNews(raw, { perPlayer = 3 } = {}) {
+  const byPlayer = {};
+
+  for (const feed of Array.isArray(raw) ? raw : []) {
+    const id = feed?.playerId;
+    if (!id) continue;
+
+    const items = (feed.items ?? [])
+      .map((item) => ({
+        headline: item?.headline ?? item?.caption ?? null,
+        published: item?.published ?? item?.lastModified ?? null,
+        source: item?.source ?? null,
+      }))
+      .filter((item) => item.headline)
+      // Newest first. An item with no timestamp sorts last rather than being
+      // dropped — undated news is still news, it just cannot claim recency.
+      .sort((a, b) => {
+        if (!a.published) return 1;
+        if (!b.published) return -1;
+        return new Date(b.published) - new Date(a.published);
+      })
+      .slice(0, perPlayer);
+
+    if (items.length) byPlayer[id] = items;
+  }
+
+  return byPlayer;
+}
+```
+
 ### `scripts/lib/money.mjs`
 
 *235 lines*
@@ -3909,7 +4168,7 @@ main().catch((error) => {
 
 ### `scripts/fetch.mjs`
 
-*269 lines*
+*312 lines*
 
 ```javascript
 /**
@@ -3963,6 +4222,11 @@ async function readJsonIfExists(file) {
     return null; // Corrupt cache entry — just refetch.
   }
 }
+
+// News is one request per player, so it is both the slowest step and the one
+// most likely to get rate limited. Capped and paced accordingly.
+const NEWS_PLAYER_LIMIT = 300;
+const NEWS_DELAY_MS = 120;
 
 async function fetchSeason(client, season) {
   const dir = path.join(RAW, String(season));
@@ -4117,6 +4381,44 @@ async function fetchSeason(client, season) {
   }
   await sleep(POLITE_DELAY_MS);
 
+  // ---- Player news (for the hover cards) --------------------------------
+  // One request per player, so this is scoped to the people who actually
+  // appear on a card people would hover: the draft pool's top ranks plus
+  // everyone currently rostered. Fetching news for all 11,600 players would be
+  // 11,600 requests for data nobody will read.
+  //
+  // Entirely optional. Every failure mode here — endpoint moved, rate limited,
+  // offline — degrades to a card with stats and injury status and no news,
+  // which is why nothing in this block throws.
+  try {
+    const newsIds = new Set();
+    for (const entry of (await readJsonIfExists(path.join(dir, 'draftpool.json')))?.players ?? []) {
+      const id = entry?.player?.id;
+      if (id) newsIds.add(id);
+      if (newsIds.size >= NEWS_PLAYER_LIMIT) break;
+    }
+    for (const team of (await readJsonIfExists(path.join(dir, 'current.json')))?.teams ?? []) {
+      for (const entry of team?.roster?.entries ?? []) {
+        if (entry?.playerId) newsIds.add(entry.playerId);
+      }
+    }
+
+    const feeds = [];
+    let withNews = 0;
+    for (const id of newsIds) {
+      const feed = await client.getPlayerNews(id);
+      if (feed) {
+        feeds.push(feed);
+        withNews += 1;
+      }
+      await sleep(NEWS_DELAY_MS);
+    }
+    await writeJson(path.join(dir, 'news.json'), { fetchedAt: new Date().toISOString(), feeds });
+    log(`  player news: ${withNews} of ${newsIds.size} players have items`);
+  } catch (error) {
+    log(`  player news: skipped (${error.message}) — cards will show stats only`);
+  }
+
   await writeJson(path.join(dir, 'meta.json'), {
     season,
     fetchedAt: new Date().toISOString(),
@@ -4184,7 +4486,7 @@ main().catch((error) => {
 
 ### `scripts/build.mjs`
 
-*525 lines*
+*584 lines*
 
 ```javascript
 /**
@@ -4217,6 +4519,7 @@ import { analyzeDraft } from './lib/draft.mjs';
 import { computeLedger, computePayouts, challengePayout, splitPot } from './lib/money.mjs';
 import { buildChallengeSchedule, computeChallenges, challengeLeaderboard } from './lib/challenges.mjs';
 import { sanitizeTeamLogo } from './lib/images.mjs';
+import { buildPlayerCards, normalizeNews } from './lib/playercard.mjs';
 import { recommendLineup, coachingReport, waiverTargets } from './lib/advisor.mjs';
 import { buildBigBoard } from './lib/bigboard.mjs';
 
@@ -4270,6 +4573,7 @@ async function loadSeasonRaw(season) {
     current: await readJson(path.join(dir, 'current.json')),
     freeAgents: await readJson(path.join(dir, 'freeagents.json')),
     draftPool: await readJson(path.join(dir, 'draftpool.json')),
+    news: await readJson(path.join(dir, 'news.json')),
     weeks,
   };
 }
@@ -4292,6 +4596,12 @@ function buildSeason(raw, moneyConfig) {
   const positional = computePositionalStats(teamWeeks, teamStats);
   const draft = analyzeDraft(season);
 
+  const playerCards = buildPlayerCards({
+    players: playerObjectsFor(raw),
+    seasonId: season.league.season,
+    news: normalizeNews(raw.news?.feeds),
+  });
+
   const challenges = buildChallenges(season, teamStats, teamWeeks, moneyConfig);
   // The ledger needs the same week list the challenges were dealt for, so the
   // pot it splits and the pot the site pays out are the same pot.
@@ -4303,7 +4613,7 @@ function buildSeason(raw, moneyConfig) {
 
   return {
     season, teamWeeks, teamStats, standings, power, prizes,
-    weeklyHigh, positional, draft, ledger, teamDetail, challenges,
+    weeklyHigh, positional, draft, ledger, teamDetail, challenges, playerCards,
   };
 }
 
@@ -4492,6 +4802,38 @@ function buildDraftPool(raw) {
   return { rankType, players };
 }
 
+/**
+ * Every full player object the raw payloads carry, for the card index.
+ *
+ * Three sources, in priority order — the draft pool is richest (it has the
+ * per-stat breakdown), current rosters cover anyone drafted, and the weekly box
+ * scores catch players who were rostered earlier and since dropped. First one
+ * to claim an id wins, so the richest source is walked first.
+ */
+function playerObjectsFor(raw) {
+  const out = [];
+
+  for (const entry of raw.draftPool?.players ?? []) {
+    if (entry?.player) out.push(entry.player);
+  }
+  for (const team of raw.current?.teams ?? []) {
+    for (const entry of team?.roster?.entries ?? []) {
+      if (entry?.playerPoolEntry?.player) out.push(entry.playerPoolEntry.player);
+    }
+  }
+  for (const { data } of raw.weeks ?? []) {
+    for (const game of data?.schedule ?? []) {
+      for (const side of [game?.home, game?.away]) {
+        for (const entry of side?.rosterForCurrentScoringPeriod?.entries ?? []) {
+          if (entry?.playerPoolEntry?.player) out.push(entry.playerPoolEntry.player);
+        }
+      }
+    }
+  }
+
+  return out;
+}
+
 /** Human-readable summary of what the league is currently doing. */
 function describePhase(season) {
   const { phase, teamsJoined, weeksPlayed } = season.status;
@@ -4636,6 +4978,21 @@ async function main() {
       });
     }
 
+    // Player cards: last season's real production, injury status and news,
+    // keyed by player id. Its own file because the same player shows up on the
+    // board, a roster, the draft board and the mock draft — inlining the card
+    // in each would multiply the payload, and the landing page would pay for
+    // data most visitors never hover.
+    await writeJson(path.join(DERIVED, `players-${b.year}.json`), {
+      year: b.year,
+      priorSeason: b.year - 1,
+      // When the news was pulled, so the front end can say how old it is
+      // rather than presenting day-old injury notes as current.
+      newsFetchedAt: b.raw.news?.fetchedAt ?? null,
+      count: Object.keys(b.playerCards).length,
+      cards: b.playerCards,
+    });
+
     // Per-team detail: the personal view each manager lands on.
     await writeJson(path.join(DERIVED, `teams-${b.year}.json`), {
       year: b.year,
@@ -4694,6 +5051,10 @@ async function main() {
   console.log(`  trades            ${s.trades.length}`);
   console.log(`  transactions      ${s.transactions.length}`);
   console.log(`  prizes computable ${current.prizes.length}`);
+  console.log(
+    `  player cards      ${Object.keys(current.playerCards).length}` +
+      `${current.raw.news ? '' : ' (no news fetched)'}`
+  );
   const settled = current.challenges.weeks.filter((w) => w.winner).length;
   console.log(
     `  challenges        ${settled}/${current.challenges.totalWeeks} settled ` +
@@ -5005,7 +5366,7 @@ console.log();
 
 ### `scripts/fixtures.mjs`
 
-*631 lines*
+*673 lines*
 
 ```javascript
 /**
@@ -5583,6 +5944,40 @@ await writeJson(path.join(OUT, 'freeagents.json'), {
 // Draft pool, in kona_player_info shape, so the big board builds end to end
 // ---------------------------------------------------------------------------
 
+/**
+ * A plausible prior-season stat breakdown, keyed by the real ESPN stat ids.
+ *
+ * The hover cards read this breakdown, not the fantasy-point total, so without
+ * it a fixtures build exercises the card index but never the stat line. Scaled
+ * off the same talent number that drives everything else here, so a good player
+ * gets good peripherals and the whole thing stays deterministic under the seed.
+ */
+function priorSeasonStats(pos, points) {
+  const n = (x) => Math.max(0, Math.round(x));
+  switch (pos) {
+    case 'QB':
+      return { 3: n(points * 13), 4: n(points * 0.09), 20: n(points * 0.035),
+               24: n(points * 1.2), 25: n(points * 0.012) };
+    case 'RB':
+      return { 23: n(points * 0.75), 24: n(points * 4.2), 25: n(points * 0.04),
+               41: n(points * 0.17), 42: n(points * 1.5), 43: n(points * 0.012) };
+    case 'WR':
+      return { 58: n(points * 0.5), 41: n(points * 0.33), 42: n(points * 4.6),
+               43: n(points * 0.035) };
+    case 'TE':
+      return { 58: n(points * 0.45), 41: n(points * 0.32), 42: n(points * 3.7),
+               43: n(points * 0.03) };
+    case 'K':
+      return { 80: n(points * 0.12), 77: n(points * 0.07), 74: n(points * 0.03),
+               85: n(points * 0.03), 86: n(points * 0.25) };
+    case 'D/ST':
+      return { 97: n(points * 0.35), 95: n(points * 0.12), 96: n(points * 0.08),
+               89: n(340 - points * 0.4), 127: n(6000 - points * 3) };
+    default:
+      return {};
+  }
+}
+
 // Ranked by talent, with ADP deliberately offset from true value so the value
 // grades have something real to find — a board where cost already equals value
 // would grade every player B- and prove nothing.
@@ -5592,6 +5987,7 @@ await writeJson(path.join(OUT, 'draftpool.json'), {
   rankType: 'SUPERFLEX',
   players: poolRanked.slice(0, 400).map((p, i) => {
     const seasonProjection = round2(p._talent * p._multiplier * REGULAR_WEEKS);
+    const priorPoints = round2(seasonProjection * (0.8 + rand() * 0.4));
     // Push QBs later in ADP than their value warrants, mirroring how real ADP
     // is collected from mostly-standard leagues.
     const adpBias = p._pos === 'QB' ? 45 : p._pos === 'K' || p._pos === 'D/ST' ? 60 : -8;
@@ -5615,7 +6011,14 @@ await writeJson(path.join(OUT, 'draftpool.json'), {
         },
         stats: [
           { seasonId: 2026, scoringPeriodId: 0, statSourceId: 1, statSplitTypeId: 0, appliedTotal: seasonProjection },
-          { seasonId: 2025, scoringPeriodId: 0, statSourceId: 0, statSplitTypeId: 0, appliedTotal: round2(seasonProjection * (0.8 + rand() * 0.4)) },
+          {
+            seasonId: 2025,
+            scoringPeriodId: 0,
+            statSourceId: 0,
+            statSplitTypeId: 0,
+            appliedTotal: priorPoints,
+            stats: priorSeasonStats(p._pos, priorPoints),
+          },
         ],
       },
     };
@@ -5820,7 +6223,7 @@ Dependency-free front end. Reads pre-computed JSON from docs/data/ and renders i
 
 ### `docs/assets/style.css`
 
-*533 lines*
+*577 lines*
 
 ```css
 /* ==========================================================================
@@ -6237,6 +6640,50 @@ tr.playoff-cut td, tr.playoff-cut th { border-bottom: 2px solid var(--accent); }
 .hero--team .avatar { margin-bottom: 0.5rem; }
 .pick .avatar { margin: 0.3rem 0; }
 
+/* --- Player cards ---------------------------------------------------------
+   Opens on hover, on tap, and on keyboard focus — see app.js for why all
+   three. Positioned in JS because it has to flip above the trigger near the
+   bottom of a phone screen, which CSS alone cannot decide. */
+.pcard-trigger {
+  font: inherit; color: inherit; background: none; border: 0; padding: 0;
+  text-align: left; cursor: pointer;
+  text-decoration: underline dotted; text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+}
+.pcard-trigger:hover, .pcard-trigger[aria-expanded="true"] { text-decoration-color: var(--accent); }
+
+.pcard {
+  position: absolute; z-index: 50;
+  inline-size: min(22rem, calc(100vw - 1.5rem));
+  background: var(--bg-raised); border: 1px solid var(--border-strong);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 0.8rem 0.9rem; font-size: 0.85rem;
+}
+.pcard__name { margin: 0 0 0.15rem; font-weight: 700; font-size: 0.98rem; }
+.pcard__meta { font-weight: 400; color: var(--text-dim); font-size: 0.8rem; }
+.pcard__injury { margin: 0.35rem 0 0; }
+.pcard__heading {
+  margin: 0.7rem 0 0.35rem; font-size: 0.72rem; letter-spacing: 0.07em;
+  text-transform: uppercase; color: var(--text-dim);
+}
+.pcard__empty { margin: 0.5rem 0 0; color: var(--text-dim); }
+
+/* Auto-fit rather than a fixed column count: a kicker has five stats and a
+   tight end four, and neither should leave a hole in the grid. */
+.pcard__stats {
+  margin: 0; display: grid; gap: 0.4rem 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(4.5rem, 1fr));
+}
+.pcard__stats div { min-inline-size: 0; }
+.pcard__stats dt { color: var(--text-dim); font-size: 0.72rem; }
+.pcard__stats dd {
+  margin: 0; font-weight: 700; font-variant-numeric: tabular-nums; font-size: 0.95rem;
+}
+
+.pcard__news { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.45rem; }
+.pcard__news li { color: var(--text-muted); line-height: 1.35; }
+.pcard__news small { display: block; color: var(--text-dim); font-size: 0.74rem; margin-top: 0.1rem; }
+
 /* --- Weekly challenges ---------------------------------------------------- */
 .challenge {
   background: var(--bg-raised); border: 1px solid var(--border);
@@ -6359,7 +6806,7 @@ tr.playoff-cut td, tr.playoff-cut th { border-bottom: 2px solid var(--accent); }
 
 ### `docs/assets/app.js`
 
-*2189 lines*
+*2439 lines*
 
 ```javascript
 import { createMockDraft, advanceToUser, makePick, gradeDraft, rosterNeeds } from './mock.js';
@@ -6385,7 +6832,7 @@ import { createMockDraft, advanceToUser, makePick, gradeDraft, rosterNeeds } fro
 const ALL_VIEWS = ['overview', 'standings', 'teams', 'team', 'draft', 'board', 'mock', 'trades', 'challenges', 'prizes', 'money'];
 let VIEWS = ALL_VIEWS.filter((v) => v !== 'money' && v !== 'mock' && v !== 'board');
 
-const state = { hub: null, season: null, draft: null, money: null, teamDetail: null, draftPool: null, bigBoard: null };
+const state = { hub: null, season: null, draft: null, money: null, teamDetail: null, draftPool: null, bigBoard: null, playerCards: null };
 let countdownTimer = null;
 
 /** Which team the visitor has claimed as theirs, remembered across visits. */
@@ -6530,14 +6977,31 @@ function avatar(src, name, { variant = 'player', size = null } = {}) {
   </span>`;
 }
 
-/** A player's picture next to their name — the shape used in every table. */
-const playerCell = (player, sub = null) => `
+/**
+ * A player's picture next to their name — the shape used in every table.
+ *
+ * When a card exists for this player the name becomes a <button>, which is what
+ * makes the card reachable by keyboard and tappable on a phone rather than
+ * hover-only. Players with no card stay plain text: a control that opens
+ * nothing is worse than no control.
+ */
+const playerCell = (player, sub = null) => {
+  const label = esc(player?.name ?? '—');
+  const tail = sub === null ? '' : `<small>${esc(sub)}</small>`;
+  const name = hasCard(player?.playerId)
+    ? `<button type="button" class="pcard-trigger"
+         data-player-id="${esc(player.playerId)}"
+         data-player-name="${esc(player.name ?? '')}"
+         data-player-pos="${esc(player.position ?? '')}"
+         data-player-team="${esc(player.proTeam ?? '')}"
+         aria-describedby="player-card" aria-expanded="false">${label}</button>`
+    : label;
+  return `
   <span class="named">
     ${avatar(playerImage(player), player?.name, { variant: 'player' })}
-    <span class="named__text">${esc(player?.name ?? '—')}${
-      sub === null ? '' : `<small>${esc(sub)}</small>`
-    }</span>
+    <span class="named__text">${name}${tail}</span>
   </span>`;
+};
 
 /** A fantasy team's logo next to its name. */
 const teamCell = (team, sub = null, href = null) => {
@@ -6549,6 +7013,225 @@ const teamCell = (team, sub = null, href = null) => {
     }${sub === null ? '' : `<small>${esc(sub)}</small>`}</span>`;
   return `<span class="named">${inner}</span>`;
 };
+
+// --- Player cards ----------------------------------------------------------
+//
+// Hover a player to see last season's production, their injury status and any
+// news. Three interaction notes, none of them optional:
+//
+//   Hover is not enough. This site is meant to be opened on a phone — the
+//   README says so — and a phone has no hover. So the same card opens on tap,
+//   and closes on the next tap outside it.
+//
+//   Keyboard users get it too. The trigger is a <button>, so it is focusable
+//   and the card opens on focus and closes on Escape. A div with a mouseover
+//   handler would have shipped this feature to two-thirds of the ways people
+//   read a web page.
+//
+//   One card element, moved and refilled. Rendering 250 popovers into the Big
+//   Board and hiding them would put a quarter of a megabyte of hidden DOM on
+//   the page for the one card anybody looks at.
+
+const STAT_LINES = {
+  QB: [['passingYards', 'Pass yds'], ['passingTouchdowns', 'Pass TD'], ['passingInterceptions', 'INT'],
+       ['rushingYards', 'Rush yds'], ['rushingTouchdowns', 'Rush TD']],
+  RB: [['rushingAttempts', 'Carries'], ['rushingYards', 'Rush yds'], ['rushingTouchdowns', 'Rush TD'],
+       ['receptions', 'Rec'], ['receivingYards', 'Rec yds'], ['receivingTouchdowns', 'Rec TD']],
+  WR: [['receivingTargets', 'Targets'], ['receptions', 'Rec'], ['receivingYards', 'Rec yds'],
+       ['receivingTouchdowns', 'Rec TD'], ['rushingYards', 'Rush yds']],
+  TE: [['receivingTargets', 'Targets'], ['receptions', 'Rec'], ['receivingYards', 'Rec yds'],
+       ['receivingTouchdowns', 'Rec TD']],
+  K: [['madeFieldGoalsFromUnder40', 'FG <40'], ['madeFieldGoalsFrom40To49', 'FG 40-49'],
+      ['madeFieldGoalsFrom50Plus', 'FG 50+'], ['missedFieldGoals', 'Missed'], ['madeExtraPoints', 'XP']],
+  'D/ST': [['defensiveSacks', 'Sacks'], ['defensiveInterceptions', 'INT'], ['defensiveFumbles', 'Fum rec'],
+           ['defensivePointsAllowed', 'Pts allowed'], ['defensiveYardsAllowed', 'Yds allowed']],
+};
+
+let cardEl = null;
+let cardOwner = null;
+
+/** "3 days ago" — news that cannot say when it is from is news you cannot use. */
+function timeAgo(iso) {
+  if (!iso) return null;
+  const then = new Date(iso);
+  if (Number.isNaN(then.getTime())) return null;
+  const mins = Math.round((Date.now() - then.getTime()) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  return days === 1 ? 'yesterday' : `${days}d ago`;
+}
+
+function cardHtml(player, card) {
+  const parts = [];
+
+  parts.push(`<p class="pcard__name">${esc(player.name)}
+    <span class="pcard__meta">${esc(player.position ?? '')}${
+      player.proTeam ? ` · ${esc(player.proTeam)}` : ''
+    }</span></p>`);
+
+  if (card.injury && card.injury !== 'Active') {
+    parts.push(`<p class="pcard__injury"><span class="pill pill--warn">${esc(card.injury)}</span></p>`);
+  }
+
+  const prior = card.lastSeason;
+  const line = prior ? (STAT_LINES[player.position] ?? []).filter(([k]) => prior.stats[k] != null) : [];
+
+  if (line.length) {
+    parts.push(`<p class="pcard__heading">${esc(prior.season)} season${
+      prior.fantasyPoints != null ? ` · ${esc(num(prior.fantasyPoints, 1))} fantasy pts` : ''
+    }</p>`);
+    parts.push(`<dl class="pcard__stats">${line
+      .map(([key, label]) => `<div><dt>${esc(label)}</dt><dd>${esc(num(prior.stats[key], 0))}</dd></div>`)
+      .join('')}</dl>`);
+  } else {
+    parts.push(`<p class="pcard__empty">No ${esc(state.playerCards?.priorSeason ?? 'prior')} stats — rookie, or did not play.</p>`);
+  }
+
+  if (card.news?.length) {
+    parts.push('<p class="pcard__heading">Latest news</p>');
+    parts.push(`<ul class="pcard__news">${card.news
+      .map((item) => {
+        const when = timeAgo(item.published);
+        return `<li>${esc(item.headline)}${
+          when ? `<small>${esc(when)}${item.source ? ` · ${esc(item.source)}` : ''}</small>` : ''
+        }</li>`;
+      })
+      .join('')}</ul>`);
+  }
+
+  return parts.join('');
+}
+
+function positionCard(trigger) {
+  const rect = trigger.getBoundingClientRect();
+  const width = cardEl.offsetWidth;
+  const height = cardEl.offsetHeight;
+  const margin = 8;
+
+  // Below the name by default, above it when there is no room — a card that
+  // opens off the bottom of a phone screen is a card nobody reads.
+  let top = rect.bottom + window.scrollY + 6;
+  if (rect.bottom + height + margin > window.innerHeight && rect.top - height - margin > 0) {
+    top = rect.top + window.scrollY - height - 6;
+  }
+
+  let left = rect.left + window.scrollX;
+  const maxLeft = window.scrollX + document.documentElement.clientWidth - width - margin;
+  left = Math.max(window.scrollX + margin, Math.min(left, maxLeft));
+
+  cardEl.style.top = `${Math.round(top)}px`;
+  cardEl.style.left = `${Math.round(left)}px`;
+}
+
+function showCard(trigger) {
+  if (cardOwner === trigger && !cardEl.hidden) return;
+  const id = Number(trigger.dataset.playerId);
+  const card = state.playerCards?.cards?.[id];
+  if (!card) return;
+
+  const player = {
+    name: trigger.dataset.playerName ?? '',
+    position: trigger.dataset.playerPos ?? '',
+    proTeam: trigger.dataset.playerTeam ?? '',
+  };
+
+  cardEl.innerHTML = cardHtml(player, card);
+  cardEl.hidden = false;
+  positionCard(trigger);
+  trigger.setAttribute('aria-expanded', 'true');
+  cardOwner = trigger;
+}
+
+function hideCard() {
+  if (!cardEl || cardEl.hidden) return;
+  cardEl.hidden = true;
+  cardOwner?.setAttribute('aria-expanded', 'false');
+  cardOwner = null;
+}
+
+/**
+ * One set of listeners on the document, delegated, so cards keep working on
+ * content rendered after boot — every view replaces its own innerHTML, and
+ * per-element listeners would die with it.
+ */
+function initPlayerCards() {
+  cardEl = document.createElement('div');
+  cardEl.className = 'pcard';
+  cardEl.id = 'player-card';
+  cardEl.setAttribute('role', 'tooltip');
+  cardEl.hidden = true;
+  document.body.appendChild(cardEl);
+
+  const triggerFor = (target) => target?.closest?.('[data-player-id]');
+  const insideCard = (target) => Boolean(target?.closest?.('.pcard'));
+
+  // Was the last thing the user did a pointer action? Focus follows a tap or a
+  // click as well as a Tab key, and without knowing which, the focus handler
+  // fights the click handler: the tap focuses the button (card opens), then the
+  // click toggles it (card closes), and a phone user sees nothing at all.
+  let pointerIntent = false;
+  document.addEventListener('pointerdown', () => { pointerIntent = true; }, true);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Tab') pointerIntent = false; }, true);
+
+  // Enter and leave are both decided here rather than with a matching
+  // pointerout handler. pointerout fires while the pointer is still logically
+  // over the trigger — crossing between the button and the card counts as
+  // leaving — which closed the card the instant it opened. Since every element
+  // fires pointerover, "the pointer is now over something that is neither a
+  // trigger nor the card" is a complete and much less fragile leave condition.
+  document.addEventListener('pointerover', (e) => {
+    if (e.pointerType === 'touch') return;
+    const trigger = triggerFor(e.target);
+    if (trigger) showCard(trigger);
+    else if (!insideCard(e.target)) hideCard();
+  });
+
+  document.addEventListener('click', (e) => {
+    const trigger = triggerFor(e.target);
+    if (!trigger) {
+      if (!insideCard(e.target)) hideCard();
+      return;
+    }
+    e.preventDefault();
+    // On touch this is the only way in, so it toggles. The focus that arrived
+    // with the same tap has already been ignored, so `cardOwner` here really
+    // does mean "this card was open before you tapped".
+    if (cardOwner === trigger) hideCard();
+    else showCard(trigger);
+  });
+
+  document.addEventListener('focusin', (e) => {
+    if (pointerIntent) return;
+    const trigger = triggerFor(e.target);
+    if (trigger) showCard(trigger);
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      const owner = cardOwner;
+      hideCard();
+      owner?.focus();
+    }
+  });
+
+  // No scroll handler on purpose. The card is positioned in *document*
+  // coordinates (the scroll offset is baked into top/left at open time), so it
+  // scrolls with its trigger and stays glued to the right name for free.
+  // Closing on scroll instead looks reasonable and is not: anything that
+  // scrolls the page while opening — a browser bringing a focused element into
+  // view, a tap near the bottom of a phone screen — dismisses the card the
+  // instant it appears.
+  //
+  // Resize is different: it reflows the page, so the coordinates the card was
+  // given no longer point at anything.
+  window.addEventListener('resize', hideCard);
+}
+
+/** Whether this player has a card worth opening. */
+const hasCard = (playerId) => Boolean(state.playerCards?.cards?.[Number(playerId)]);
 
 function emptyState(icon, title, message) {
   return `<div class="empty">
@@ -8010,7 +8693,16 @@ function renderDraft() {
                   p.playerName,
                   { variant: 'player', size: 44 }
                 )}
-                <span class="pick__player">${esc(p.playerName)}</span>
+                <span class="pick__player">${
+                  hasCard(p.playerId)
+                    ? `<button type="button" class="pcard-trigger"
+                         data-player-id="${esc(p.playerId)}"
+                         data-player-name="${esc(p.playerName)}"
+                         data-player-pos="${esc(p.position)}"
+                         data-player-team="${esc(p.proTeam)}"
+                         aria-describedby="player-card" aria-expanded="false">${esc(p.playerName)}</button>`
+                    : esc(p.playerName)
+                }</span>
                 <span class="pick__meta">${esc(p.position)} · ${esc(p.proTeam)}</span><br>
                 <span class="pick__meta">${esc(p.teamName)}</span>
                 ${draft.hasResults ? `<br>${deltaPill(p.valueDelta, 0)}` : ''}
@@ -8476,13 +9168,14 @@ function initTheme() {
 async function boot() {
   initTheme();
   initImageFallbacks();
+  initPlayerCards();
 
   try {
     const hub = await loadJson('data/hub.json');
     state.hub = hub;
 
     const year = hub.league.season ?? hub.seasons?.[hub.seasons.length - 1];
-    const [season, draft, teamDetail, draftPool, bigBoard, ledger] = await Promise.all([
+    const [season, draft, teamDetail, draftPool, bigBoard, ledger, playerCards] = await Promise.all([
       loadJson(`data/season-${year}.json`).catch(() => null),
       loadJson(`data/draft-${year}.json`).catch(() => null),
       loadJson(`data/teams-${year}.json`).catch(() => null),
@@ -8490,6 +9183,9 @@ async function boot() {
       loadJson(`data/bigboard-${year}.json`).catch(() => null),
       // Absent on the published site by design — the ledger is never uploaded.
       loadJson('data/money.json').catch(() => null),
+      // Hover cards. Optional: an older build has no such file, and every
+      // player name simply stays plain text.
+      loadJson(`data/players-${year}.json`).catch(() => null),
     ]);
     state.season = season;
     state.draft = draft;
@@ -8497,6 +9193,7 @@ async function boot() {
     state.draftPool = draftPool;
     state.bigBoard = bigBoard;
     state.money = ledger;
+    state.playerCards = playerCards;
     syncMyTeamNav();
 
     if (bigBoard?.available) {
@@ -10391,6 +11088,281 @@ describe('the CSP and the code agree on which hosts are allowed', () => {
 });
 ```
 
+### `tests/playercard.test.mjs`
+
+*269 lines*
+
+```javascript
+/**
+ * Verification for the player hover cards.
+ *
+ * The stat-key tests are the ones that matter. ESPN keys everything four ways
+ * (season, source, split, period) and reversing any pair returns real data of
+ * the wrong kind — a projection instead of an actual, or one week instead of a
+ * season — so nothing throws and every number on every card is quietly wrong.
+ * `STAT_SPLIT` in constants.mjs was in fact reversed until this file existed.
+ *
+ *   npm test
+ */
+
+import { test, describe } from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+  STAT_LINES,
+  buildPlayerCards,
+  nameStats,
+  normalizeNews,
+  seasonActuals,
+  statLine,
+} from '../scripts/lib/playercard.mjs';
+import { STAT_SPLIT, STAT_SOURCE, STAT_KEYS } from '../scripts/lib/constants.mjs';
+
+/** A stats entry as ESPN shapes it. */
+const entry = (seasonId, sourceId, splitId, stats, appliedTotal = 0) => ({
+  seasonId,
+  statSourceId: sourceId,
+  statSplitTypeId: splitId,
+  stats,
+  appliedTotal,
+});
+
+const RB_2025 = { 23: 250, 24: 1412, 25: 16, 41: 52, 42: 517, 43: 4 };
+
+// ---------------------------------------------------------------------------
+describe('ESPN stat key constants', () => {
+  test('a season total is split type 0, not 1', () => {
+    // Pinned against HANDOFF.md and buildDraftPool(), which both use 0 for a
+    // season total. This constant was defined the other way round and unused;
+    // the first consumer would have silently read single weeks as seasons.
+    assert.equal(STAT_SPLIT.SEASON, 0);
+    assert.equal(STAT_SPLIT.WEEK, 1);
+  });
+
+  test('actual is 0 and projected is 1', () => {
+    assert.equal(STAT_SOURCE.ACTUAL, 0);
+    assert.equal(STAT_SOURCE.PROJECTED, 1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('naming raw stats', () => {
+  test('numeric ids become readable fields', () => {
+    const named = nameStats({ 24: 1412, 25: 16, 41: 52 });
+    assert.deepEqual(named, { rushingYards: 1412, rushingTouchdowns: 16, receptions: 52 });
+  });
+
+  test('unknown ids are dropped, never rendered as a number', () => {
+    const named = nameStats({ 24: 1412, 9999: 7 });
+    assert.deepEqual(Object.keys(named), ['rushingYards']);
+  });
+
+  test('non-numeric values are dropped rather than printed as junk', () => {
+    assert.deepEqual(nameStats({ 24: 'lots', 25: null, 41: 52 }), { receptions: 52 });
+  });
+
+  test('nothing in, empty object out', () => {
+    assert.deepEqual(nameStats(undefined), {});
+    assert.deepEqual(nameStats({}), {});
+  });
+
+  test('every STAT_LINES field is a name STAT_KEYS can actually produce', () => {
+    // A typo in a stat line is invisible at runtime: the field is simply never
+    // found and silently omitted from the card.
+    const producible = new Set(Object.values(STAT_KEYS));
+    for (const [position, spec] of Object.entries(STAT_LINES)) {
+      for (const [key] of spec) {
+        assert.ok(producible.has(key), `${position} wants "${key}", which STAT_KEYS never emits`);
+      }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('reading a season out of stats[]', () => {
+  const player = {
+    id: 1,
+    stats: [
+      entry(2025, STAT_SOURCE.ACTUAL, STAT_SPLIT.SEASON, RB_2025, 301.4),
+      entry(2025, STAT_SOURCE.PROJECTED, STAT_SPLIT.SEASON, { 24: 1, 25: 1 }, 999),
+      entry(2025, STAT_SOURCE.ACTUAL, STAT_SPLIT.WEEK, { 24: 88 }, 14.2),
+      entry(2026, STAT_SOURCE.PROJECTED, STAT_SPLIT.SEASON, { 24: 2 }, 888),
+    ],
+  };
+
+  test('finds what actually happened, not the projection', () => {
+    const out = seasonActuals(player, 2025);
+    assert.equal(out.fantasyPoints, 301.4);
+    assert.equal(out.stats.rushingYards, 1412);
+  });
+
+  test('finds the season, not a single week', () => {
+    assert.notEqual(seasonActuals(player, 2025).stats.rushingYards, 88);
+  });
+
+  test('does not reach into the wrong season', () => {
+    assert.equal(seasonActuals(player, 2024), null);
+  });
+
+  test('a player with no stats returns null rather than throwing', () => {
+    assert.equal(seasonActuals({ id: 2 }, 2025), null);
+    assert.equal(seasonActuals(null, 2025), null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('per-position stat lines', () => {
+  test('a running back gets carries and receptions', () => {
+    const line = statLine('RB', nameStats(RB_2025));
+    const labels = line.map((f) => f.label);
+    assert.deepEqual(labels, ['Carries', 'Rush yds', 'Rush TD', 'Rec', 'Rec yds', 'Rec TD']);
+  });
+
+  test('a quarterback is never shown receptions', () => {
+    const line = statLine('QB', { passingYards: 4306, receptions: 1 });
+    assert.ok(!line.some((f) => f.key === 'receptions'));
+  });
+
+  test('missing fields are omitted, not shown as zero', () => {
+    // "0 rushing TDs" and "we have no rushing data" look identical on screen
+    // and are different claims.
+    const line = statLine('RB', { rushingYards: 900 });
+    assert.deepEqual(line.map((f) => f.key), ['rushingYards']);
+  });
+
+  test('a zero that really is zero survives', () => {
+    const line = statLine('RB', { rushingYards: 900, rushingTouchdowns: 0 });
+    assert.deepEqual(line.map((f) => f.value), [900, 0]);
+  });
+
+  test('an unknown position yields no line rather than throwing', () => {
+    assert.deepEqual(statLine('LS', { rushingYards: 1 }), []);
+    assert.deepEqual(statLine('RB', null), []);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('building the card index', () => {
+  const players = [
+    { id: 10, injuryStatus: 'ACTIVE', stats: [entry(2025, 0, 0, RB_2025, 301.4)] },
+    { id: 11, injuryStatus: 'QUESTIONABLE', stats: [] },
+    { id: 12, injuryStatus: 'ACTIVE', stats: [] },
+  ];
+
+  test('a player with last season’s stats gets a card', () => {
+    const cards = buildPlayerCards({ players, seasonId: 2026 });
+    assert.ok(cards[10]);
+    assert.equal(cards[10].lastSeason.season, 2025);
+    assert.equal(cards[10].lastSeason.stats.rushingYards, 1412);
+  });
+
+  test('an injury alone is enough to earn a card', () => {
+    const cards = buildPlayerCards({ players, seasonId: 2026 });
+    assert.ok(cards[11]);
+    assert.equal(cards[11].injury, 'Questionable');
+  });
+
+  test('a healthy rookie with nothing to say gets no card at all', () => {
+    // An empty popover teaches people the feature is broken.
+    const cards = buildPlayerCards({ players, seasonId: 2026 });
+    assert.equal(cards[12], undefined);
+  });
+
+  test('news alone is enough to earn a card', () => {
+    const cards = buildPlayerCards({
+      players,
+      seasonId: 2026,
+      news: { 12: [{ headline: 'Signed to the active roster', published: null }] },
+    });
+    assert.ok(cards[12]);
+    assert.equal(cards[12].news.length, 1);
+  });
+
+  test('injury codes are humanized, not shown as ESPN enums', () => {
+    const cards = buildPlayerCards({
+      players: [{ id: 20, injuryStatus: 'INJURY_RESERVE', stats: [] }],
+      seasonId: 2026,
+    });
+    assert.equal(cards[20].injury, 'IR');
+  });
+
+  test('placeholder ids are skipped', () => {
+    // ESPN pre-builds draft slots with playerId -1.
+    const cards = buildPlayerCards({
+      players: [{ id: -1, injuryStatus: 'OUT', stats: [] }, { id: 0, injuryStatus: 'OUT', stats: [] }],
+      seasonId: 2026,
+    });
+    assert.deepEqual(Object.keys(cards), []);
+  });
+
+  test('the first (richest) source wins for a duplicated player', () => {
+    const cards = buildPlayerCards({
+      players: [
+        { id: 30, injuryStatus: 'OUT', stats: [entry(2025, 0, 0, RB_2025, 300)] },
+        { id: 30, injuryStatus: 'ACTIVE', stats: [] },
+      ],
+      seasonId: 2026,
+    });
+    assert.equal(cards[30].injury, 'Out');
+    assert.ok(cards[30].lastSeason);
+  });
+
+  test('no players at all produces an empty index, not a crash', () => {
+    assert.deepEqual(buildPlayerCards({ seasonId: 2026 }), {});
+    assert.deepEqual(buildPlayerCards(), {});
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('news normalization', () => {
+  const raw = [
+    {
+      playerId: 5,
+      items: [
+        { headline: 'Old news', published: '2026-08-01T00:00:00Z' },
+        { headline: 'Fresh news', published: '2026-09-01T00:00:00Z' },
+        { headline: 'Middle news', published: '2026-08-20T00:00:00Z' },
+      ],
+    },
+  ];
+
+  test('newest first', () => {
+    const out = normalizeNews(raw);
+    assert.deepEqual(out[5].map((i) => i.headline), ['Fresh news', 'Middle news', 'Old news']);
+  });
+
+  test('capped per player', () => {
+    assert.equal(normalizeNews(raw, { perPlayer: 2 })[5].length, 2);
+  });
+
+  test('an item with no headline is dropped', () => {
+    const out = normalizeNews([{ playerId: 6, items: [{ published: '2026-09-01T00:00:00Z' }] }]);
+    assert.equal(out[6], undefined);
+  });
+
+  test('undated news is kept but sorted last — it just cannot claim recency', () => {
+    const out = normalizeNews([
+      {
+        playerId: 7,
+        items: [
+          { headline: 'No date' },
+          { headline: 'Dated', published: '2026-09-01T00:00:00Z' },
+        ],
+      },
+    ]);
+    assert.deepEqual(out[7].map((i) => i.headline), ['Dated', 'No date']);
+  });
+
+  test('a missing or malformed feed yields nothing rather than throwing', () => {
+    // The news endpoint is optional; every failure has to look like "no news".
+    assert.deepEqual(normalizeNews(undefined), {});
+    assert.deepEqual(normalizeNews(null), {});
+    assert.deepEqual(normalizeNews([{ noPlayerId: true }]), {});
+    assert.deepEqual(normalizeNews([{ playerId: 9 }]), {});
+  });
+});
+```
+
 ## Automation
 
 Daily GitHub Actions run: fetch, build, test, commit only on change.
@@ -10546,4 +11518,4 @@ jobs:
 
 ---
 
-*31 files, 10,300 lines.*
+*33 files, 11,259 lines.*

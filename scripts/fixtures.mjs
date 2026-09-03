@@ -573,6 +573,40 @@ await writeJson(path.join(OUT, 'freeagents.json'), {
 // Draft pool, in kona_player_info shape, so the big board builds end to end
 // ---------------------------------------------------------------------------
 
+/**
+ * A plausible prior-season stat breakdown, keyed by the real ESPN stat ids.
+ *
+ * The hover cards read this breakdown, not the fantasy-point total, so without
+ * it a fixtures build exercises the card index but never the stat line. Scaled
+ * off the same talent number that drives everything else here, so a good player
+ * gets good peripherals and the whole thing stays deterministic under the seed.
+ */
+function priorSeasonStats(pos, points) {
+  const n = (x) => Math.max(0, Math.round(x));
+  switch (pos) {
+    case 'QB':
+      return { 3: n(points * 13), 4: n(points * 0.09), 20: n(points * 0.035),
+               24: n(points * 1.2), 25: n(points * 0.012) };
+    case 'RB':
+      return { 23: n(points * 0.75), 24: n(points * 4.2), 25: n(points * 0.04),
+               41: n(points * 0.17), 42: n(points * 1.5), 43: n(points * 0.012) };
+    case 'WR':
+      return { 58: n(points * 0.5), 41: n(points * 0.33), 42: n(points * 4.6),
+               43: n(points * 0.035) };
+    case 'TE':
+      return { 58: n(points * 0.45), 41: n(points * 0.32), 42: n(points * 3.7),
+               43: n(points * 0.03) };
+    case 'K':
+      return { 80: n(points * 0.12), 77: n(points * 0.07), 74: n(points * 0.03),
+               85: n(points * 0.03), 86: n(points * 0.25) };
+    case 'D/ST':
+      return { 97: n(points * 0.35), 95: n(points * 0.12), 96: n(points * 0.08),
+               89: n(340 - points * 0.4), 127: n(6000 - points * 3) };
+    default:
+      return {};
+  }
+}
+
 // Ranked by talent, with ADP deliberately offset from true value so the value
 // grades have something real to find — a board where cost already equals value
 // would grade every player B- and prove nothing.
@@ -582,6 +616,7 @@ await writeJson(path.join(OUT, 'draftpool.json'), {
   rankType: 'SUPERFLEX',
   players: poolRanked.slice(0, 400).map((p, i) => {
     const seasonProjection = round2(p._talent * p._multiplier * REGULAR_WEEKS);
+    const priorPoints = round2(seasonProjection * (0.8 + rand() * 0.4));
     // Push QBs later in ADP than their value warrants, mirroring how real ADP
     // is collected from mostly-standard leagues.
     const adpBias = p._pos === 'QB' ? 45 : p._pos === 'K' || p._pos === 'D/ST' ? 60 : -8;
@@ -605,7 +640,14 @@ await writeJson(path.join(OUT, 'draftpool.json'), {
         },
         stats: [
           { seasonId: 2026, scoringPeriodId: 0, statSourceId: 1, statSplitTypeId: 0, appliedTotal: seasonProjection },
-          { seasonId: 2025, scoringPeriodId: 0, statSourceId: 0, statSplitTypeId: 0, appliedTotal: round2(seasonProjection * (0.8 + rand() * 0.4)) },
+          {
+            seasonId: 2025,
+            scoringPeriodId: 0,
+            statSourceId: 0,
+            statSplitTypeId: 0,
+            appliedTotal: priorPoints,
+            stats: priorSeasonStats(p._pos, priorPoints),
+          },
         ],
       },
     };

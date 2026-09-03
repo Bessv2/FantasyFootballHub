@@ -412,6 +412,50 @@ tr.playoff-cut td, tr.playoff-cut th { border-bottom: 2px solid var(--accent); }
 .hero--team .avatar { margin-bottom: 0.5rem; }
 .pick .avatar { margin: 0.3rem 0; }
 
+/* --- Player cards ---------------------------------------------------------
+   Opens on hover, on tap, and on keyboard focus — see app.js for why all
+   three. Positioned in JS because it has to flip above the trigger near the
+   bottom of a phone screen, which CSS alone cannot decide. */
+.pcard-trigger {
+  font: inherit; color: inherit; background: none; border: 0; padding: 0;
+  text-align: left; cursor: pointer;
+  text-decoration: underline dotted; text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+}
+.pcard-trigger:hover, .pcard-trigger[aria-expanded="true"] { text-decoration-color: var(--accent); }
+
+.pcard {
+  position: absolute; z-index: 50;
+  inline-size: min(22rem, calc(100vw - 1.5rem));
+  background: var(--bg-raised); border: 1px solid var(--border-strong);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 0.8rem 0.9rem; font-size: 0.85rem;
+}
+.pcard__name { margin: 0 0 0.15rem; font-weight: 700; font-size: 0.98rem; }
+.pcard__meta { font-weight: 400; color: var(--text-dim); font-size: 0.8rem; }
+.pcard__injury { margin: 0.35rem 0 0; }
+.pcard__heading {
+  margin: 0.7rem 0 0.35rem; font-size: 0.72rem; letter-spacing: 0.07em;
+  text-transform: uppercase; color: var(--text-dim);
+}
+.pcard__empty { margin: 0.5rem 0 0; color: var(--text-dim); }
+
+/* Auto-fit rather than a fixed column count: a kicker has five stats and a
+   tight end four, and neither should leave a hole in the grid. */
+.pcard__stats {
+  margin: 0; display: grid; gap: 0.4rem 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(4.5rem, 1fr));
+}
+.pcard__stats div { min-inline-size: 0; }
+.pcard__stats dt { color: var(--text-dim); font-size: 0.72rem; }
+.pcard__stats dd {
+  margin: 0; font-weight: 700; font-variant-numeric: tabular-nums; font-size: 0.95rem;
+}
+
+.pcard__news { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.45rem; }
+.pcard__news li { color: var(--text-muted); line-height: 1.35; }
+.pcard__news small { display: block; color: var(--text-dim); font-size: 0.74rem; margin-top: 0.1rem; }
+
 /* --- Weekly challenges ---------------------------------------------------- */
 .challenge {
   background: var(--bg-raised); border: 1px solid var(--border);

@@ -25,7 +25,7 @@ the way they are.
 | Managers | **10 committed.** ESPN size changed 12 -> 10. Most have not claimed their ESPN team yet. |
 | Buy-in | **$75** (was $50). Payouts **350 / 130 / 75** + **$195** funding weekly challenges at $15/wk. |
 | Money owed | Everyone paid **$50** under the old buy-in. The ledger shows each of them **$25 short** until somebody confirms otherwise — see below. |
-| Tests | 112, all passing |
+| Tests | 141, all passing |
 | Automation | GitHub Actions, daily 11:00 UTC — **verified working**, it has pushed real commits |
 
 The league had no rosters, no picks and no games at time of writing. Every
@@ -127,6 +127,22 @@ data bug.
 So a season-long projection is `seasonId: 2026, statSourceId: 1,
 statSplitTypeId: 0` — and last year's actual production is the same with
 `seasonId: 2025, statSourceId: 0`.
+
+### `statSplitTypeId` reads backwards, and `STAT_SPLIT` was wrong
+
+**0 is the season total. 1 is a single week.** That is the opposite of what the
+name suggests, and `constants.mjs` had it defined the wrong way round
+(`{ WEEK: 0, SEASON: 1 }`) from the start.
+
+It never caused a bug only because nothing imported it — `build.mjs` hardcodes
+`statSplitTypeId === 0` for season totals and is correct. The constant was a
+loaded gun for the first person to reach for it, which is exactly what happened
+when the player cards were built. Fixed, and pinned by a test that asserts
+`STAT_SPLIT.SEASON === 0` against what `buildDraftPool()` actually uses.
+
+Reversing this pair does not throw. It returns real numbers of the wrong kind —
+a single week presented as a season — so every downstream figure is quietly
+wrong and nothing announces it.
 
 ### Superflex rankings exist and matter enormously
 
@@ -271,6 +287,54 @@ and user-agent of everyone in the league. So logos are filtered against
 other either breaks every image or removes the guard, and neither announces
 itself.
 
+**Player cards are keyed by id in their own file, not inlined per view.** The
+same player shows up on the big board, a roster, the draft board and the mock
+draft. Inlining the card four times would multiply every payload that carries a
+player list, and the landing page would pay for data most visitors never hover.
+`docs/data/players-{year}.json` is loaded separately and its absence is a
+supported state — an older build has no such file and every name stays plain
+text.
+
+**The card is one element, moved and refilled.** Rendering 250 popovers into the
+Big Board and hiding them would put a quarter of a megabyte of hidden DOM on the
+page for the one card anybody looks at.
+
+**Cards open on hover, tap AND keyboard focus, and getting that right took three
+fixes.** All three were caught by driving a real browser; none would have shown
+up in a unit test:
+
+1. *Hover opened the card and it closed instantly.* The `pointerout` handler
+   fired while the pointer was still logically over the trigger (crossing
+   between the button and the card counts as leaving). Deleted it — since every
+   element fires `pointerover`, "the pointer is now over something that is
+   neither a trigger nor the card" is a complete and far less fragile leave
+   condition.
+2. *Tap did nothing on a phone.* The tap focused the button (card opens), then
+   the click toggled it (card closes). Fixed with a `pointerIntent` flag: focus
+   only opens the card when focus did **not** arrive from a pointer.
+3. *Any scroll dismissed the card.* There was a `scroll` → hide handler. The
+   card is positioned in **document** coordinates, so it already scrolls with
+   its trigger; closing on scroll only meant that anything scrolling the page
+   while opening — a browser bringing a focused element into view, a tap near
+   the bottom of a phone screen — killed the card the instant it appeared.
+   `resize` still hides, because that reflows the page and the coordinates stop
+   pointing at anything.
+
+**News carries its own age on every item, deliberately.** The site rebuilds
+daily, so a headline can be 24 hours old. Last season's stat line does not decay;
+an injury note is the most perishable thing in fantasy football. Showing "3h
+ago" next to each headline is what keeps a stale note from reading as current —
+somebody starting a player who was ruled out that morning is the failure mode
+this is guarding against. The README says plainly that the card is background,
+not a start/sit source.
+
+**The news endpoint is off the fantasy API entirely** — `site.api.espn.com`,
+no auth, one request per player. Scoped to the top 300 of the draft pool plus
+everyone rostered; the full 11,600-player pool would be 11,600 requests for data
+nobody reads. `getPlayerNews()` swallows every error and returns null, because
+"no news for this player" and "the endpoint moved" have to look identical to the
+card.
+
 **The image error handler is a single capture-phase listener, not `onerror=`.**
 An inline `onerror` attribute needs `script-src 'unsafe-inline'`, which is the
 one CSP relaxation this app refuses to make. `error` does not bubble from
@@ -301,7 +365,14 @@ each was checked to produce a sane winner and detail line.
 of box scores, deliberately imperfect lineups, trades, waivers — and runs it
 through the real pipeline.
 
-**Not verified at all:** the exact shape of ESPN's payloads once real picks and
+**Not verified at all:** the player-news endpoint. `site.api.espn.com/apis/
+fantasy/v2/games/ffl/news/players` is modelled on ESPN's public site API and has
+never been called from here — the sandbox this was built in cannot reach ESPN.
+It is written to fail soft, so the worst case is cards with no news on them, but
+the response shape `normalizeNews()` expects (`feed[].items[].headline`) is an
+assumption until someone runs `npm run fetch` and looks at `data/raw/2026/news.json`.
+
+Also **not verified at all:** the exact shape of ESPN's payloads once real picks and
 box scores exist for *this* league. Populated shapes are modelled on the
 documented API and on `espn-api`'s behaviour, not observed here.
 
@@ -356,6 +427,9 @@ and the coaching report all light up on their own.
 - **Challenge payouts are not tracked as paid.** Winners are computed, but
   settling one means adding a row to `payoutsPaid` in `config/money.json` by
   hand. A `payoutsPaid` entry keyed to a challenge week would close the loop.
+- **The news fetch is one request per player** and runs every build, capped at
+  300. It is the slowest step in `npm run fetch` by a wide margin. Caching by
+  player with a short TTL would cut it down; nothing does that yet.
 - **Nothing verifies an ESPN headshot exists** before rendering it. The fallback
   handles it, but a player ESPN has no photo of shows initials with no
   indication of why. That is the right behaviour; it is only worth noting so a
