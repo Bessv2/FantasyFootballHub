@@ -2,9 +2,8 @@
 
 Every source file in one place, for reading or for handing to a fresh session.
 
-- **Commit:** `50472d1` (2026-09-03 03:09:58 +0000)
-- **Generated:** 2026-09-03T03:40:01.779Z
-- **WARNING:** the working tree had uncommitted changes when this was generated, so this may not match any commit.
+- **Commit:** `eb63930` (2026-09-03 03:40:23 +0000)
+- **Generated:** 2026-09-03T03:40:23.249Z
 - **Regenerate with:** `npm run bundle`
 
 **Read [HANDOFF.md](HANDOFF.md) first.** It carries the ESPN API gotchas,
