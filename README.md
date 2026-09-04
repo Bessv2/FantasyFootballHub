@@ -453,10 +453,10 @@ Fetches, builds, commits, pushes. Cloudflare redeploys automatically.
 
 ## Automation — the hands-off option
 
-`.github/workflows/update.yml` runs daily at 11:00 UTC (about 6am US Eastern,
-after Monday Night Football has settled). It fetches, rebuilds, runs the tests,
-and commits **only when something actually changed** — Cloudflare redeploys off
-that push. You never have to touch it during the season.
+`.github/workflows/update.yml` runs every 3 hours, around the clock. It fetches,
+rebuilds, runs the tests, and commits **only when something actually
+changed** — Cloudflare redeploys off that push. You never have to touch it
+during the season.
 
 **To switch it on**, add two repository secrets — Settings → Secrets and
 variables → Actions → New repository secret:
