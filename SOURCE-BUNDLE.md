@@ -2,9 +2,8 @@
 
 Every source file in one place, for reading or for handing to a fresh session.
 
-- **Commit:** `961257e` (2026-09-03 03:40:23 +0000)
-- **Generated:** 2026-09-03T15:08:28.827Z
-- **WARNING:** the working tree had uncommitted changes when this was generated, so this may not match any commit.
+- **Commit:** `233aa01` (2026-09-04 21:38:44 +0000)
+- **Generated:** 2026-09-04T21:38:47.503Z
 - **Regenerate with:** `npm run bundle`
 
 **Read [HANDOFF.md](HANDOFF.md) first.** It carries the ESPN API gotchas,
@@ -99,16 +98,16 @@ League identity, money rules, and the credentials template. Real credentials liv
 
   "_membersNote": "10 managers. Names are placeholders until teams are claimed — edit them and add teamId as people join. NOTE: paid flags below were set at the old $50 buy-in; re-check who has settled the $25 difference.",
   "members": [
-    { "name": "Geordon Roe", "teamId": 1, "amountPaid": 50, "method": "Cash", "note": "paid $50 before the buy-in went to $75" },
-    { "name": "Anthony Steff", "teamId": 8, "amountPaid": 50, "method": "Cash", "note": "paid $50 before the buy-in went to $75" },
-    { "name": "Manager 3", "amountPaid": 50, "method": "Cash" },
-    { "name": "Manager 4", "amountPaid": 50, "method": "Cash" },
-    { "name": "Manager 5", "amountPaid": 50, "method": "Cash" },
-    { "name": "Manager 6", "amountPaid": 50, "method": "Cash" },
-    { "name": "Manager 7", "amountPaid": 50, "method": "Cash" },
-    { "name": "Manager 8", "amountPaid": 50, "method": "Cash" },
-    { "name": "Manager 9", "amountPaid": 50, "method": "Cash" },
-    { "name": "Manager 10", "amountPaid": 50, "method": "Cash" }
+    { "name": "Geordon Roe", "teamId": 1, "amountPaid": 75, "method": "Cash", "note": "" },
+    { "name": "Anthony Steff", "teamId": 8, "amountPaid": 75, "method": "Cash", "note": "" },
+    { "name": "Manager 3", "amountPaid": 75, "method": "Cash" },
+    { "name": "Manager 4", "amountPaid": 75, "method": "Cash" },
+    { "name": "Manager 5", "amountPaid": 75, "method": "Cash" },
+    { "name": "Manager 6", "amountPaid": 75, "method": "Cash" },
+    { "name": "Manager 7", "amountPaid": 75, "method": "Cash" },
+    { "name": "Manager 8", "amountPaid": 75, "method": "Cash" },
+    { "name": "Manager 9", "amountPaid": 75, "method": "Cash" },
+    { "name": "Manager 10", "amountPaid": 75, "method": "Cash" }
   ],
 
   "payouts": {
@@ -11385,9 +11384,9 @@ name: Update league data
 
 on:
   schedule:
-    # 11:00 UTC daily — about 6am US Eastern, after Monday Night Football has
-    # settled and early enough that the site is current before anyone looks.
-    - cron: '0 11 * * *'
+    # Every 3 hours, around the clock, so scores and news land within a few
+    # hours instead of waiting for the next calendar day.
+    - cron: '0 */3 * * *'
   workflow_dispatch:
     inputs:
       force:
