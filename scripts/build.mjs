@@ -25,7 +25,10 @@ import {
   computePositionalStats,
 } from './lib/analytics.mjs';
 import { analyzeDraft } from './lib/draft.mjs';
-import { computeLedger } from './lib/money.mjs';
+import { computeLedger, computePayouts, challengePayout, splitPot } from './lib/money.mjs';
+import { buildChallengeSchedule, computeChallenges, challengeLeaderboard } from './lib/challenges.mjs';
+import { sanitizeTeamLogo } from './lib/images.mjs';
+import { buildPlayerCards, normalizeNews } from './lib/playercard.mjs';
 import { recommendLineup, coachingReport, waiverTargets } from './lib/advisor.mjs';
 import { buildBigBoard } from './lib/bigboard.mjs';
 
@@ -79,12 +82,20 @@ async function loadSeasonRaw(season) {
     current: await readJson(path.join(dir, 'current.json')),
     freeAgents: await readJson(path.join(dir, 'freeagents.json')),
     draftPool: await readJson(path.join(dir, 'draftpool.json')),
+    news: await readJson(path.join(dir, 'news.json')),
     weeks,
   };
 }
 
 function buildSeason(raw, moneyConfig) {
   const season = normalizeSeason(raw);
+
+  // Fantasy team logos are URLs ESPN hands back, and ESPN lets a manager point
+  // one anywhere. Filtering here — at the top, before anything copies the value
+  // downstream — means every consumer sees an already-safe logo or none at all.
+  // See scripts/lib/images.mjs for what this is actually protecting against.
+  for (const team of season.teams) team.logo = sanitizeTeamLogo(team.logo);
+
   const teamWeeks = buildTeamWeeks(season);
   const teamStats = computeTeamStats(season, teamWeeks);
   const standings = computeStandings(teamStats, season);
@@ -93,13 +104,74 @@ function buildSeason(raw, moneyConfig) {
   const weeklyHigh = computeWeeklyHighScores(teamWeeks, teamStats);
   const positional = computePositionalStats(teamWeeks, teamStats);
   const draft = analyzeDraft(season);
-  const ledger = computeLedger(moneyConfig, season, standings);
+
+  const playerCards = buildPlayerCards({
+    players: playerObjectsFor(raw),
+    seasonId: season.league.season,
+    news: normalizeNews(raw.news?.feeds),
+  });
+
+  const challenges = buildChallenges(season, teamStats, teamWeeks, moneyConfig);
+  // The ledger needs the same week list the challenges were dealt for, so the
+  // pot it splits and the pot the site pays out are the same pot.
+  const ledger = computeLedger(moneyConfig, season, standings, {
+    challengeWeeks: challenges.schedule.weeks.map((w) => w.week),
+  });
 
   const teamDetail = buildTeamDetail(season, teamStats, teamWeeks, standings, draft);
 
   return {
     season, teamWeeks, teamStats, standings, power, prizes,
-    weeklyHigh, positional, draft, ledger, teamDetail,
+    weeklyHigh, positional, draft, ledger, teamDetail, challenges, playerCards,
+  };
+}
+
+/**
+ * The weekly challenge: deal the season's schedule, then score the weeks that
+ * have actually been played.
+ *
+ * The per-week cash is computed here rather than read out of the ledger,
+ * because the ledger is never published — the league still has to be able to
+ * see what this week is worth. Both sides call splitPot() on the same payout
+ * slot, so they cannot drift.
+ */
+function buildChallenges(season, teamStats, teamWeeks, moneyConfig) {
+  const config = moneyConfig.weeklyChallenge ?? {};
+  const schedule = buildChallengeSchedule({
+    leagueId: season.league.id,
+    season: season.league.season,
+    weeks: season.league.regularSeasonWeeks,
+    salt: config.salt ?? '',
+    cadence: config.cadence ?? 'weekly',
+    startWeek: config.startWeek ?? 1,
+  });
+
+  const weekNumbers = schedule.weeks.map((w) => w.week);
+
+  const expectedPot =
+    (Number(moneyConfig.buyIn) || 0) * (moneyConfig.members?.length || season.league.size);
+  const { payouts } = computePayouts(moneyConfig, expectedPot);
+  const pot = Math.max(0, challengePayout(payouts, moneyConfig));
+  const perWeek = new Map(splitPot(pot, weekNumbers).map((w) => [w.week, w.amount]));
+
+  const resolved = computeChallenges({
+    schedule,
+    teamWeeks,
+    teamStats,
+    weeksPlayed: season.status.weeksPlayed,
+    payouts: perWeek,
+  });
+
+  return {
+    enabled: config.enabled !== false,
+    seed: schedule.seed,
+    cadence: schedule.cadence,
+    currency: moneyConfig.currency ?? 'USD',
+    pot: Number(pot.toFixed(2)),
+    totalWeeks: weekNumbers.length,
+    schedule,
+    weeks: resolved,
+    leaderboard: challengeLeaderboard(resolved, teamStats),
   };
 }
 
@@ -139,6 +211,7 @@ function buildTeamDetail(season, teamStats, teamWeeks, standings, draft) {
         teamName: team.name,
         abbrev: team.abbrev,
         managerName: team.managerName,
+        logo: team.logo,
         isPlaceholder: team.isPlaceholder,
         rank: standing?.rank ?? null,
         inPlayoffs: standing?.inPlayoffs ?? false,
@@ -238,6 +311,38 @@ function buildDraftPool(raw) {
   return { rankType, players };
 }
 
+/**
+ * Every full player object the raw payloads carry, for the card index.
+ *
+ * Three sources, in priority order — the draft pool is richest (it has the
+ * per-stat breakdown), current rosters cover anyone drafted, and the weekly box
+ * scores catch players who were rostered earlier and since dropped. First one
+ * to claim an id wins, so the richest source is walked first.
+ */
+function playerObjectsFor(raw) {
+  const out = [];
+
+  for (const entry of raw.draftPool?.players ?? []) {
+    if (entry?.player) out.push(entry.player);
+  }
+  for (const team of raw.current?.teams ?? []) {
+    for (const entry of team?.roster?.entries ?? []) {
+      if (entry?.playerPoolEntry?.player) out.push(entry.playerPoolEntry.player);
+    }
+  }
+  for (const { data } of raw.weeks ?? []) {
+    for (const game of data?.schedule ?? []) {
+      for (const side of [game?.home, game?.away]) {
+        for (const entry of side?.rosterForCurrentScoringPeriod?.entries ?? []) {
+          if (entry?.playerPoolEntry?.player) out.push(entry.playerPoolEntry.player);
+        }
+      }
+    }
+  }
+
+  return out;
+}
+
 /** Human-readable summary of what the league is currently doing. */
 function describePhase(season) {
   const { phase, teamsJoined, weeksPlayed } = season.status;
@@ -333,6 +438,7 @@ async function main() {
     power: current.power,
     weeklyHigh: current.weeklyHigh,
     positional: current.positional,
+    challenges: current.challenges,
     site: config.site ?? {},
   });
 
@@ -350,6 +456,7 @@ async function main() {
       weeklyHigh: b.weeklyHigh,
       positional: b.positional,
       prizes: b.prizes,
+      challenges: b.challenges,
       transactions: b.season.transactions,
       trades: b.season.trades,
     });
@@ -379,6 +486,21 @@ async function main() {
         ...board,
       });
     }
+
+    // Player cards: last season's real production, injury status and news,
+    // keyed by player id. Its own file because the same player shows up on the
+    // board, a roster, the draft board and the mock draft — inlining the card
+    // in each would multiply the payload, and the landing page would pay for
+    // data most visitors never hover.
+    await writeJson(path.join(DERIVED, `players-${b.year}.json`), {
+      year: b.year,
+      priorSeason: b.year - 1,
+      // When the news was pulled, so the front end can say how old it is
+      // rather than presenting day-old injury notes as current.
+      newsFetchedAt: b.raw.news?.fetchedAt ?? null,
+      count: Object.keys(b.playerCards).length,
+      cards: b.playerCards,
+    });
 
     // Per-team detail: the personal view each manager lands on.
     await writeJson(path.join(DERIVED, `teams-${b.year}.json`), {
@@ -438,6 +560,15 @@ async function main() {
   console.log(`  trades            ${s.trades.length}`);
   console.log(`  transactions      ${s.transactions.length}`);
   console.log(`  prizes computable ${current.prizes.length}`);
+  console.log(
+    `  player cards      ${Object.keys(current.playerCards).length}` +
+      `${current.raw.news ? '' : ' (no news fetched)'}`
+  );
+  const settled = current.challenges.weeks.filter((w) => w.winner).length;
+  console.log(
+    `  challenges        ${settled}/${current.challenges.totalWeeks} settled ` +
+      `(${current.challenges.cadence}, ${current.ledger.currency} ${current.challenges.pot} pot)`
+  );
   if (current.ledger.warnings.length) {
     console.log('\nMoney ledger notes:');
     for (const w of current.ledger.warnings) console.log(`  - ${w}`);

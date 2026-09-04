@@ -18,10 +18,10 @@ import { createMockDraft, advanceToUser, makePick, gradeDraft, rosterNeeds } fro
  *     than advertising that something is being withheld.
  */
 
-const ALL_VIEWS = ['overview', 'standings', 'teams', 'team', 'draft', 'board', 'mock', 'trades', 'prizes', 'money'];
+const ALL_VIEWS = ['overview', 'standings', 'teams', 'team', 'draft', 'board', 'mock', 'trades', 'challenges', 'prizes', 'money'];
 let VIEWS = ALL_VIEWS.filter((v) => v !== 'money' && v !== 'mock' && v !== 'board');
 
-const state = { hub: null, season: null, draft: null, money: null, teamDetail: null, draftPool: null, bigBoard: null };
+const state = { hub: null, season: null, draft: null, money: null, teamDetail: null, draftPool: null, bigBoard: null, playerCards: null };
 let countdownTimer = null;
 
 /** Which team the visitor has claimed as theirs, remembered across visits. */
@@ -96,6 +96,331 @@ const starterCount = (league) =>
 /** Slot 7 is ESPN's OP slot — QB-eligible, i.e. a superflex league. */
 const isSuperflex = (league) =>
   (league.startingSlots ?? []).some((slot) => slot.slotId === 7);
+
+// --- Pictures --------------------------------------------------------------
+//
+// Headshots and logos are hotlinked from ESPN rather than committed, so every
+// one of them can fail: ESPN has no photo for a fringe rookie, a URL shape
+// changes, a manager is offline. None of that may leave a broken-image icon
+// on the page.
+//
+// The fallback is a monogram drawn underneath the <img>. If the image loads it
+// covers the monogram; if it 404s the handler below hides the <img> and the
+// monogram is simply what was already there. No layout shift either way.
+//
+// The handler is attached once, in the capture phase, because `error` does not
+// bubble from <img> — and an inline onerror= attribute would need
+// script-src 'unsafe-inline', which is exactly the CSP relaxation this app
+// refuses to make.
+
+const ESPN_HEADSHOT = 'https://a.espncdn.com/i/headshots/nfl/players/full';
+const ESPN_TEAM_LOGO = 'https://a.espncdn.com/i/teamlogos/nfl/500';
+
+function initImageFallbacks() {
+  document.addEventListener(
+    'error',
+    (event) => {
+      const el = event.target;
+      if (el instanceof HTMLImageElement && el.classList.contains('avatar__img')) el.hidden = true;
+    },
+    true
+  );
+}
+
+/** Up to two letters, so a monogram stays legible at 30px. */
+function initials(name) {
+  const words = String(name ?? '').trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return '?';
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+}
+
+/**
+ * The right picture for a roster row.
+ *
+ * D/ST is the case worth care: a defence has a real playerId, so the headshot
+ * URL builds fine and then 404s every time. Defences get their NFL team's
+ * shield instead.
+ */
+function playerImage(player) {
+  if (!player) return null;
+  if (player.position === 'D/ST') {
+    const team = player.proTeam;
+    return team && team !== 'FA' ? `${ESPN_TEAM_LOGO}/${String(team).toLowerCase()}.png` : null;
+  }
+  const id = Number(player.playerId);
+  return id > 0 ? `${ESPN_HEADSHOT}/${id}.png` : null;
+}
+
+/**
+ * An image with a monogram behind it.
+ *
+ * `variant` only changes the shape: round for faces, square for team logos,
+ * which reads better for a badge that is usually not circular to begin with.
+ */
+function avatar(src, name, { variant = 'player', size = null } = {}) {
+  const style = size ? ` style="--avatar-size:${Number(size)}px"` : '';
+  return `<span class="avatar avatar--${esc(variant)}"${style}>
+    <span class="avatar__initials" aria-hidden="true">${esc(initials(name))}</span>
+    ${src ? `<img class="avatar__img" src="${esc(src)}" alt="" loading="lazy" decoding="async">` : ''}
+  </span>`;
+}
+
+/**
+ * A player's picture next to their name — the shape used in every table.
+ *
+ * When a card exists for this player the name becomes a <button>, which is what
+ * makes the card reachable by keyboard and tappable on a phone rather than
+ * hover-only. Players with no card stay plain text: a control that opens
+ * nothing is worse than no control.
+ */
+const playerCell = (player, sub = null) => {
+  const label = esc(player?.name ?? '—');
+  const tail = sub === null ? '' : `<small>${esc(sub)}</small>`;
+  const name = hasCard(player?.playerId)
+    ? `<button type="button" class="pcard-trigger"
+         data-player-id="${esc(player.playerId)}"
+         data-player-name="${esc(player.name ?? '')}"
+         data-player-pos="${esc(player.position ?? '')}"
+         data-player-team="${esc(player.proTeam ?? '')}"
+         aria-describedby="player-card" aria-expanded="false">${label}</button>`
+    : label;
+  return `
+  <span class="named">
+    ${avatar(playerImage(player), player?.name, { variant: 'player' })}
+    <span class="named__text">${name}${tail}</span>
+  </span>`;
+};
+
+/** A fantasy team's logo next to its name. */
+const teamCell = (team, sub = null, href = null) => {
+  const label = team?.teamName ?? team?.name ?? '—';
+  const inner = `
+    ${avatar(team?.logo ?? null, label, { variant: 'team' })}
+    <span class="named__text">${
+      href ? `<a href="${esc(href)}">${esc(label)}</a>` : esc(label)
+    }${sub === null ? '' : `<small>${esc(sub)}</small>`}</span>`;
+  return `<span class="named">${inner}</span>`;
+};
+
+// --- Player cards ----------------------------------------------------------
+//
+// Hover a player to see last season's production, their injury status and any
+// news. Three interaction notes, none of them optional:
+//
+//   Hover is not enough. This site is meant to be opened on a phone — the
+//   README says so — and a phone has no hover. So the same card opens on tap,
+//   and closes on the next tap outside it.
+//
+//   Keyboard users get it too. The trigger is a <button>, so it is focusable
+//   and the card opens on focus and closes on Escape. A div with a mouseover
+//   handler would have shipped this feature to two-thirds of the ways people
+//   read a web page.
+//
+//   One card element, moved and refilled. Rendering 250 popovers into the Big
+//   Board and hiding them would put a quarter of a megabyte of hidden DOM on
+//   the page for the one card anybody looks at.
+
+const STAT_LINES = {
+  QB: [['passingYards', 'Pass yds'], ['passingTouchdowns', 'Pass TD'], ['passingInterceptions', 'INT'],
+       ['rushingYards', 'Rush yds'], ['rushingTouchdowns', 'Rush TD']],
+  RB: [['rushingAttempts', 'Carries'], ['rushingYards', 'Rush yds'], ['rushingTouchdowns', 'Rush TD'],
+       ['receptions', 'Rec'], ['receivingYards', 'Rec yds'], ['receivingTouchdowns', 'Rec TD']],
+  WR: [['receivingTargets', 'Targets'], ['receptions', 'Rec'], ['receivingYards', 'Rec yds'],
+       ['receivingTouchdowns', 'Rec TD'], ['rushingYards', 'Rush yds']],
+  TE: [['receivingTargets', 'Targets'], ['receptions', 'Rec'], ['receivingYards', 'Rec yds'],
+       ['receivingTouchdowns', 'Rec TD']],
+  K: [['madeFieldGoalsFromUnder40', 'FG <40'], ['madeFieldGoalsFrom40To49', 'FG 40-49'],
+      ['madeFieldGoalsFrom50Plus', 'FG 50+'], ['missedFieldGoals', 'Missed'], ['madeExtraPoints', 'XP']],
+  'D/ST': [['defensiveSacks', 'Sacks'], ['defensiveInterceptions', 'INT'], ['defensiveFumbles', 'Fum rec'],
+           ['defensivePointsAllowed', 'Pts allowed'], ['defensiveYardsAllowed', 'Yds allowed']],
+};
+
+let cardEl = null;
+let cardOwner = null;
+
+/** "3 days ago" — news that cannot say when it is from is news you cannot use. */
+function timeAgo(iso) {
+  if (!iso) return null;
+  const then = new Date(iso);
+  if (Number.isNaN(then.getTime())) return null;
+  const mins = Math.round((Date.now() - then.getTime()) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  return days === 1 ? 'yesterday' : `${days}d ago`;
+}
+
+function cardHtml(player, card) {
+  const parts = [];
+
+  parts.push(`<p class="pcard__name">${esc(player.name)}
+    <span class="pcard__meta">${esc(player.position ?? '')}${
+      player.proTeam ? ` · ${esc(player.proTeam)}` : ''
+    }</span></p>`);
+
+  if (card.injury && card.injury !== 'Active') {
+    parts.push(`<p class="pcard__injury"><span class="pill pill--warn">${esc(card.injury)}</span></p>`);
+  }
+
+  const prior = card.lastSeason;
+  const line = prior ? (STAT_LINES[player.position] ?? []).filter(([k]) => prior.stats[k] != null) : [];
+
+  if (line.length) {
+    parts.push(`<p class="pcard__heading">${esc(prior.season)} season${
+      prior.fantasyPoints != null ? ` · ${esc(num(prior.fantasyPoints, 1))} fantasy pts` : ''
+    }</p>`);
+    parts.push(`<dl class="pcard__stats">${line
+      .map(([key, label]) => `<div><dt>${esc(label)}</dt><dd>${esc(num(prior.stats[key], 0))}</dd></div>`)
+      .join('')}</dl>`);
+  } else {
+    parts.push(`<p class="pcard__empty">No ${esc(state.playerCards?.priorSeason ?? 'prior')} stats — rookie, or did not play.</p>`);
+  }
+
+  if (card.news?.length) {
+    parts.push('<p class="pcard__heading">Latest news</p>');
+    parts.push(`<ul class="pcard__news">${card.news
+      .map((item) => {
+        const when = timeAgo(item.published);
+        return `<li>${esc(item.headline)}${
+          when ? `<small>${esc(when)}${item.source ? ` · ${esc(item.source)}` : ''}</small>` : ''
+        }</li>`;
+      })
+      .join('')}</ul>`);
+  }
+
+  return parts.join('');
+}
+
+function positionCard(trigger) {
+  const rect = trigger.getBoundingClientRect();
+  const width = cardEl.offsetWidth;
+  const height = cardEl.offsetHeight;
+  const margin = 8;
+
+  // Below the name by default, above it when there is no room — a card that
+  // opens off the bottom of a phone screen is a card nobody reads.
+  let top = rect.bottom + window.scrollY + 6;
+  if (rect.bottom + height + margin > window.innerHeight && rect.top - height - margin > 0) {
+    top = rect.top + window.scrollY - height - 6;
+  }
+
+  let left = rect.left + window.scrollX;
+  const maxLeft = window.scrollX + document.documentElement.clientWidth - width - margin;
+  left = Math.max(window.scrollX + margin, Math.min(left, maxLeft));
+
+  cardEl.style.top = `${Math.round(top)}px`;
+  cardEl.style.left = `${Math.round(left)}px`;
+}
+
+function showCard(trigger) {
+  if (cardOwner === trigger && !cardEl.hidden) return;
+  const id = Number(trigger.dataset.playerId);
+  const card = state.playerCards?.cards?.[id];
+  if (!card) return;
+
+  const player = {
+    name: trigger.dataset.playerName ?? '',
+    position: trigger.dataset.playerPos ?? '',
+    proTeam: trigger.dataset.playerTeam ?? '',
+  };
+
+  cardEl.innerHTML = cardHtml(player, card);
+  cardEl.hidden = false;
+  positionCard(trigger);
+  trigger.setAttribute('aria-expanded', 'true');
+  cardOwner = trigger;
+}
+
+function hideCard() {
+  if (!cardEl || cardEl.hidden) return;
+  cardEl.hidden = true;
+  cardOwner?.setAttribute('aria-expanded', 'false');
+  cardOwner = null;
+}
+
+/**
+ * One set of listeners on the document, delegated, so cards keep working on
+ * content rendered after boot — every view replaces its own innerHTML, and
+ * per-element listeners would die with it.
+ */
+function initPlayerCards() {
+  cardEl = document.createElement('div');
+  cardEl.className = 'pcard';
+  cardEl.id = 'player-card';
+  cardEl.setAttribute('role', 'tooltip');
+  cardEl.hidden = true;
+  document.body.appendChild(cardEl);
+
+  const triggerFor = (target) => target?.closest?.('[data-player-id]');
+  const insideCard = (target) => Boolean(target?.closest?.('.pcard'));
+
+  // Was the last thing the user did a pointer action? Focus follows a tap or a
+  // click as well as a Tab key, and without knowing which, the focus handler
+  // fights the click handler: the tap focuses the button (card opens), then the
+  // click toggles it (card closes), and a phone user sees nothing at all.
+  let pointerIntent = false;
+  document.addEventListener('pointerdown', () => { pointerIntent = true; }, true);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Tab') pointerIntent = false; }, true);
+
+  // Enter and leave are both decided here rather than with a matching
+  // pointerout handler. pointerout fires while the pointer is still logically
+  // over the trigger — crossing between the button and the card counts as
+  // leaving — which closed the card the instant it opened. Since every element
+  // fires pointerover, "the pointer is now over something that is neither a
+  // trigger nor the card" is a complete and much less fragile leave condition.
+  document.addEventListener('pointerover', (e) => {
+    if (e.pointerType === 'touch') return;
+    const trigger = triggerFor(e.target);
+    if (trigger) showCard(trigger);
+    else if (!insideCard(e.target)) hideCard();
+  });
+
+  document.addEventListener('click', (e) => {
+    const trigger = triggerFor(e.target);
+    if (!trigger) {
+      if (!insideCard(e.target)) hideCard();
+      return;
+    }
+    e.preventDefault();
+    // On touch this is the only way in, so it toggles. The focus that arrived
+    // with the same tap has already been ignored, so `cardOwner` here really
+    // does mean "this card was open before you tapped".
+    if (cardOwner === trigger) hideCard();
+    else showCard(trigger);
+  });
+
+  document.addEventListener('focusin', (e) => {
+    if (pointerIntent) return;
+    const trigger = triggerFor(e.target);
+    if (trigger) showCard(trigger);
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      const owner = cardOwner;
+      hideCard();
+      owner?.focus();
+    }
+  });
+
+  // No scroll handler on purpose. The card is positioned in *document*
+  // coordinates (the scroll offset is baked into top/left at open time), so it
+  // scrolls with its trigger and stays glued to the right name for free.
+  // Closing on scroll instead looks reasonable and is not: anything that
+  // scrolls the page while opening — a browser bringing a focused element into
+  // view, a tap near the bottom of a phone screen — dismisses the card the
+  // instant it appears.
+  //
+  // Resize is different: it reflows the page, so the coordinates the card was
+  // given no longer point at anything.
+  window.addEventListener('resize', hideCard);
+}
+
+/** Whether this player has a card worth opening. */
+const hasCard = (playerId) => Boolean(state.playerCards?.cards?.[Number(playerId)]);
 
 function emptyState(icon, title, message) {
   return `<div class="empty">
@@ -346,7 +671,7 @@ function renderStandings() {
       (t) => `
       <tr class="${t.rank === league.playoffTeams ? 'playoff-cut' : ''}">
         <td class="num rank">${esc(t.rank)}</td>
-        <th scope="row" class="row-team">${esc(t.teamName)}<small>${esc(t.managerName ?? '')}</small></th>
+        <th scope="row" class="row-team">${teamCell(t, t.managerName ?? '')}</th>
         <td class="num">${esc(t.wins)}-${esc(t.losses)}${t.ties ? `-${esc(t.ties)}` : ''}</td>
         <td class="bar-cell">${bar(t.pointsFor, maxPF, { digits: 0 })}</td>
         <td class="num">${num(t.pointsAgainst, 1)}</td>
@@ -393,7 +718,10 @@ function renderTeams() {
     const roster = hub.teams
       .map(
         (t) => `<a class="card" href="#team/${esc(t.id)}" style="text-decoration:none;color:inherit;display:block">
-          <h3>${esc(t.name)}</h3>
+          <h3 class="named">
+            ${avatar(t.logo ?? null, t.name, { variant: 'team', size: 40 })}
+            <span class="named__text">${esc(t.name)}</span>
+          </h3>
           <p>${
             t.isPlaceholder
               ? '<span class="pill pill--warn">Open spot</span>'
@@ -412,7 +740,10 @@ function renderTeams() {
     .sort((a, b) => b.pointsFor - a.pointsFor)
     .map(
       (t) => `<div class="card">
-        <h3><a href="#team/${esc(t.teamId)}">${esc(t.teamName)}</a></h3>
+        <h3 class="named">
+          ${avatar(t.logo ?? null, t.teamName, { variant: 'team', size: 40 })}
+          <span class="named__text"><a href="#team/${esc(t.teamId)}">${esc(t.teamName)}</a></span>
+        </h3>
         <p class="stat__note">${esc(t.managerName ?? '')}</p>
         <ul class="stats" style="margin:0.75rem 0 0">
           <li class="stat"><span class="stat__label">Record</span>
@@ -481,7 +812,8 @@ function renderTeam(teamId) {
 
   // --- Header -----------------------------------------------------------
   parts.push(`
-    <section class="hero" aria-labelledby="team-hero">
+    <section class="hero hero--team" aria-labelledby="team-hero">
+      ${avatar(team.logo ?? null, team.teamName, { variant: 'team', size: 72 })}
       <p class="hero__eyebrow">${esc(team.managerName ?? 'Unclaimed')}</p>
       <h2 id="team-hero">${esc(team.teamName)}</h2>
       <p class="hero__sub">
@@ -679,7 +1011,7 @@ function renderTeam(teamId) {
         .map(
           (p) => `<tr>
             <td>${esc(p.slot)}</td>
-            <th scope="row" class="row-team">${esc(p.name)}<small>${esc(p.proTeam)}</small></th>
+            <th scope="row" class="row-team">${playerCell(p, p.proTeam)}</th>
             <td>${esc(p.position)}</td>
             <td class="num">${num(p.projected, 1)}</td>
             <td>${p.injuryStatus && p.injuryStatus !== 'ACTIVE' && p.injuryStatus !== 'NORMAL'
@@ -1073,11 +1405,14 @@ function renderBoard() {
               (p) => `<tr>
                 <td class="num rank">${esc(p.valueRank)}</td>
                 <th scope="row" class="row-team">
-                  ${esc(p.name)}<small>${esc(p.proTeam)}${
-                    p.injuryStatus && !['ACTIVE', 'NORMAL'].includes(p.injuryStatus)
-                      ? ` · ${esc(p.injuryStatus)}`
-                      : ''
-                  }</small>
+                  ${playerCell(
+                    p,
+                    `${p.proTeam}${
+                      p.injuryStatus && !['ACTIVE', 'NORMAL'].includes(p.injuryStatus)
+                        ? ` · ${p.injuryStatus}`
+                        : ''
+                    }`
+                  )}
                 </th>
                 <td>${esc(p.position)}${esc(p.positionRank)}</td>
                 <td class="num">${esc(p.tier)}</td>
@@ -1362,7 +1697,7 @@ function renderMock() {
                 .map(
                   (p) => `<tr>
                     <td class="num rank">${esc(p.rank)}</td>
-                    <th scope="row" class="row-team">${esc(p.name)}<small>${esc(p.proTeam)}</small></th>
+                    <th scope="row" class="row-team">${playerCell(p, p.proTeam)}</th>
                     <td>${esc(p.position)}</td>
                     <td class="num">${p.projected === null ? '—' : num(p.projected, 0)}</td>
                     <td class="num">${p.adp === null ? '—' : num(p.adp, 1)}</td>
@@ -1542,7 +1877,21 @@ function renderDraft() {
             .map(
               (p) => `<li class="pick">
                 <span class="pick__num">${esc(p.overall)}.</span>
-                <span class="pick__player">${esc(p.playerName)}</span>
+                ${avatar(
+                  playerImage({ playerId: p.playerId, position: p.position, proTeam: p.proTeam }),
+                  p.playerName,
+                  { variant: 'player', size: 44 }
+                )}
+                <span class="pick__player">${
+                  hasCard(p.playerId)
+                    ? `<button type="button" class="pcard-trigger"
+                         data-player-id="${esc(p.playerId)}"
+                         data-player-name="${esc(p.playerName)}"
+                         data-player-pos="${esc(p.position)}"
+                         data-player-team="${esc(p.proTeam)}"
+                         aria-describedby="player-card" aria-expanded="false">${esc(p.playerName)}</button>`
+                    : esc(p.playerName)
+                }</span>
                 <span class="pick__meta">${esc(p.position)} · ${esc(p.proTeam)}</span><br>
                 <span class="pick__meta">${esc(p.teamName)}</span>
                 ${draft.hasResults ? `<br>${deltaPill(p.valueDelta, 0)}` : ''}
@@ -1668,7 +2017,7 @@ function renderPrizes() {
       (p) => `<div class="prize">
         <p class="prize__label">${esc(p.label)}</p>
         <p class="prize__desc">${esc(p.description)}</p>
-        <p class="prize__winner">${esc(p.winner.teamName)}</p>
+        <p class="prize__winner">${teamCell(p.winner)}</p>
         <p class="prize__detail">${esc(p.winner.detail ?? '')}</p>
       </div>`
     )
@@ -1683,7 +2032,7 @@ function renderPrizes() {
            <tbody>${weeklyHigh
              .map(
                (w) => `<tr><td class="num rank">${esc(w.week)}</td>
-                 <th scope="row" class="row-team">${esc(w.teamName)}</th>
+                 <th scope="row" class="row-team">${teamCell(w)}</th>
                  <td class="num">${num(w.score, 2)}</td></tr>`
              )
              .join('')}</tbody>
@@ -1792,6 +2141,127 @@ function renderMoney() {
   $('#money-body').innerHTML = parts.join('');
 }
 
+// --- Weekly challenge ------------------------------------------------------
+
+/**
+ * The weekly challenge board.
+ *
+ * Three states share this view and each needs to read as deliberate:
+ *
+ *   settled   played, scored, somebody got paid
+ *   live      announced, not yet played — this is the one people came to see
+ *   sealed    dealt but face-down, because revealing Week 9 in Week 2 turns a
+ *             season of small surprises into a spoiler
+ *
+ * The seed is printed at the bottom on purpose. It is the only thing that makes
+ * "the draw was random" checkable rather than merely claimed: anyone can take
+ * that string, run the same shuffle, and confirm the deck was never restacked
+ * after the games were played.
+ */
+function renderChallenges() {
+  const c = state.hub?.challenges;
+  const body = $('#challenges-body');
+
+  if (!c || !c.enabled || !c.weeks.length) {
+    body.innerHTML = emptyState(
+      '🎲',
+      'No weekly challenge configured',
+      'Set weeklyChallenge.enabled in config/money.json to turn this on.'
+    );
+    return;
+  }
+
+  const currency = c.currency ?? 'USD';
+  const settled = c.weeks.filter((w) => w.winner);
+  const live = c.weeks.find((w) => !w.sealed && !w.played);
+  const parts = [];
+
+  // --- What is on right now ---------------------------------------------
+  parts.push(`
+    <section class="hero">
+      <p class="hero__eyebrow">${esc(c.cadence === 'biweekly' ? 'Every other week' : 'Every week')} · ${esc(money(c.pot, currency))} in play</p>
+      <h2>${live ? `Week ${esc(live.week)}: ${esc(live.label)}` : 'Weekly challenge'}</h2>
+      <p class="hero__sub">${
+        live
+          ? `${esc(live.rule)} <strong>${esc(money(live.amount, currency))}</strong> to the winner.`
+          : settled.length === c.weeks.length
+            ? 'Every challenge has been settled for the season.'
+            : 'The first challenge is revealed once the season is underway.'
+      }</p>
+    </section>`);
+
+  // --- Money won so far ---------------------------------------------------
+  if (c.leaderboard.length) {
+    parts.push(`
+      <div class="table-scroll">
+        <table>
+          <caption>Challenge winnings so far</caption>
+          <thead><tr>
+            <th scope="col" class="num">#</th><th scope="col">Team</th>
+            <th scope="col" class="num">Won</th><th scope="col" class="num">Cash</th>
+          </tr></thead>
+          <tbody>
+            ${c.leaderboard
+              .map(
+                (t, i) => `<tr>
+                  <td class="num rank">${esc(i + 1)}</td>
+                  <th scope="row" class="row-team">${teamCell(t, t.managerName ?? '', `#team/${t.teamId}`)}</th>
+                  <td class="num">${esc(t.challengesWon)}</td>
+                  <td class="num">${esc(money(t.amountWon, currency))}</td>
+                </tr>`
+              )
+              .join('')}
+          </tbody>
+        </table>
+      </div>`);
+  }
+
+  // --- Every week ---------------------------------------------------------
+  const cards = c.weeks
+    .map((w) => {
+      if (w.sealed) {
+        return `<div class="challenge challenge--sealed">
+          <p class="challenge__week">Week ${esc(w.week)} · ${esc(money(w.amount, currency))}</p>
+          <p class="challenge__label"><span aria-hidden="true">🔒</span> Sealed</p>
+          <p class="challenge__rule">Revealed the week it is played.</p>
+        </div>`;
+      }
+
+      const status = w.winner ? 'won' : w.noWinner ? 'void' : 'live';
+      const outcome = w.winner
+        ? `<p class="challenge__winner">${teamCell(w.winner, null, `#team/${w.winner.teamId}`)}</p>
+           <p class="challenge__detail">${esc(w.winner.detail ?? '')}</p>
+           <p class="challenge__payout">${esc(money(w.winner.amount, currency))}${
+             (w.tiedWith ?? []).length
+               ? ` each — tied with ${esc(w.tiedWith.map((t) => t.teamName).join(', '))}`
+               : ''
+           }</p>`
+        : w.noWinner
+          ? '<p class="challenge__detail"><em>Nobody qualified. The pot rolls into the season awards.</em></p>'
+          : '<p class="challenge__detail"><em>Not played yet.</em></p>';
+
+      return `<div class="challenge challenge--${esc(status)}">
+        <p class="challenge__week">Week ${esc(w.week)} · ${esc(money(w.amount, currency))}</p>
+        <p class="challenge__label">${esc(w.label)}</p>
+        <p class="challenge__rule">${esc(w.rule)}</p>
+        ${outcome}
+      </div>`;
+    })
+    .join('');
+
+  parts.push(`<h3 style="margin-top:2rem">Every week</h3><div class="grid">${cards}</div>`);
+
+  parts.push(`
+    <p class="view__intro" style="margin-top:2rem">
+      The schedule is a seeded shuffle, dealt once and fixed for the season — no
+      challenge repeats, and none of them can change after the games are played.
+      Verify it yourself against the seed
+      <code>${esc(c.seed)}</code>.
+    </p>`);
+
+  body.innerHTML = parts.join('');
+}
+
 const RENDERERS = {
   overview: renderOverview,
   standings: renderStandings,
@@ -1802,6 +2272,7 @@ const RENDERERS = {
   mock: renderMock,
   trades: renderTrades,
   prizes: renderPrizes,
+  challenges: renderChallenges,
   money: renderMoney,
 };
 
@@ -1885,13 +2356,15 @@ function initTheme() {
 
 async function boot() {
   initTheme();
+  initImageFallbacks();
+  initPlayerCards();
 
   try {
     const hub = await loadJson('data/hub.json');
     state.hub = hub;
 
     const year = hub.league.season ?? hub.seasons?.[hub.seasons.length - 1];
-    const [season, draft, teamDetail, draftPool, bigBoard, ledger] = await Promise.all([
+    const [season, draft, teamDetail, draftPool, bigBoard, ledger, playerCards] = await Promise.all([
       loadJson(`data/season-${year}.json`).catch(() => null),
       loadJson(`data/draft-${year}.json`).catch(() => null),
       loadJson(`data/teams-${year}.json`).catch(() => null),
@@ -1899,6 +2372,9 @@ async function boot() {
       loadJson(`data/bigboard-${year}.json`).catch(() => null),
       // Absent on the published site by design — the ledger is never uploaded.
       loadJson('data/money.json').catch(() => null),
+      // Hover cards. Optional: an older build has no such file, and every
+      // player name simply stays plain text.
+      loadJson(`data/players-${year}.json`).catch(() => null),
     ]);
     state.season = season;
     state.draft = draft;
@@ -1906,6 +2382,7 @@ async function boot() {
     state.draftPool = draftPool;
     state.bigBoard = bigBoard;
     state.money = ledger;
+    state.playerCards = playerCards;
     syncMyTeamNav();
 
     if (bigBoard?.available) {

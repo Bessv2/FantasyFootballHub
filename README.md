@@ -40,6 +40,8 @@ section fills in on its own schedule:
 | Section | Unlocks |
 | --- | --- |
 | Money | **Now** — set the buy-in and start tracking payments |
+| Player cards | After one `npm run update` — needs a fetch to build |
+| Challenges | **Now** — Week 1's challenge is drawn; the rest stay sealed |
 | Prizes (catalogue) | **Now** — see the 18 prizes so you can agree rules early |
 | Teams | As managers claim their spots |
 | Draft | Draft night, **Sept 5 2026** |
@@ -147,6 +149,128 @@ Sunday, and a grade that rewarded it would teach the wrong lesson.
 Rebuild the board any time with `npm run update`; rankings shift as the real
 draft approaches.
 
+## Weekly challenges
+
+`#challenges` draws **one challenge at random for each week of the regular
+season**, and each one pays cash. It replaces the idea of a fixed list of
+season-end awards with something that gives every manager a reason to set a
+lineup in Week 11 whether or not they can still make the playoffs.
+
+Current league: **$195 across 13 weeks = $15 a week.**
+
+The deck holds 23 challenges. Some are about scoring, some about the specific
+decisions a manager actually makes:
+
+| | |
+| --- | --- |
+| **Top Gun** | Most points scored this week |
+| **Price Is Right** | Closest to 100 without going over — bust and you're out |
+| **Sitting On A Gold Mine** | Most points left on the bench |
+| **Robbed** | Highest score that still lost |
+| **Stole One** | Lowest score that still won |
+| **Gunslinger / Ground Game / Hands Team / …** | Best started player at one position |
+| **No Weak Links** | Smallest gap between your best and worst starter |
+| **Second Fiddle** | Highest-scoring *second*-best starter — your stud doesn't count |
+| **Overachiever** | Beat your own projection by the most |
+
+### Why the draw is seeded
+
+The schedule is a **seeded shuffle** keyed on the league id and season, dealt
+once, without replacement. That matters more than it sounds:
+
+- **It cannot reshuffle.** The site rebuilds every day, including the rebuild
+  that happens *after* Sunday's games. A `Math.random()` draw would silently
+  re-pick Week 4's challenge with Week 4's results already known. That is not a
+  bug, it is a rigged league — so there are tests pinning the draw's
+  reproducibility.
+- **Nothing repeats.** 13 weeks means 13 different challenges.
+- **The seed is published** at the bottom of the page. Anyone can take that
+  string, run the same shuffle, and confirm the deck was never restacked.
+
+### What is revealed when
+
+Each week's challenge is announced **before that week is played** — you cannot
+play for a target you don't know. Everything after it stays sealed, so there is
+something to find out each Sunday rather than a spoiler-filled list in
+September. Sealed weeks still show what they are worth.
+
+Ties split the pot rather than falling back to a tiebreak nobody agreed to. A
+challenge nobody qualifies for (everyone busts Price Is Right) simply has no
+winner.
+
+### Changing it
+
+Everything lives in `config/money.json` under `weeklyChallenge`:
+
+```jsonc
+"weeklyChallenge": {
+  "enabled": true,
+  "cadence": "weekly",   // or "biweekly" — one challenge every other week
+  "startWeek": 1,
+  "salt": "",            // change to reshuffle the whole season
+  "payoutId": "challenges"
+}
+```
+
+> **Only ever change `salt` before Week 1.** Mid-season it re-draws weeks that
+> have already been played and settled.
+
+To add a challenge of your own, append to `CHALLENGE_DECK` in
+`scripts/lib/challenges.mjs`. A challenge is an id, a label, a rule in plain
+English, a function that scores one team's week (highest wins, `null` means
+"did not qualify"), and a function that explains the number. It can only read
+what the box score proves.
+
+## Player cards
+
+Hover any player name — on the Big Board, a roster, the draft board or the mock
+draft — and a card shows **last season's real production**, their **injury
+status**, and any **news**.
+
+| | |
+| --- | --- |
+| **Stat line** | Position-appropriate: a quarterback gets passing yards, TDs and picks; a running back gets carries and receptions; a kicker gets field goals by distance. A field with no data is left out rather than printed as a zero — "0 rushing TDs" and "we have no rushing data" look identical on screen and are not the same claim. |
+| **Injury** | Only shown when it is not "Active", so the card stays quiet for healthy players. |
+| **News** | Up to three headlines, newest first, **each stamped with its age**. |
+
+### It is not hover-only
+
+Hover alone would have shipped this to whoever happens to be at a desk. The same
+card opens on **tap** (this site is meant to be read on a phone) and on
+**keyboard focus**, and closes on Escape with focus returned to the name you
+came from. Player names with a card are `<button>`s for exactly that reason;
+players with nothing to show stay plain text, because a control that opens
+nothing is worse than no control.
+
+### About the news timestamps
+
+The site rebuilds once a day. Last season's stat line is as true tomorrow as it
+is today, but **an injury note is the most perishable thing in fantasy
+football** — "limited in practice" is worth nothing by Sunday afternoon. So
+every headline carries its own age ("3h ago", "yesterday") rather than being
+presented as current. Stale news that admits it is stale is useful; stale news
+wearing a confident face is worse than none, because somebody starts a player
+who was ruled out that morning.
+
+**Treat the card as background, not as a start/sit source.** For a live inactive
+list, check ESPN.
+
+### Where the data comes from
+
+Stats and injury status were **already in ESPN's payload** — the build was
+keeping only the fantasy-point total and discarding the per-stat breakdown
+sitting next to it. That part costs no extra requests.
+
+News is a separate endpoint, fetched one player at a time for the top 300 of the
+draft pool plus everyone rostered. It is entirely optional: if it is
+unreachable, rate-limited or moved, cards still show stats and injury.
+
+Cards live in `docs/data/players-{year}.json`, keyed by player id and loaded
+separately from the landing payload — the same player appears on four different
+screens, and inlining the card in each would multiply every payload that carries
+a player list. **The file only exists after a fetch**, so run `npm run update`
+once to turn the feature on; until then names simply stay plain text.
+
 ## Team pages
 
 Every manager gets their own page at `#team/{id}` — e.g.
@@ -242,17 +366,15 @@ These cookies expire every few months. When `npm run fetch` starts returning
 
 ### Money — `config/money.json`
 
-**The buy-in is currently a `$50` placeholder.** Change it to your real number:
-
 ```jsonc
 {
-  "buyIn": 50,
+  "buyIn": 75,
   "payouts": {
     "structure": [
-      { "id": "first",    "label": "1st Place",   "amount": 275 },
-      { "id": "second",   "label": "2nd Place",   "amount": 125 },
-      { "id": "third",    "label": "3rd Place",   "amount": 50  },
-      { "id": "sidePots", "label": "Side Prizes", "remainder": true }
+      { "id": "first",      "label": "1st Place",         "amount": 350 },
+      { "id": "second",     "label": "2nd Place",         "amount": 130 },
+      { "id": "third",      "label": "3rd Place",         "amount": 75  },
+      { "id": "challenges", "label": "Weekly Challenges", "remainder": true }
     ]
   }
 }
@@ -266,13 +388,20 @@ A slot can be defined three ways:
 | `"pct": 25` | A share of the pot, rebalances automatically |
 | `"remainder": true` | Whatever is left after the others |
 
-Current league: **10 × $50 = $500**, paying **$275 / $125 / $50** with **$50**
-left for side prizes.
+Current league: **10 × $75 = $750**, paying **$350 / $130 / $75** with **$195**
+funding the weekly challenges — **$15 a week across 13 weeks**. Third place is
+exactly the buy-in back, so finishing third costs you nothing.
 
 The remainder slot is the useful part. If an eleventh manager joins, the three
-places stay exactly as announced and the side-prize pot grows to $100 — rather
-than every prize shifting by a few dollars. The site warns if the fixed amounts
-exceed the pot, or if nothing absorbs the difference.
+places stay exactly as announced and the weekly challenge grows from $15 to $20
+— rather than every prize shifting by a few dollars and nobody being sure what
+was agreed. The site warns if the fixed amounts exceed the pot, or if nothing
+absorbs the difference.
+
+The challenge pot is divided in whole cents with the leftover handed to the
+earliest weeks, so the thirteen weekly amounts add back up to $195 exactly. A
+naive `pot / weeks` drifts, and a ledger that cannot account for six cents is a
+ledger nobody trusts with the other $555.
 
 Record payments as they come in:
 
@@ -364,6 +493,30 @@ npm run deploy             # uploads docs/ directly
 `docs/_headers` sets security headers and stops Cloudflare caching stale week
 data. It only takes effect on Cloudflare, and is harmless elsewhere.
 
+### Photos
+
+Player headshots, NFL team logos and each manager's fantasy team logo are
+**hotlinked from ESPN's CDN** rather than downloaded and committed. That keeps
+the repo small and means a traded player's picture is right the moment ESPN
+updates it — at the cost of the site no longer being fully self-contained.
+
+Two consequences worth knowing:
+
+- **`docs/_headers` names those hosts in `img-src`.** Nothing else can load an
+  image. If you ever move to another host, carry that header across or every
+  picture on the site silently disappears.
+- **Fantasy team logos are filtered before they are rendered.** A team logo is
+  a URL ESPN hands back from the league payload, and ESPN's classic UI lets a
+  manager paste in *any* URL — so an unfiltered one would let a manager point
+  every visitor's browser at a server of their choosing and collect the IP of
+  everyone who opens the site. `sanitizeTeamLogo()` in `scripts/lib/images.mjs`
+  drops anything not on ESPN's CDN, and a test pins that list against the CSP so
+  the two cannot drift apart.
+
+Anything with no picture — a rookie ESPN has no headshot for, a manager who
+never set a logo — falls back to a monogram of their initials. Same box, no
+layout shift, no broken-image icon.
+
 ### If you ever switch back to GitHub Pages
 
 Everything still works: `docs/.nojekyll` is already in place. Settings → Pages →
@@ -412,10 +565,13 @@ scripts/
     normalize.mjs  raw ESPN -> clean domain model, phase detection
     lineup.mjs     optimal-lineup solver
     analytics.mjs  standings, all-play, luck, efficiency, prizes
+    challenges.mjs the weekly challenge deck and its seeded draw
     draft.mjs      draft value and grading
+    images.mjs     headshot/logo URLs and the team-logo allowlist
+    playercard.mjs hover-card stats, injury and news
     money.mjs      the ledger
 docs/            the published site (this is what GitHub Pages serves)
-tests/           33 tests covering the analytics
+tests/           141 tests covering the analytics, challenges, images and cards
 ```
 
 ## The stats, briefly

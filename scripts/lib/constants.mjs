@@ -174,9 +174,15 @@ export const INJURY_STATUS = {
 export const STAT_SOURCE = { ACTUAL: 0, PROJECTED: 1 };
 
 /**
- * `stats[].statSplitTypeId` — 0 is a single week, 1 is a season total.
+ * `stats[].statSplitTypeId` — 0 is a season total, 1 is a single week.
+ *
+ * This reads backwards from what you would guess, which is why it is spelled
+ * out here and in HANDOFF.md: a season total is `scoringPeriodId 0` +
+ * `statSplitTypeId 0`, and one week is `scoringPeriodId > 0` +
+ * `statSplitTypeId 1`. Reversing them returns real data of the wrong kind, so
+ * nothing crashes and every downstream number is quietly wrong.
  */
-export const STAT_SPLIT = { WEEK: 0, SEASON: 1 };
+export const STAT_SPLIT = { SEASON: 0, WEEK: 1 };
 
 /** Selected `stats` keys worth surfacing. ESPN defines 200+; these are the ones
  *  that make readable "fine detail" for a league hub. */

@@ -2,8 +2,9 @@
 
 Every source file in one place, for reading or for handing to a fresh session.
 
-- **Commit:** `13eebca` (2026-08-20 21:00:15 -0400)
-- **Generated:** 2026-08-21T01:00:27.433Z
+- **Commit:** `961257e` (2026-09-03 03:40:23 +0000)
+- **Generated:** 2026-09-03T15:08:28.827Z
+- **WARNING:** the working tree had uncommitted changes when this was generated, so this may not match any commit.
 - **Regenerate with:** `npm run bundle`
 
 **Read [HANDOFF.md](HANDOFF.md) first.** It carries the ESPN API gotchas,
@@ -22,10 +23,10 @@ fixtures, both regenerable), `docs/data/` (build output).
 
 - **Configuration** — `league.json`, `money.json`, `secrets.example.json`
 - **Data layer — talking to ESPN** — `espn.mjs`, `constants.mjs`, `normalize.mjs`
-- **Analytics** — `lineup.mjs`, `analytics.mjs`, `draft.mjs`, `advisor.mjs`, `bigboard.mjs`, `money.mjs`
+- **Analytics** — `lineup.mjs`, `analytics.mjs`, `challenges.mjs`, `draft.mjs`, `advisor.mjs`, `bigboard.mjs`, `images.mjs`, `playercard.mjs`, `money.mjs`
 - **Pipeline scripts** — `check.mjs`, `fetch.mjs`, `build.mjs`, `serve.mjs`, `ship.mjs`, `myleagues.mjs`, `fixtures.mjs`
 - **Site** — `index.html`, `style.css`, `app.js`, `mock.js`, `_headers`
-- **Tests** — `analytics.test.mjs`
+- **Tests** — `analytics.test.mjs`, `challenges.test.mjs`, `images.test.mjs`, `playercard.test.mjs`
 - **Automation** — `update.yml`, `package.json`
 
 ---
@@ -70,7 +71,7 @@ League identity, money rules, and the credentials template. Real credentials liv
 
 ### `config/money.json`
 
-*65 lines*
+*87 lines*
 
 ```json
 {
@@ -79,62 +80,84 @@ League identity, money rules, and the credentials template. Real credentials liv
     "",
     "PRIVACY: this file is committed, but the LEDGER IT GENERATES is not.",
     "docs/data/money.json is gitignored, so the Money tab shows locally via",
-    "`npm run serve` and never reaches the public site.",
+    "`npm run serve` and never reaches the public site. Payout AMOUNTS are",
+    "published (the league has to know what a challenge is worth); who has paid",
+    "and who still owes is not.",
     "",
     "MEMBERS: list everyone who is in the pot, whether or not they have claimed",
     "an ESPN team yet. People commit and pay long before they click the invite",
     "link. Add `teamId` once you know which ESPN team is theirs, and the ledger",
     "will pull their real team name through.",
     "",
-    "Payouts are percentages, so changing buyIn or the member count rebalances",
-    "the amounts automatically. They must total 100."
+    "A payout slot can be a fixed 'amount', a 'pct' share of the pot, or",
+    "'remainder': true to absorb whatever is left."
   ],
 
   "currency": "USD",
-  "buyIn": 50,
+  "buyIn": 75,
   "buyInDueDate": "2026-09-05",
 
-  "_membersNote": "10 managers, all paid in full. Names are placeholders until teams are claimed — edit them and add teamId as people join.",
+  "_membersNote": "10 managers. Names are placeholders until teams are claimed — edit them and add teamId as people join. NOTE: paid flags below were set at the old $50 buy-in; re-check who has settled the $25 difference.",
   "members": [
-    { "name": "Geordon Roe", "teamId": 1, "paid": true, "method": "Cash" },
-    { "name": "Anthony Steff", "teamId": 8, "paid": true, "method": "Cash" },
-    { "name": "Manager 3", "paid": true, "method": "Cash" },
-    { "name": "Manager 4", "paid": true, "method": "Cash" },
-    { "name": "Manager 5", "paid": true, "method": "Cash" },
-    { "name": "Manager 6", "paid": true, "method": "Cash" },
-    { "name": "Manager 7", "paid": true, "method": "Cash" },
-    { "name": "Manager 8", "paid": true, "method": "Cash" },
-    { "name": "Manager 9", "paid": true, "method": "Cash" },
-    { "name": "Manager 10", "paid": true, "method": "Cash" }
+    { "name": "Geordon Roe", "teamId": 1, "amountPaid": 50, "method": "Cash", "note": "paid $50 before the buy-in went to $75" },
+    { "name": "Anthony Steff", "teamId": 8, "amountPaid": 50, "method": "Cash", "note": "paid $50 before the buy-in went to $75" },
+    { "name": "Manager 3", "amountPaid": 50, "method": "Cash" },
+    { "name": "Manager 4", "amountPaid": 50, "method": "Cash" },
+    { "name": "Manager 5", "amountPaid": 50, "method": "Cash" },
+    { "name": "Manager 6", "amountPaid": 50, "method": "Cash" },
+    { "name": "Manager 7", "amountPaid": 50, "method": "Cash" },
+    { "name": "Manager 8", "amountPaid": 50, "method": "Cash" },
+    { "name": "Manager 9", "amountPaid": 50, "method": "Cash" },
+    { "name": "Manager 10", "amountPaid": 50, "method": "Cash" }
   ],
 
   "payouts": {
     "_note": [
-      "A slot can be a fixed 'amount', a 'pct' share of the pot, or",
-      "'remainder': true to absorb whatever is left.",
+      "10 x $75 = $750.",
       "",
-      "At 10 x $50 = $500: 275 + 125 + 50 = 450, leaving $50 for side prizes.",
-      "If a manager joins or drops, the three places stay fixed and the side",
-      "prize pot moves — which is usually what a league actually wants."
+      "  1st         $350   the season",
+      "  2nd         $130",
+      "  3rd          $75   your buy-in back — third place costs you nothing",
+      "  Challenges  $195   the remainder, $15 a week across 13 weeks",
+      "",
+      "The challenge slot is the remainder on purpose. If an eleventh manager",
+      "joins, the three places stay exactly as announced and the weekly",
+      "challenge grows to $20 — rather than every prize shifting by a few",
+      "dollars and nobody being sure what was agreed."
     ],
     "structure": [
-      { "id": "first", "label": "1st Place", "amount": 275, "note": "Champion" },
-      { "id": "second", "label": "2nd Place", "amount": 125, "note": "Runner-up" },
-      { "id": "third", "label": "3rd Place", "amount": 50, "note": "Buy-in back" },
-      { "id": "sidePots", "label": "Side Prizes", "remainder": true, "note": "Weekly high score and season awards" }
+      { "id": "first", "label": "1st Place", "amount": 350, "note": "Champion" },
+      { "id": "second", "label": "2nd Place", "amount": 130, "note": "Runner-up" },
+      { "id": "third", "label": "3rd Place", "amount": 75, "note": "Buy-in back" },
+      { "id": "challenges", "label": "Weekly Challenges", "remainder": true, "note": "A random challenge every week, paid in cash" }
     ]
   },
 
-  "sidePots": {
-    "_note": "Optional smaller pots funded from the sidePots share above.",
-    "weeklyHighScore": { "enabled": true, "amountPerWeek": 0, "note": "Set an amount or leave 0 to split the pot evenly across weeks" },
-    "seasonAwards": []
+  "weeklyChallenge": {
+    "_note": [
+      "One challenge is drawn at random for each week from the deck in",
+      "scripts/lib/challenges.mjs. The draw is SEEDED on the league id and",
+      "season, so it is identical on every build — it cannot reshuffle itself",
+      "after the games are played.",
+      "",
+      "cadence:  'weekly' or 'biweekly'",
+      "startWeek: the first week that draws a challenge",
+      "salt:      change this to reshuffle the entire season. Doing that mid-",
+      "           season re-draws weeks that have already been played, so only",
+      "           ever touch it before Week 1.",
+      "payoutId:  which payout slot above funds the challenges."
+    ],
+    "enabled": true,
+    "cadence": "weekly",
+    "startWeek": 1,
+    "salt": "",
+    "payoutId": "challenges"
   },
 
   "_paymentsNote": "Only needed for per-team overrides once teams are claimed; `members` above covers the common case.",
   "payments": [],
 
-  "_payoutsPaidNote": "Filled in at the end of the season as you pay winners out.",
+  "_payoutsPaidNote": "Filled in at the end of the season as you pay winners out. Weekly challenge payouts go here too — { teamId, amount, note: 'Week 3 challenge' }.",
   "payoutsPaid": []
 }
 ```
@@ -177,7 +200,7 @@ Everything that knows ESPN exists. The API is undocumented, so most of the hard-
 
 ### `scripts/lib/espn.mjs`
 
-*319 lines*
+*347 lines*
 
 ```javascript
 /**
@@ -404,6 +427,34 @@ export function createClient({ leagueId, secrets = null, log = () => {} }) {
   }
 
   /**
+   * Player news, for the hover cards.
+   *
+   * This is the one endpoint here that is NOT part of the fantasy league API —
+   * it hangs off ESPN's public site API, takes no auth, and is the only source
+   * for "why is this player questionable". It is fetched one player at a time,
+   * so callers must pass a short list (the drafted/rostered players), never the
+   * whole 11,600-player pool.
+   *
+   * Deliberately soft-failing: a null return means "no news for this player",
+   * which is also what an unreachable endpoint looks like. News is a garnish on
+   * the card, and the card must still render its stat line without it.
+   */
+  async function getPlayerNews(playerId, { limit = 3 } = {}) {
+    const url =
+      `https://site.api.espn.com/apis/fantasy/v2/games/ffl/news/players` +
+      `?playerId=${encodeURIComponent(playerId)}&limit=${limit}`;
+    try {
+      const response = await fetch(url, { headers });
+      if (!response.ok) return null;
+      const json = await response.json();
+      const feed = json?.feed ?? json?.items ?? [];
+      return Array.isArray(feed) && feed.length ? { playerId, items: feed } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * The league activity feed, which is where trade detail actually lives.
    *
    * This hangs off a `/communication/` sub-path. Requesting the same view on
@@ -496,13 +547,13 @@ export function createClient({ leagueId, secrets = null, log = () => {} }) {
     }
     return response.json();
   }
-  return { getView, getPlayers, getActivity, getFreeAgents, getRostersForWeek, getDraftPool, urlFor, hasAuth: Boolean(secrets) };
+  return { getView, getPlayers, getActivity, getFreeAgents, getRostersForWeek, getDraftPool, getPlayerNews, urlFor, hasAuth: Boolean(secrets) };
 }
 ```
 
 ### `scripts/lib/constants.mjs`
 
-*216 lines*
+*222 lines*
 
 ```javascript
 /**
@@ -681,9 +732,15 @@ export const INJURY_STATUS = {
 export const STAT_SOURCE = { ACTUAL: 0, PROJECTED: 1 };
 
 /**
- * `stats[].statSplitTypeId` — 0 is a single week, 1 is a season total.
+ * `stats[].statSplitTypeId` — 0 is a season total, 1 is a single week.
+ *
+ * This reads backwards from what you would guess, which is why it is spelled
+ * out here and in HANDOFF.md: a season total is `scoringPeriodId 0` +
+ * `statSplitTypeId 0`, and one week is `scoringPeriodId > 0` +
+ * `statSplitTypeId 1`. Reversing them returns real data of the wrong kind, so
+ * nothing crashes and every downstream number is quietly wrong.
  */
-export const STAT_SPLIT = { WEEK: 0, SEASON: 1 };
+export const STAT_SPLIT = { SEASON: 0, WEEK: 1 };
 
 /** Selected `stats` keys worth surfacing. ESPN defines 200+; these are the ones
  *  that make readable "fine detail" for a league hub. */
@@ -1391,7 +1448,7 @@ export function lineupEfficiency(actualPoints, optimalPoints) {
 
 ### `scripts/lib/analytics.mjs`
 
-*596 lines*
+*602 lines*
 
 ```javascript
 /**
@@ -1681,6 +1738,7 @@ export function computePrizes(season, teamStats, teamWeeks) {
     teamStats.find((t) => t.teamId === teamId)?.teamName ?? `Team ${teamId}`;
   const managerOf = (teamId) =>
     teamStats.find((t) => t.teamId === teamId)?.managerName ?? null;
+  const logoOf = (teamId) => teamStats.find((t) => t.teamId === teamId)?.logo ?? null;
 
   if (teamWeeks.length === 0) return prizes;
 
@@ -1691,6 +1749,7 @@ export function computePrizes(season, teamStats, teamWeeks) {
           teamId: row.teamId,
           teamName: nameOf(row.teamId),
           managerName: managerOf(row.teamId),
+          logo: logoOf(row.teamId),
           week: row.week,
           value,
           detail,
@@ -1808,6 +1867,7 @@ export function computePrizes(season, teamStats, teamWeeks) {
       teamId: bestPlayer?.teamId,
       teamName: bestPlayer ? nameOf(bestPlayer.teamId) : null,
       managerName: bestPlayer ? managerOf(bestPlayer.teamId) : null,
+      logo: bestPlayer ? logoOf(bestPlayer.teamId) : null,
       week: bestPlayer?.week,
       value: bestPlayer?.points,
       detail: bestPlayer
@@ -1820,6 +1880,7 @@ export function computePrizes(season, teamStats, teamWeeks) {
       teamId: worstStart?.teamId,
       teamName: worstStart ? nameOf(worstStart.teamId) : null,
       managerName: worstStart ? managerOf(worstStart.teamId) : null,
+      logo: worstStart ? logoOf(worstStart.teamId) : null,
       week: worstStart?.week,
       value: worstStart?.points,
       detail: worstStart
@@ -1838,6 +1899,7 @@ export function computePrizes(season, teamStats, teamWeeks) {
         teamId: w.teamId,
         teamName: w.teamName,
         managerName: w.managerName,
+        logo: w.logo ?? null,
         week: null,
         value: format(w).value,
         detail: format(w).detail,
@@ -1950,6 +2012,7 @@ export function computeWeeklyHighScores(teamWeeks, teamStats) {
         teamId: top.teamId,
         teamName: team?.teamName ?? `Team ${top.teamId}`,
         managerName: team?.managerName ?? null,
+        logo: team?.logo ?? null,
         score: top.score,
       };
     });
@@ -1988,6 +2051,535 @@ export function computePositionalStats(teamWeeks, teamStats) {
   }
 
   return { rows, leaders };
+}
+```
+
+### `scripts/lib/challenges.mjs`
+
+*523 lines*
+
+```javascript
+/**
+ * The weekly random challenge.
+ *
+ * Instead of a fixed catalogue of season awards handed out once in December,
+ * every regular-season week draws one challenge from a deck and pays cash to
+ * whoever wins it. Somebody eliminated from playoff contention in Week 6 still
+ * has twelve reasons left to set a lineup.
+ *
+ * Three properties make this fair rather than a gimmick, and each one is a
+ * deliberate design constraint rather than an implementation detail:
+ *
+ *  1. **The draw is deterministic.** The schedule is a seeded shuffle keyed on
+ *     the league id and season, so every build produces the same challenge for
+ *     the same week, forever. Anything else and the site would quietly reroll
+ *     Week 4 every time the data refreshed — and since the refresh happens
+ *     *after* the games, that reroll would be picking a winner from known
+ *     results. `Math.random()` here would not be a bug, it would be a rigged
+ *     league.
+ *
+ *  2. **No challenge repeats** until the deck runs out. Dealing without
+ *     replacement, not sampling with it, so 13 weeks means 13 different games.
+ *
+ *  3. **Nothing is scored before it is announced.** Weeks that have not been
+ *     played yet are sealed — the schedule exists, but the site does not show
+ *     future challenges beyond the one currently in play. The seed is published
+ *     so anyone can verify after the fact that the deck was never restacked.
+ *
+ * Every challenge scores off the same `teamWeeks` rows the rest of the
+ * analytics use, so a challenge cannot measure anything the box score does not
+ * already prove.
+ */
+
+const round2 = (n) => Number((n ?? 0).toFixed(2));
+
+// ---------------------------------------------------------------------------
+// Deterministic randomness
+// ---------------------------------------------------------------------------
+
+/** FNV-1a. Turns the seed string into the 32 bits the generator needs. */
+function hashSeed(text) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+/** mulberry32 — small, fast, and identical on every machine and Node version. */
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function next() {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Fisher-Yates against a supplied generator, so the order is reproducible. */
+function shuffle(items, rand) {
+  const out = [...items];
+  for (let i = out.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rand() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// The deck
+// ---------------------------------------------------------------------------
+
+const sum = (rows, pick) => rows.reduce((total, row) => total + pick(row), 0);
+
+const startersAt = (row, position) => row.starters.filter((s) => s.position === position);
+
+const bestStarterAt = (row, position) => {
+  const list = startersAt(row, position);
+  return list.length ? list.reduce((a, b) => (a.points >= b.points ? a : b)) : null;
+};
+
+const positionPoints = (row, position) => round2(sum(startersAt(row, position), (s) => s.points));
+
+/**
+ * A challenge scores every team's week and the highest score wins.
+ *
+ * `score` returning null means "this team did not qualify this week" — an
+ * inverted challenge with no eligible team simply has no winner, which reads
+ * better than crowning someone on a technicality.
+ *
+ * `detail` explains the number in the language of the challenge, because
+ * "18.4" means nothing next to a name and "Josh Allen, 18.4 more than his
+ * projection" means everything.
+ */
+const challenge = (id, label, rule, score, detail) => ({ id, label, rule, score, detail });
+
+export const CHALLENGE_DECK = [
+  challenge(
+    'highScore',
+    'Top Gun',
+    'Most points scored this week.',
+    (row) => row.score,
+    (row) => `${row.score} points`
+  ),
+
+  challenge(
+    'closestTo100',
+    'Price Is Right',
+    'Closest to 100 points without going over. Bust and you are out.',
+    (row) => (row.score > 100 ? null : row.score),
+    (row) => `${row.score} points — ${round2(100 - row.score)} under the line`
+  ),
+
+  challenge(
+    'biggestBlowout',
+    'Woodshed',
+    'Largest margin of victory.',
+    (row) => (row.result === 'WIN' ? row.margin : null),
+    (row) => `won by ${row.margin}`
+  ),
+
+  challenge(
+    'narrowestWin',
+    'Photo Finish',
+    'Won by the smallest margin. Ugly counts.',
+    (row) => (row.result === 'WIN' ? -row.margin : null),
+    (row) => `won by ${row.margin}`
+  ),
+
+  challenge(
+    'perfectLineup',
+    'Nailed It',
+    'Highest lineup efficiency — the closest to starting the right nine.',
+    (row) => row.efficiency,
+    (row) => `${row.efficiency}% of a perfect lineup`
+  ),
+
+  challenge(
+    'benchWarmer',
+    'Sitting On A Gold Mine',
+    'Most points left on the bench. A prize for the worst decision of the week.',
+    (row) => row.benchPoints,
+    (row) => `${row.benchPoints} points benched`
+  ),
+
+  challenge(
+    'bestPlayer',
+    'One Man Army',
+    'Highest-scoring single starter.',
+    (row) => row.topStarter?.points ?? null,
+    (row) =>
+      row.topStarter ? `${row.topStarter.name} (${row.topStarter.position}) — ${row.topStarter.points}` : null
+  ),
+
+  challenge(
+    'bestQB',
+    'Gunslinger',
+    'Highest-scoring started quarterback.',
+    (row) => bestStarterAt(row, 'QB')?.points ?? null,
+    (row) => {
+      const qb = bestStarterAt(row, 'QB');
+      return qb ? `${qb.name} — ${qb.points}` : null;
+    }
+  ),
+
+  challenge(
+    'bestRB',
+    'Ground Game',
+    'Highest-scoring started running back.',
+    (row) => bestStarterAt(row, 'RB')?.points ?? null,
+    (row) => {
+      const rb = bestStarterAt(row, 'RB');
+      return rb ? `${rb.name} — ${rb.points}` : null;
+    }
+  ),
+
+  challenge(
+    'bestWR',
+    'Hands Team',
+    'Highest-scoring started wide receiver.',
+    (row) => bestStarterAt(row, 'WR')?.points ?? null,
+    (row) => {
+      const wr = bestStarterAt(row, 'WR');
+      return wr ? `${wr.name} — ${wr.points}` : null;
+    }
+  ),
+
+  challenge(
+    'bestTE',
+    'Tight Window',
+    'Highest-scoring started tight end.',
+    (row) => bestStarterAt(row, 'TE')?.points ?? null,
+    (row) => {
+      const te = bestStarterAt(row, 'TE');
+      return te ? `${te.name} — ${te.points}` : null;
+    }
+  ),
+
+  challenge(
+    'bestKicker',
+    'Toe The Line',
+    'Highest-scoring started kicker. The one week it pays to care.',
+    (row) => bestStarterAt(row, 'K')?.points ?? null,
+    (row) => {
+      const k = bestStarterAt(row, 'K');
+      return k ? `${k.name} — ${k.points}` : null;
+    }
+  ),
+
+  challenge(
+    'bestDefense',
+    'Bend Don’t Break',
+    'Highest-scoring started defence.',
+    (row) => bestStarterAt(row, 'D/ST')?.points ?? null,
+    (row) => {
+      const d = bestStarterAt(row, 'D/ST');
+      return d ? `${d.name} — ${d.points}` : null;
+    }
+  ),
+
+  challenge(
+    'uglyWin',
+    'Stole One',
+    'Lowest score that still won.',
+    (row) => (row.result === 'WIN' ? -row.score : null),
+    (row) => `won with just ${row.score}`
+  ),
+
+  challenge(
+    'toughLuck',
+    'Robbed',
+    'Highest score that still lost. The only prize for a bad schedule.',
+    (row) => (row.result === 'LOSS' ? row.score : null),
+    (row) => `${row.score} points and still lost by ${round2(Math.abs(row.margin))}`
+  ),
+
+  challenge(
+    'overProjection',
+    'Overachiever',
+    'Beat your own projected total by the most.',
+    (row) => {
+      const projected = sum(row.starters, (s) => s.projected ?? 0);
+      return projected > 0 ? round2(row.score - projected) : null;
+    },
+    (row) => {
+      const projected = round2(sum(row.starters, (s) => s.projected ?? 0));
+      return projected > 0 ? `${row.score} scored vs ${projected} projected` : null;
+    }
+  ),
+
+  challenge(
+    'balanced',
+    'No Weak Links',
+    'Smallest gap between your best and worst starter. Depth, not a hero.',
+    (row) =>
+      row.topStarter && row.worstStarter
+        ? -round2(row.topStarter.points - row.worstStarter.points)
+        : null,
+    (row) =>
+      row.topStarter && row.worstStarter
+        ? `${row.topStarter.points} high, ${row.worstStarter.points} low`
+        : null
+  ),
+
+  challenge(
+    'supportingCast',
+    'Second Fiddle',
+    'Highest-scoring *second*-best starter. Your stud does not count.',
+    (row) => {
+      const ranked = [...row.starters].sort((a, b) => b.points - a.points);
+      return ranked.length > 1 ? ranked[1].points : null;
+    },
+    (row) => {
+      const ranked = [...row.starters].sort((a, b) => b.points - a.points);
+      return ranked.length > 1 ? `${ranked[1].name} — ${ranked[1].points}` : null;
+    }
+  ),
+
+  challenge(
+    'runningBackRoom',
+    'Committee Approach',
+    'Most combined points from started running backs.',
+    (row) => (startersAt(row, 'RB').length ? positionPoints(row, 'RB') : null),
+    (row) => `${positionPoints(row, 'RB')} from ${startersAt(row, 'RB').length} RBs`
+  ),
+
+  challenge(
+    'receiverRoom',
+    'Air Raid',
+    'Most combined points from started receivers and tight ends.',
+    (row) => {
+      const pass = [...startersAt(row, 'WR'), ...startersAt(row, 'TE')];
+      return pass.length ? round2(sum(pass, (s) => s.points)) : null;
+    },
+    (row) => {
+      const pass = [...startersAt(row, 'WR'), ...startersAt(row, 'TE')];
+      return `${round2(sum(pass, (s) => s.points))} from ${pass.length} pass-catchers`;
+    }
+  ),
+
+  challenge(
+    'flexPlay',
+    'Best Use Of The Flex',
+    'Most points from the OP/FLEX slot — the one lineup decision that is genuinely yours.',
+    (row) => {
+      const flex = row.starters.filter((s) => s.slotId === 7 || s.slotId === 23);
+      return flex.length ? round2(sum(flex, (s) => s.points)) : null;
+    },
+    (row) => {
+      const flex = row.starters.filter((s) => s.slotId === 7 || s.slotId === 23);
+      return flex.length ? `${flex.map((s) => s.name).join(', ')} — ${round2(sum(flex, (s) => s.points))}` : null;
+    }
+  ),
+
+  challenge(
+    'allPlayWeek',
+    'Best In Show',
+    'Would have beaten the most other teams this week, whoever you actually played.',
+    (row, ctx) => {
+      const others = ctx.week.filter((r) => r.teamId !== row.teamId);
+      return others.filter((r) => row.score > r.score).length;
+    },
+    (row, value, ctx) => `would have beaten ${value} of ${ctx.week.length - 1}`
+  ),
+
+  challenge(
+    'underdog',
+    'Giant Killer',
+    'Beat the highest-scoring opponent of anyone who won.',
+    (row) => (row.result === 'WIN' ? row.opponentScore : null),
+    (row) => `beat a ${row.opponentScore}-point opponent`
+  ),
+];
+
+// ---------------------------------------------------------------------------
+// The schedule
+// ---------------------------------------------------------------------------
+
+/**
+ * The seed string. Everything that identifies *this* league's deck goes in it
+ * and nothing else — no date, no build number, nothing that changes between
+ * runs.
+ *
+ * `salt` is the escape hatch: change it in config and the whole season
+ * reshuffles. That is a thing a commissioner might legitimately want to do
+ * before the season starts, and must never do during it.
+ */
+export const challengeSeed = ({ leagueId, season, salt = '' }) =>
+  `roe-challenge:${leagueId}:${season}${salt ? `:${salt}` : ''}`;
+
+/**
+ * Deals one challenge per week for the whole regular season, up front.
+ *
+ * Dealt without replacement so nothing repeats. If a season is somehow longer
+ * than the deck, the deck is reshuffled and dealt again rather than running
+ * out — with a different shuffle each pass, so the second time through is not
+ * a rerun of the first in the same order.
+ */
+export function buildChallengeSchedule({
+  leagueId,
+  season,
+  weeks,
+  salt = '',
+  cadence = 'weekly',
+  startWeek = 1,
+  deck = CHALLENGE_DECK,
+}) {
+  const seed = challengeSeed({ leagueId, season, salt });
+  const rand = mulberry32(hashSeed(seed));
+  const step = cadence === 'biweekly' ? 2 : 1;
+
+  const playWeeks = [];
+  for (let week = startWeek; week <= weeks; week += step) playWeeks.push(week);
+
+  const dealt = [];
+  let pack = [];
+  for (const week of playWeeks) {
+    if (!pack.length) pack = shuffle(deck, rand);
+    const card = pack.shift();
+    dealt.push({
+      week,
+      challengeId: card.id,
+      label: card.label,
+      rule: card.rule,
+      // Bi-weekly challenges cover the week they are scored in, not a range —
+      // the schedule just skips the weeks in between.
+      cadence,
+    });
+  }
+
+  return { seed, cadence, startWeek, weeks: dealt };
+}
+
+// ---------------------------------------------------------------------------
+// Scoring
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolves each scheduled week into a winner, a pending week, or a sealed one.
+ *
+ * `revealThrough` is the last week whose challenge may be shown. It is the
+ * highest played week plus one, so the week currently being played is always
+ * announced before kickoff and everything after it stays face-down. Passing
+ * `revealAll` opens the whole schedule, which is the right thing before a
+ * season starts and the wrong thing during one.
+ */
+export function computeChallenges({
+  schedule,
+  teamWeeks,
+  teamStats = [],
+  weeksPlayed = 0,
+  revealAll = false,
+  payouts = new Map(),
+  deck = CHALLENGE_DECK,
+}) {
+  const cardById = new Map(deck.map((c) => [c.id, c]));
+  const statsById = new Map(teamStats.map((t) => [t.teamId, t]));
+
+  const byWeek = new Map();
+  for (const row of teamWeeks) {
+    if (!byWeek.has(row.week)) byWeek.set(row.week, []);
+    byWeek.get(row.week).push(row);
+  }
+
+  const revealThrough = revealAll ? Infinity : weeksPlayed + 1;
+
+  return schedule.weeks.map((slot) => {
+    const card = cardById.get(slot.challengeId);
+    const rows = byWeek.get(slot.week) ?? [];
+    const amount = payouts.get(slot.week) ?? 0;
+    const sealed = slot.week > revealThrough;
+
+    const base = {
+      week: slot.week,
+      challengeId: slot.challengeId,
+      amount,
+      sealed,
+      played: rows.length > 0,
+      // A sealed week gives away nothing — not even which challenge it is.
+      label: sealed ? null : (card?.label ?? slot.label),
+      rule: sealed ? null : (card?.rule ?? slot.rule),
+      winner: null,
+    };
+
+    if (sealed || !rows.length || !card) return base;
+
+    const ctx = { week: rows };
+    const scored = rows
+      .map((row) => ({ row, value: card.score(row, ctx) }))
+      .filter((entry) => entry.value !== null && entry.value !== undefined && !Number.isNaN(entry.value));
+
+    if (!scored.length) {
+      return { ...base, noWinner: true };
+    }
+
+    const best = scored.reduce((a, b) => (b.value > a.value ? b : a));
+
+    // Two teams can genuinely tie — same score, same margin. Splitting the pot
+    // is the only answer that does not invent a tiebreak nobody agreed to.
+    const tied = scored.filter((entry) => Math.abs(entry.value - best.value) < 0.001);
+    const share = round2(amount / tied.length);
+
+    return {
+      ...base,
+      winner: {
+        teamId: best.row.teamId,
+        teamName: statsById.get(best.row.teamId)?.teamName ?? `Team ${best.row.teamId}`,
+        managerName: statsById.get(best.row.teamId)?.managerName ?? null,
+        logo: statsById.get(best.row.teamId)?.logo ?? null,
+        value: round2(best.value),
+        detail: card.detail(best.row, best.value, ctx),
+        amount: share,
+      },
+      tiedWith: tied
+        .filter((entry) => entry.row.teamId !== best.row.teamId)
+        .map((entry) => ({
+          teamId: entry.row.teamId,
+          teamName: statsById.get(entry.row.teamId)?.teamName ?? `Team ${entry.row.teamId}`,
+          managerName: statsById.get(entry.row.teamId)?.managerName ?? null,
+          logo: statsById.get(entry.row.teamId)?.logo ?? null,
+          detail: card.detail(entry.row, entry.value, ctx),
+          amount: share,
+        })),
+    };
+  });
+}
+
+/**
+ * Season-to-date challenge winnings per team, so the standings can show who is
+ * actually up on the year rather than just who is winning games.
+ */
+export function challengeLeaderboard(resolved, teamStats = []) {
+  const tally = new Map();
+
+  const add = (entry) => {
+    if (!entry) return;
+    if (!tally.has(entry.teamId)) tally.set(entry.teamId, { wins: 0, won: 0 });
+    const rec = tally.get(entry.teamId);
+    rec.wins += 1;
+    rec.won += entry.amount ?? 0;
+  };
+
+  for (const week of resolved) {
+    add(week.winner);
+    for (const tie of week.tiedWith ?? []) add(tie);
+  }
+
+  const statsById = new Map(teamStats.map((t) => [t.teamId, t]));
+
+  return [...tally.entries()]
+    .map(([teamId, rec]) => ({
+      teamId,
+      teamName: statsById.get(teamId)?.teamName ?? `Team ${teamId}`,
+      managerName: statsById.get(teamId)?.managerName ?? null,
+      logo: statsById.get(teamId)?.logo ?? null,
+      challengesWon: rec.wins,
+      amountWon: round2(rec.won),
+    }))
+    .sort((a, b) => b.amountWon - a.amountWon || b.challengesWon - a.challengesWon);
 }
 ```
 
@@ -2854,9 +3446,323 @@ export function buildBigBoard(pool, draft = null, limit = 250) {
 }
 ```
 
+### `scripts/lib/images.mjs`
+
+*84 lines*
+
+```javascript
+/**
+ * Where pictures come from.
+ *
+ * Three kinds of image appear on the site, and only one of them is ours:
+ *
+ *   NFL player headshots   ESPN's CDN, addressed by the player id we already
+ *                          have on every row. Nothing to fetch or store.
+ *   NFL team logos         ESPN's CDN, addressed by team abbreviation. Used for
+ *                          D/ST, which has no headshot because it is not a
+ *                          person.
+ *   Fantasy team logos     Whatever each manager set on ESPN. Comes to us as a
+ *                          URL inside the league payload — see the warning
+ *                          below, this one is not ours and is not trusted.
+ *
+ * Images are hotlinked rather than downloaded and committed. That keeps the
+ * repo small and means a traded player's picture is right the moment ESPN
+ * updates it, at the cost of the site no longer being fully self-contained:
+ * `docs/_headers` has to name these hosts in `img-src` or the browser blocks
+ * every one of them. The CSP and ESPN_IMAGE_HOSTS below must stay in sync.
+ */
+
+/**
+ * The only hosts the site will point an <img> at.
+ *
+ * This matters more than it looks. A fantasy team logo is a URL ESPN hands
+ * back from the league payload, and ESPN's classic UI lets a manager paste in
+ * *any* URL — so `team.logo` is attacker-controlled in the sense that anyone in
+ * the league can choose it. Rendering it unchecked would let one manager point
+ * every visitor's browser at a server of their choosing, handing them the IP
+ * and user-agent of everyone who opens the site.
+ *
+ * So logos are filtered against this list at build time, and the same list is
+ * the CSP allowlist. A logo hosted anywhere else is dropped and the team falls
+ * back to its initials, which is a cosmetic loss and not a broken page.
+ */
+export const ESPN_IMAGE_HOSTS = [
+  'a.espncdn.com',
+  'g.espncdn.com',
+  'i.espncdn.com',
+  's.espncdn.com',
+  'secure.espncdn.com',
+];
+
+/** Headshot for a real person. ESPN 404s for players it has no photo of. */
+export function headshotUrl(playerId) {
+  if (!playerId || Number(playerId) <= 0) return null;
+  return `https://a.espncdn.com/i/headshots/nfl/players/full/${Number(playerId)}.png`;
+}
+
+/** Logo for an NFL franchise — what a D/ST gets instead of a headshot. */
+export function proTeamLogoUrl(abbrev) {
+  if (!abbrev || abbrev === 'FA' || abbrev === 'UNKNOWN') return null;
+  return `https://a.espncdn.com/i/teamlogos/nfl/500/${String(abbrev).toLowerCase()}.png`;
+}
+
+/**
+ * The right picture for a roster row: a face for people, a shield for defences.
+ *
+ * D/ST is the case worth being careful about — `playerId` is a real number for
+ * a defence, so the headshot URL builds fine and then 404s forever.
+ */
+export function playerImageUrl({ playerId, position, proTeam } = {}) {
+  if (position === 'D/ST') return proTeamLogoUrl(proTeam);
+  return headshotUrl(playerId);
+}
+
+/**
+ * Passes a fantasy team logo through only if it is on a host we allow.
+ *
+ * Returns null for anything else, including a malformed URL, so callers can
+ * treat "no logo" and "logo we will not load" identically.
+ */
+export function sanitizeTeamLogo(url) {
+  if (!url || typeof url !== 'string') return null;
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'https:') return null;
+  return ESPN_IMAGE_HOSTS.includes(parsed.hostname) ? parsed.href : null;
+}
+```
+
+### `scripts/lib/playercard.mjs`
+
+*218 lines*
+
+```javascript
+/**
+ * Player cards: what shows up when you hover (or tap) a name anywhere on the
+ * site.
+ *
+ * Three things go on a card, and they come from three different places:
+ *
+ *   Last season's real production   ESPN's payload, already fetched. The draft
+ *                                   pool carries a full per-stat breakdown for
+ *                                   every player and the build was throwing all
+ *                                   but the fantasy-point total away.
+ *   Injury status                   Already normalized; just needed surfacing.
+ *   News                            A separate ESPN endpoint, fetched at build
+ *                                   time because the browser cannot reach ESPN.
+ *
+ * The cards are emitted as one index keyed by player id rather than embedded in
+ * each view. The same player appears on the big board, a roster, the draft board
+ * and the mock draft; inlining the card four times would bloat every payload
+ * that carries a player list, and the landing page would pay for data almost
+ * nobody hovers.
+ *
+ * A NOTE ON NEWS AND TIME. The site rebuilds once a day. A stat line from last
+ * season is as true tomorrow as it is today, but an injury note is the most
+ * perishable thing in fantasy football — "limited in practice" is worth nothing
+ * on Sunday afternoon. So every news item carries its own published timestamp
+ * and the card shows it. Stale news that admits it is stale is useful; stale
+ * news wearing a confident face is worse than none, because somebody starts a
+ * player who was ruled out that morning.
+ */
+
+import { STAT_KEYS, INJURY_STATUS, STAT_SOURCE, STAT_SPLIT } from './constants.mjs';
+
+const round1 = (n) => Number((n ?? 0).toFixed(1));
+
+/**
+ * Turns ESPN's numeric stat map into named fields.
+ *
+ * `stats` arrives as `{"3": 4306, "24": 421, ...}` — the keys are the ids
+ * STAT_KEYS names. Anything not in STAT_KEYS is dropped rather than passed
+ * through under a numeric key, so a card can never render "58: 141" at someone.
+ *
+ * Two ids (89 and 123) both mean points allowed. They do not co-occur in
+ * practice; if they ever did, the later key wins, which is the same thing the
+ * object literal in constants.mjs already does.
+ */
+export function nameStats(stats) {
+  const out = {};
+  for (const [id, value] of Object.entries(stats ?? {})) {
+    const name = STAT_KEYS[Number(id)];
+    if (!name) continue;
+    if (typeof value !== 'number' || Number.isNaN(value)) continue;
+    out[name] = round1(value);
+  }
+  return out;
+}
+
+/**
+ * Which numbers actually belong on a card, per position.
+ *
+ * A quarterback's card showing "0 receptions" is noise; a kicker's showing
+ * passing yards is worse. Each position gets the line a person would actually
+ * read, and any field with no value is dropped at render time rather than
+ * printed as a zero — "0 rushing TDs" and "we have no rushing data" look
+ * identical on screen and are not the same claim.
+ */
+export const STAT_LINES = {
+  QB: [
+    ['passingYards', 'Pass yds'],
+    ['passingTouchdowns', 'Pass TD'],
+    ['passingInterceptions', 'INT'],
+    ['rushingYards', 'Rush yds'],
+    ['rushingTouchdowns', 'Rush TD'],
+  ],
+  RB: [
+    ['rushingAttempts', 'Carries'],
+    ['rushingYards', 'Rush yds'],
+    ['rushingTouchdowns', 'Rush TD'],
+    ['receptions', 'Rec'],
+    ['receivingYards', 'Rec yds'],
+    ['receivingTouchdowns', 'Rec TD'],
+  ],
+  WR: [
+    ['receivingTargets', 'Targets'],
+    ['receptions', 'Rec'],
+    ['receivingYards', 'Rec yds'],
+    ['receivingTouchdowns', 'Rec TD'],
+    ['rushingYards', 'Rush yds'],
+  ],
+  TE: [
+    ['receivingTargets', 'Targets'],
+    ['receptions', 'Rec'],
+    ['receivingYards', 'Rec yds'],
+    ['receivingTouchdowns', 'Rec TD'],
+  ],
+  K: [
+    ['madeFieldGoalsFromUnder40', 'FG <40'],
+    ['madeFieldGoalsFrom40To49', 'FG 40-49'],
+    ['madeFieldGoalsFrom50Plus', 'FG 50+'],
+    ['missedFieldGoals', 'Missed'],
+    ['madeExtraPoints', 'XP'],
+  ],
+  'D/ST': [
+    ['defensiveSacks', 'Sacks'],
+    ['defensiveInterceptions', 'INT'],
+    ['defensiveFumbles', 'Fum rec'],
+    ['defensivePointsAllowed', 'Pts allowed'],
+    ['defensiveYardsAllowed', 'Yds allowed'],
+  ],
+};
+
+/** The stat line for a position, with empty fields dropped. */
+export function statLine(position, stats) {
+  const spec = STAT_LINES[position];
+  if (!spec || !stats) return [];
+  return spec
+    .filter(([key]) => stats[key] !== undefined && stats[key] !== null)
+    .map(([key, label]) => ({ key, label, value: stats[key] }));
+}
+
+/**
+ * Pulls a season's actual production out of a player's `stats[]`.
+ *
+ * The four-way key is the classic trap in this API — see HANDOFF.md. A season
+ * total of what really happened is `statSourceId 0` + `statSplitTypeId 0`, and
+ * getting any one of those wrong silently returns a projection or a single
+ * week instead.
+ */
+export function seasonActuals(player, seasonId) {
+  const entry = (player?.stats ?? []).find(
+    (s) =>
+      s.seasonId === seasonId &&
+      s.statSourceId === STAT_SOURCE.ACTUAL &&
+      s.statSplitTypeId === STAT_SPLIT.SEASON
+  );
+  if (!entry) return null;
+
+  return {
+    season: seasonId,
+    fantasyPoints: entry.appliedTotal != null ? round1(entry.appliedTotal) : null,
+    stats: nameStats(entry.stats),
+  };
+}
+
+/**
+ * One card per player.
+ *
+ * `players` is the merged pool the build already has (draft pool entries and
+ * roster entries both carry a full player object). `news` is keyed by player id
+ * and may be empty — the endpoint is optional and its absence must degrade to a
+ * card with stats and injury on it, not to a broken card.
+ */
+export function buildPlayerCards({ players = [], seasonId, news = {} } = {}) {
+  const cards = {};
+  const lastSeason = seasonId - 1;
+
+  for (const player of players) {
+    const id = player?.id ?? player?.playerId;
+    if (!id || id <= 0) continue;
+    if (cards[id]) continue;
+
+    const prior = seasonActuals(player, lastSeason);
+    const items = news[id] ?? [];
+    const injury = player.injuryStatus ?? null;
+
+    // A card with nothing on it is not worth shipping — it would render an
+    // empty popover and teach people the feature is broken.
+    const hasSomething =
+      (prior && Object.keys(prior.stats).length > 0) ||
+      items.length > 0 ||
+      (injury && injury !== 'ACTIVE' && injury !== 'NORMAL');
+    if (!hasSomething) continue;
+
+    cards[id] = {
+      playerId: id,
+      injury: injury ? (INJURY_STATUS[injury] ?? injury) : null,
+      lastSeason: prior && Object.keys(prior.stats).length ? prior : null,
+      news: items,
+    };
+  }
+
+  return cards;
+}
+
+/**
+ * Normalizes ESPN's news payload into what a card renders.
+ *
+ * Kept deliberately small: a headline, when it was published, and the source.
+ * The full body is often several paragraphs of wire copy, which is not what a
+ * hover card is for.
+ */
+export function normalizeNews(raw, { perPlayer = 3 } = {}) {
+  const byPlayer = {};
+
+  for (const feed of Array.isArray(raw) ? raw : []) {
+    const id = feed?.playerId;
+    if (!id) continue;
+
+    const items = (feed.items ?? [])
+      .map((item) => ({
+        headline: item?.headline ?? item?.caption ?? null,
+        published: item?.published ?? item?.lastModified ?? null,
+        source: item?.source ?? null,
+      }))
+      .filter((item) => item.headline)
+      // Newest first. An item with no timestamp sorts last rather than being
+      // dropped — undated news is still news, it just cannot claim recency.
+      .sort((a, b) => {
+        if (!a.published) return 1;
+        if (!b.published) return -1;
+        return new Date(b.published) - new Date(a.published);
+      })
+      .slice(0, perPlayer);
+
+    if (items.length) byPlayer[id] = items;
+  }
+
+  return byPlayer;
+}
+```
+
 ### `scripts/lib/money.mjs`
 
-*176 lines*
+*235 lines*
 
 ```javascript
 /**
@@ -2869,7 +3775,95 @@ export function buildBigBoard(pool, draft = null, limit = 250) {
 
 const round2 = (n) => Number((n ?? 0).toFixed(2));
 
-export function computeLedger(moneyConfig, season, standings) {
+/**
+ * Divides one pot across N weeks so the parts add back up to the whole.
+ *
+ * Done in whole cents with the leftover handed to the earliest weeks. The
+ * obvious `pot / weeks` rounded per week drifts — $195 over 13 weeks is fine,
+ * but $200 over 13 is $15.38 a week, which is $199.94, and a ledger that
+ * cannot account for six cents is a ledger nobody trusts with the other $500.
+ *
+ * Exported because the public site needs these amounts and the private ledger
+ * needs them too. Two implementations would eventually disagree, and the week
+ * they disagreed would be the week somebody got paid the wrong number.
+ */
+export function splitPot(pot, weeks) {
+  const amount = Number(pot) || 0;
+  if (!Array.isArray(weeks) || !weeks.length || amount <= 0) return [];
+
+  const cents = Math.round(amount * 100);
+  const base = Math.floor(cents / weeks.length);
+  let extra = cents - base * weeks.length;
+
+  return weeks.map((week) => {
+    const share = base + (extra > 0 ? 1 : 0);
+    if (extra > 0) extra -= 1;
+    return { week, amount: round2(share / 100) };
+  });
+}
+
+/**
+ * What each payout slot is worth, given the size of the pot.
+ *
+ * A slot can be defined three ways, so the config can say what the league
+ * actually agreed rather than being forced into one shape:
+ *
+ *   amount: 350      a fixed sum, unchanged if the pot moves
+ *   pct: 25          a share of the pot, rebalances automatically
+ *   remainder: true  whatever is left after the others
+ *
+ * Fixed amounts are what people actually announce ("winner gets 350"), while a
+ * remainder slot means the challenge pot absorbs any drift rather than the
+ * numbers silently failing to add up.
+ *
+ * Computed off the full expected pot, never off what has been collected so far
+ * — otherwise every prize would move each time somebody paid.
+ *
+ * Exported because the published site needs the payout amounts (the league has
+ * to know what this week's challenge is worth) while the ledger around them
+ * stays private. One function, so the public number and the private one can
+ * never disagree.
+ */
+export function computePayouts(moneyConfig, expectedPot) {
+  const structure = moneyConfig.payouts?.structure ?? [];
+
+  const fixedTotal = structure.reduce((a, s) => a + (Number(s.amount) || 0), 0);
+  const pctTotal = structure.reduce((a, s) => a + (Number(s.pct) || 0), 0);
+  const pctAmount = round2((expectedPot * pctTotal) / 100);
+
+  const remainderSlots = structure.filter((s) => s.remainder);
+  const leftOver = round2(expectedPot - fixedTotal - pctAmount);
+  const perRemainder = remainderSlots.length ? round2(leftOver / remainderSlots.length) : 0;
+
+  const payouts = structure.map((slot) => {
+    let amount;
+    if (slot.remainder) amount = perRemainder;
+    else if (slot.amount !== undefined) amount = round2(Number(slot.amount) || 0);
+    else amount = round2((expectedPot * (Number(slot.pct) || 0)) / 100);
+
+    return {
+      id: slot.id,
+      label: slot.label,
+      note: slot.note ?? null,
+      isRemainder: Boolean(slot.remainder),
+      // Share of the pot, whichever way the slot was defined — so the UI can
+      // always show a percentage even for fixed amounts.
+      pct: expectedPot ? Number(((amount / expectedPot) * 100).toFixed(1)) : 0,
+      amount,
+    };
+  });
+
+  return { payouts, structure, fixedTotal, pctAmount, remainderSlots, leftOver };
+}
+
+/** Which payout slot funds the weekly challenges, by id. */
+export const CHALLENGE_SLOT_ID = 'challenges';
+
+/** The dollar value of the challenge slot, from an already-computed payout list. */
+export const challengePayout = (payouts, moneyConfig = {}) =>
+  payouts.find((p) => p.id === (moneyConfig.weeklyChallenge?.payoutId ?? CHALLENGE_SLOT_ID))?.amount ?? 0;
+
+export function computeLedger(moneyConfig, season, standings, { challengeWeeks = [] } = {}) {
   const buyIn = Number(moneyConfig.buyIn) || 0;
   const currency = moneyConfig.currency ?? 'USD';
 
@@ -2930,46 +3924,8 @@ export function computeLedger(moneyConfig, season, standings) {
   const outstanding = round2(expectedPot - collected);
 
   // ---- Payout structure ---------------------------------------------------
-  //
-  // A slot can be defined three ways, so the config can say what the league
-  // actually agreed rather than being forced into one shape:
-  //
-  //   amount: 275      a fixed sum, unchanged if the pot moves
-  //   pct: 25          a share of the pot, rebalances automatically
-  //   remainder: true  whatever is left after the others
-  //
-  // Fixed amounts are what people actually announce ("winner gets 275"), while
-  // a remainder slot means the side-prize pot absorbs any drift rather than
-  // the numbers silently failing to add up.
-  const structure = moneyConfig.payouts?.structure ?? [];
-
-  // Payouts are computed off the full expected pot, not what has been collected
-  // so far, otherwise every prize moves each time somebody pays.
-  const fixedTotal = structure.reduce((a, s) => a + (Number(s.amount) || 0), 0);
-  const pctTotal = structure.reduce((a, s) => a + (Number(s.pct) || 0), 0);
-  const pctAmount = round2((expectedPot * pctTotal) / 100);
-
-  const remainderSlots = structure.filter((s) => s.remainder);
-  const leftOver = round2(expectedPot - fixedTotal - pctAmount);
-  const perRemainder = remainderSlots.length ? round2(leftOver / remainderSlots.length) : 0;
-
-  const payouts = structure.map((slot) => {
-    let amount;
-    if (slot.remainder) amount = perRemainder;
-    else if (slot.amount !== undefined) amount = round2(Number(slot.amount) || 0);
-    else amount = round2((expectedPot * (Number(slot.pct) || 0)) / 100);
-
-    return {
-      id: slot.id,
-      label: slot.label,
-      note: slot.note ?? null,
-      isRemainder: Boolean(slot.remainder),
-      // Share of the pot, whichever way the slot was defined — so the UI can
-      // always show a percentage even for fixed amounts.
-      pct: expectedPot ? Number(((amount / expectedPot) * 100).toFixed(1)) : 0,
-      amount,
-    };
-  });
+  const { payouts, structure, fixedTotal, pctAmount, remainderSlots, leftOver } =
+    computePayouts(moneyConfig, expectedPot);
 
   // ---- Who currently occupies each paying place --------------------------
   const placeOrder = ['first', 'second', 'third'];
@@ -2985,6 +3941,13 @@ export function computeLedger(moneyConfig, season, standings) {
       projected: true,
     };
   });
+
+  // ---- The weekly challenge pot ------------------------------------------
+  // One payout slot funds every weekly challenge; `challengeWeeks` says which
+  // weeks are drawing from it. The site computes the same split from the same
+  // slot — see splitPot above for why that is one function and not two.
+  const challengePot = challengePayout(payouts, moneyConfig);
+  const perWeek = splitPot(challengePot, challengeWeeks);
 
   const paidOut = (moneyConfig.payoutsPaid ?? []).map((p) => ({
     ...p,
@@ -3028,6 +3991,8 @@ export function computeLedger(moneyConfig, season, standings) {
     members,
     unpaid: members.filter((m) => !m.paid),
     payouts: projected,
+    challengePot: round2(challengePot),
+    challengePerWeek: perWeek,
     paidOut,
     totalPaidOut,
     remainingToPay: round2(expectedPot - totalPaidOut),
@@ -3203,7 +4168,7 @@ main().catch((error) => {
 
 ### `scripts/fetch.mjs`
 
-*269 lines*
+*312 lines*
 
 ```javascript
 /**
@@ -3257,6 +4222,11 @@ async function readJsonIfExists(file) {
     return null; // Corrupt cache entry — just refetch.
   }
 }
+
+// News is one request per player, so it is both the slowest step and the one
+// most likely to get rate limited. Capped and paced accordingly.
+const NEWS_PLAYER_LIMIT = 300;
+const NEWS_DELAY_MS = 120;
 
 async function fetchSeason(client, season) {
   const dir = path.join(RAW, String(season));
@@ -3411,6 +4381,44 @@ async function fetchSeason(client, season) {
   }
   await sleep(POLITE_DELAY_MS);
 
+  // ---- Player news (for the hover cards) --------------------------------
+  // One request per player, so this is scoped to the people who actually
+  // appear on a card people would hover: the draft pool's top ranks plus
+  // everyone currently rostered. Fetching news for all 11,600 players would be
+  // 11,600 requests for data nobody will read.
+  //
+  // Entirely optional. Every failure mode here — endpoint moved, rate limited,
+  // offline — degrades to a card with stats and injury status and no news,
+  // which is why nothing in this block throws.
+  try {
+    const newsIds = new Set();
+    for (const entry of (await readJsonIfExists(path.join(dir, 'draftpool.json')))?.players ?? []) {
+      const id = entry?.player?.id;
+      if (id) newsIds.add(id);
+      if (newsIds.size >= NEWS_PLAYER_LIMIT) break;
+    }
+    for (const team of (await readJsonIfExists(path.join(dir, 'current.json')))?.teams ?? []) {
+      for (const entry of team?.roster?.entries ?? []) {
+        if (entry?.playerId) newsIds.add(entry.playerId);
+      }
+    }
+
+    const feeds = [];
+    let withNews = 0;
+    for (const id of newsIds) {
+      const feed = await client.getPlayerNews(id);
+      if (feed) {
+        feeds.push(feed);
+        withNews += 1;
+      }
+      await sleep(NEWS_DELAY_MS);
+    }
+    await writeJson(path.join(dir, 'news.json'), { fetchedAt: new Date().toISOString(), feeds });
+    log(`  player news: ${withNews} of ${newsIds.size} players have items`);
+  } catch (error) {
+    log(`  player news: skipped (${error.message}) — cards will show stats only`);
+  }
+
   await writeJson(path.join(dir, 'meta.json'), {
     season,
     fetchedAt: new Date().toISOString(),
@@ -3478,7 +4486,7 @@ main().catch((error) => {
 
 ### `scripts/build.mjs`
 
-*453 lines*
+*584 lines*
 
 ```javascript
 /**
@@ -3508,7 +4516,10 @@ import {
   computePositionalStats,
 } from './lib/analytics.mjs';
 import { analyzeDraft } from './lib/draft.mjs';
-import { computeLedger } from './lib/money.mjs';
+import { computeLedger, computePayouts, challengePayout, splitPot } from './lib/money.mjs';
+import { buildChallengeSchedule, computeChallenges, challengeLeaderboard } from './lib/challenges.mjs';
+import { sanitizeTeamLogo } from './lib/images.mjs';
+import { buildPlayerCards, normalizeNews } from './lib/playercard.mjs';
 import { recommendLineup, coachingReport, waiverTargets } from './lib/advisor.mjs';
 import { buildBigBoard } from './lib/bigboard.mjs';
 
@@ -3562,12 +4573,20 @@ async function loadSeasonRaw(season) {
     current: await readJson(path.join(dir, 'current.json')),
     freeAgents: await readJson(path.join(dir, 'freeagents.json')),
     draftPool: await readJson(path.join(dir, 'draftpool.json')),
+    news: await readJson(path.join(dir, 'news.json')),
     weeks,
   };
 }
 
 function buildSeason(raw, moneyConfig) {
   const season = normalizeSeason(raw);
+
+  // Fantasy team logos are URLs ESPN hands back, and ESPN lets a manager point
+  // one anywhere. Filtering here — at the top, before anything copies the value
+  // downstream — means every consumer sees an already-safe logo or none at all.
+  // See scripts/lib/images.mjs for what this is actually protecting against.
+  for (const team of season.teams) team.logo = sanitizeTeamLogo(team.logo);
+
   const teamWeeks = buildTeamWeeks(season);
   const teamStats = computeTeamStats(season, teamWeeks);
   const standings = computeStandings(teamStats, season);
@@ -3576,13 +4595,74 @@ function buildSeason(raw, moneyConfig) {
   const weeklyHigh = computeWeeklyHighScores(teamWeeks, teamStats);
   const positional = computePositionalStats(teamWeeks, teamStats);
   const draft = analyzeDraft(season);
-  const ledger = computeLedger(moneyConfig, season, standings);
+
+  const playerCards = buildPlayerCards({
+    players: playerObjectsFor(raw),
+    seasonId: season.league.season,
+    news: normalizeNews(raw.news?.feeds),
+  });
+
+  const challenges = buildChallenges(season, teamStats, teamWeeks, moneyConfig);
+  // The ledger needs the same week list the challenges were dealt for, so the
+  // pot it splits and the pot the site pays out are the same pot.
+  const ledger = computeLedger(moneyConfig, season, standings, {
+    challengeWeeks: challenges.schedule.weeks.map((w) => w.week),
+  });
 
   const teamDetail = buildTeamDetail(season, teamStats, teamWeeks, standings, draft);
 
   return {
     season, teamWeeks, teamStats, standings, power, prizes,
-    weeklyHigh, positional, draft, ledger, teamDetail,
+    weeklyHigh, positional, draft, ledger, teamDetail, challenges, playerCards,
+  };
+}
+
+/**
+ * The weekly challenge: deal the season's schedule, then score the weeks that
+ * have actually been played.
+ *
+ * The per-week cash is computed here rather than read out of the ledger,
+ * because the ledger is never published — the league still has to be able to
+ * see what this week is worth. Both sides call splitPot() on the same payout
+ * slot, so they cannot drift.
+ */
+function buildChallenges(season, teamStats, teamWeeks, moneyConfig) {
+  const config = moneyConfig.weeklyChallenge ?? {};
+  const schedule = buildChallengeSchedule({
+    leagueId: season.league.id,
+    season: season.league.season,
+    weeks: season.league.regularSeasonWeeks,
+    salt: config.salt ?? '',
+    cadence: config.cadence ?? 'weekly',
+    startWeek: config.startWeek ?? 1,
+  });
+
+  const weekNumbers = schedule.weeks.map((w) => w.week);
+
+  const expectedPot =
+    (Number(moneyConfig.buyIn) || 0) * (moneyConfig.members?.length || season.league.size);
+  const { payouts } = computePayouts(moneyConfig, expectedPot);
+  const pot = Math.max(0, challengePayout(payouts, moneyConfig));
+  const perWeek = new Map(splitPot(pot, weekNumbers).map((w) => [w.week, w.amount]));
+
+  const resolved = computeChallenges({
+    schedule,
+    teamWeeks,
+    teamStats,
+    weeksPlayed: season.status.weeksPlayed,
+    payouts: perWeek,
+  });
+
+  return {
+    enabled: config.enabled !== false,
+    seed: schedule.seed,
+    cadence: schedule.cadence,
+    currency: moneyConfig.currency ?? 'USD',
+    pot: Number(pot.toFixed(2)),
+    totalWeeks: weekNumbers.length,
+    schedule,
+    weeks: resolved,
+    leaderboard: challengeLeaderboard(resolved, teamStats),
   };
 }
 
@@ -3622,6 +4702,7 @@ function buildTeamDetail(season, teamStats, teamWeeks, standings, draft) {
         teamName: team.name,
         abbrev: team.abbrev,
         managerName: team.managerName,
+        logo: team.logo,
         isPlaceholder: team.isPlaceholder,
         rank: standing?.rank ?? null,
         inPlayoffs: standing?.inPlayoffs ?? false,
@@ -3721,6 +4802,38 @@ function buildDraftPool(raw) {
   return { rankType, players };
 }
 
+/**
+ * Every full player object the raw payloads carry, for the card index.
+ *
+ * Three sources, in priority order — the draft pool is richest (it has the
+ * per-stat breakdown), current rosters cover anyone drafted, and the weekly box
+ * scores catch players who were rostered earlier and since dropped. First one
+ * to claim an id wins, so the richest source is walked first.
+ */
+function playerObjectsFor(raw) {
+  const out = [];
+
+  for (const entry of raw.draftPool?.players ?? []) {
+    if (entry?.player) out.push(entry.player);
+  }
+  for (const team of raw.current?.teams ?? []) {
+    for (const entry of team?.roster?.entries ?? []) {
+      if (entry?.playerPoolEntry?.player) out.push(entry.playerPoolEntry.player);
+    }
+  }
+  for (const { data } of raw.weeks ?? []) {
+    for (const game of data?.schedule ?? []) {
+      for (const side of [game?.home, game?.away]) {
+        for (const entry of side?.rosterForCurrentScoringPeriod?.entries ?? []) {
+          if (entry?.playerPoolEntry?.player) out.push(entry.playerPoolEntry.player);
+        }
+      }
+    }
+  }
+
+  return out;
+}
+
 /** Human-readable summary of what the league is currently doing. */
 function describePhase(season) {
   const { phase, teamsJoined, weeksPlayed } = season.status;
@@ -3816,6 +4929,7 @@ async function main() {
     power: current.power,
     weeklyHigh: current.weeklyHigh,
     positional: current.positional,
+    challenges: current.challenges,
     site: config.site ?? {},
   });
 
@@ -3833,6 +4947,7 @@ async function main() {
       weeklyHigh: b.weeklyHigh,
       positional: b.positional,
       prizes: b.prizes,
+      challenges: b.challenges,
       transactions: b.season.transactions,
       trades: b.season.trades,
     });
@@ -3862,6 +4977,21 @@ async function main() {
         ...board,
       });
     }
+
+    // Player cards: last season's real production, injury status and news,
+    // keyed by player id. Its own file because the same player shows up on the
+    // board, a roster, the draft board and the mock draft — inlining the card
+    // in each would multiply the payload, and the landing page would pay for
+    // data most visitors never hover.
+    await writeJson(path.join(DERIVED, `players-${b.year}.json`), {
+      year: b.year,
+      priorSeason: b.year - 1,
+      // When the news was pulled, so the front end can say how old it is
+      // rather than presenting day-old injury notes as current.
+      newsFetchedAt: b.raw.news?.fetchedAt ?? null,
+      count: Object.keys(b.playerCards).length,
+      cards: b.playerCards,
+    });
 
     // Per-team detail: the personal view each manager lands on.
     await writeJson(path.join(DERIVED, `teams-${b.year}.json`), {
@@ -3921,6 +5051,15 @@ async function main() {
   console.log(`  trades            ${s.trades.length}`);
   console.log(`  transactions      ${s.transactions.length}`);
   console.log(`  prizes computable ${current.prizes.length}`);
+  console.log(
+    `  player cards      ${Object.keys(current.playerCards).length}` +
+      `${current.raw.news ? '' : ' (no news fetched)'}`
+  );
+  const settled = current.challenges.weeks.filter((w) => w.winner).length;
+  console.log(
+    `  challenges        ${settled}/${current.challenges.totalWeeks} settled ` +
+      `(${current.challenges.cadence}, ${current.ledger.currency} ${current.challenges.pot} pot)`
+  );
   if (current.ledger.warnings.length) {
     console.log('\nMoney ledger notes:');
     for (const w of current.ledger.warnings) console.log(`  - ${w}`);
@@ -4227,7 +5366,7 @@ console.log();
 
 ### `scripts/fixtures.mjs`
 
-*631 lines*
+*673 lines*
 
 ```javascript
 /**
@@ -4805,6 +5944,40 @@ await writeJson(path.join(OUT, 'freeagents.json'), {
 // Draft pool, in kona_player_info shape, so the big board builds end to end
 // ---------------------------------------------------------------------------
 
+/**
+ * A plausible prior-season stat breakdown, keyed by the real ESPN stat ids.
+ *
+ * The hover cards read this breakdown, not the fantasy-point total, so without
+ * it a fixtures build exercises the card index but never the stat line. Scaled
+ * off the same talent number that drives everything else here, so a good player
+ * gets good peripherals and the whole thing stays deterministic under the seed.
+ */
+function priorSeasonStats(pos, points) {
+  const n = (x) => Math.max(0, Math.round(x));
+  switch (pos) {
+    case 'QB':
+      return { 3: n(points * 13), 4: n(points * 0.09), 20: n(points * 0.035),
+               24: n(points * 1.2), 25: n(points * 0.012) };
+    case 'RB':
+      return { 23: n(points * 0.75), 24: n(points * 4.2), 25: n(points * 0.04),
+               41: n(points * 0.17), 42: n(points * 1.5), 43: n(points * 0.012) };
+    case 'WR':
+      return { 58: n(points * 0.5), 41: n(points * 0.33), 42: n(points * 4.6),
+               43: n(points * 0.035) };
+    case 'TE':
+      return { 58: n(points * 0.45), 41: n(points * 0.32), 42: n(points * 3.7),
+               43: n(points * 0.03) };
+    case 'K':
+      return { 80: n(points * 0.12), 77: n(points * 0.07), 74: n(points * 0.03),
+               85: n(points * 0.03), 86: n(points * 0.25) };
+    case 'D/ST':
+      return { 97: n(points * 0.35), 95: n(points * 0.12), 96: n(points * 0.08),
+               89: n(340 - points * 0.4), 127: n(6000 - points * 3) };
+    default:
+      return {};
+  }
+}
+
 // Ranked by talent, with ADP deliberately offset from true value so the value
 // grades have something real to find — a board where cost already equals value
 // would grade every player B- and prove nothing.
@@ -4814,6 +5987,7 @@ await writeJson(path.join(OUT, 'draftpool.json'), {
   rankType: 'SUPERFLEX',
   players: poolRanked.slice(0, 400).map((p, i) => {
     const seasonProjection = round2(p._talent * p._multiplier * REGULAR_WEEKS);
+    const priorPoints = round2(seasonProjection * (0.8 + rand() * 0.4));
     // Push QBs later in ADP than their value warrants, mirroring how real ADP
     // is collected from mostly-standard leagues.
     const adpBias = p._pos === 'QB' ? 45 : p._pos === 'K' || p._pos === 'D/ST' ? 60 : -8;
@@ -4837,7 +6011,14 @@ await writeJson(path.join(OUT, 'draftpool.json'), {
         },
         stats: [
           { seasonId: 2026, scoringPeriodId: 0, statSourceId: 1, statSplitTypeId: 0, appliedTotal: seasonProjection },
-          { seasonId: 2025, scoringPeriodId: 0, statSourceId: 0, statSplitTypeId: 0, appliedTotal: round2(seasonProjection * (0.8 + rand() * 0.4)) },
+          {
+            seasonId: 2025,
+            scoringPeriodId: 0,
+            statSourceId: 0,
+            statSplitTypeId: 0,
+            appliedTotal: priorPoints,
+            stats: priorSeasonStats(p._pos, priorPoints),
+          },
         ],
       },
     };
@@ -4868,7 +6049,7 @@ Dependency-free front end. Reads pre-computed JSON from docs/data/ and renders i
 
 ### `docs/index.html`
 
-*155 lines*
+*168 lines*
 
 ```html
 <!doctype html>
@@ -4910,6 +6091,7 @@ Dependency-free front end. Reads pre-computed JSON from docs/data/ and renders i
           <li data-nav="board" hidden><a href="#board" data-view="board">Big Board</a></li>
           <li data-nav="mock" hidden><a href="#mock" data-view="mock">Mock Draft</a></li>
           <li><a href="#trades" data-view="trades">Trades</a></li>
+          <li><a href="#challenges" data-view="challenges">Challenges</a></li>
           <li><a href="#prizes" data-view="prizes">Prizes</a></li>
           <li data-nav="money" hidden><a href="#money" data-view="money">Money</a></li>
         </ul>
@@ -4990,6 +6172,18 @@ Dependency-free front end. Reads pre-computed JSON from docs/data/ and renders i
         <div id="trades-body"></div>
       </section>
 
+      <section class="view" id="view-challenges" hidden aria-labelledby="h-challenges">
+        <h2 id="h-challenges">Weekly Challenges</h2>
+        <p class="view__intro">
+          One challenge is drawn at random for each week of the regular season, and it pays
+          cash. The draw is <strong>seeded and dealt once</strong> — no challenge repeats, and
+          none of them can change after the games are played. Future weeks stay sealed until
+          the week they are played, so there is something to find out every Sunday even if
+          your season is over.
+        </p>
+        <div id="challenges-body"></div>
+      </section>
+
       <section class="view" id="view-prizes" hidden aria-labelledby="h-prizes">
         <h2 id="h-prizes">Side Prizes</h2>
         <p class="view__intro">
@@ -5029,7 +6223,7 @@ Dependency-free front end. Reads pre-computed JSON from docs/data/ and renders i
 
 ### `docs/assets/style.css`
 
-*468 lines*
+*577 lines*
 
 ```css
 /* ==========================================================================
@@ -5403,6 +6597,115 @@ tr.playoff-cut td, tr.playoff-cut th { border-bottom: 2px solid var(--accent); }
 }
 .prize__detail { font-size: 0.86rem; color: var(--text-muted); margin: 0; }
 
+/* --- Avatars -------------------------------------------------------------
+   Every picture on this site is hotlinked from ESPN and every one of them can
+   fail — no headshot exists for a fringe rookie, a manager never set a logo.
+   So a monogram sits underneath, always rendered, and the image is layered on
+   top of it. A load covers the monogram; a 404 hides the <img> (app.js) and
+   the monogram was already there. Same box either way, so nothing reflows.
+
+   The monogram is decorative, not information: the name is always in the text
+   beside it, and every <img> here carries alt="" for exactly that reason. */
+.avatar {
+  --avatar-size: 30px;
+  position: relative; flex: 0 0 auto;
+  display: inline-grid; place-items: center;
+  inline-size: var(--avatar-size); block-size: var(--avatar-size);
+  background: var(--bg-hover); border: 1px solid var(--border);
+  overflow: hidden; user-select: none;
+}
+.avatar--player { border-radius: 50%; }
+.avatar--team { border-radius: var(--radius-sm); }
+.avatar__initials {
+  font-size: calc(var(--avatar-size) * 0.38); font-weight: 700;
+  color: var(--text-dim); letter-spacing: 0.02em; line-height: 1;
+}
+.avatar__img {
+  position: absolute; inset: 0;
+  inline-size: 100%; block-size: 100%;
+  object-fit: cover;
+  /* Headshots are cut off at the chin at this size unless biased upward. */
+  object-position: top center;
+  background: var(--bg-hover);
+}
+.avatar--team .avatar__img { object-fit: contain; object-position: center; padding: 2px; }
+
+/* Name-with-picture, the shape used in every table cell and card heading. */
+.named { display: flex; align-items: center; gap: 0.55rem; min-inline-size: 0; }
+.named__text { min-inline-size: 0; }
+.named__text small {
+  display: block; font-weight: 400; color: var(--text-dim); font-size: 0.79rem;
+}
+.hero--team { display: flex; flex-direction: column; align-items: flex-start; gap: 0.15rem; }
+.hero--team .avatar { margin-bottom: 0.5rem; }
+.pick .avatar { margin: 0.3rem 0; }
+
+/* --- Player cards ---------------------------------------------------------
+   Opens on hover, on tap, and on keyboard focus — see app.js for why all
+   three. Positioned in JS because it has to flip above the trigger near the
+   bottom of a phone screen, which CSS alone cannot decide. */
+.pcard-trigger {
+  font: inherit; color: inherit; background: none; border: 0; padding: 0;
+  text-align: left; cursor: pointer;
+  text-decoration: underline dotted; text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+}
+.pcard-trigger:hover, .pcard-trigger[aria-expanded="true"] { text-decoration-color: var(--accent); }
+
+.pcard {
+  position: absolute; z-index: 50;
+  inline-size: min(22rem, calc(100vw - 1.5rem));
+  background: var(--bg-raised); border: 1px solid var(--border-strong);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 0.8rem 0.9rem; font-size: 0.85rem;
+}
+.pcard__name { margin: 0 0 0.15rem; font-weight: 700; font-size: 0.98rem; }
+.pcard__meta { font-weight: 400; color: var(--text-dim); font-size: 0.8rem; }
+.pcard__injury { margin: 0.35rem 0 0; }
+.pcard__heading {
+  margin: 0.7rem 0 0.35rem; font-size: 0.72rem; letter-spacing: 0.07em;
+  text-transform: uppercase; color: var(--text-dim);
+}
+.pcard__empty { margin: 0.5rem 0 0; color: var(--text-dim); }
+
+/* Auto-fit rather than a fixed column count: a kicker has five stats and a
+   tight end four, and neither should leave a hole in the grid. */
+.pcard__stats {
+  margin: 0; display: grid; gap: 0.4rem 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(4.5rem, 1fr));
+}
+.pcard__stats div { min-inline-size: 0; }
+.pcard__stats dt { color: var(--text-dim); font-size: 0.72rem; }
+.pcard__stats dd {
+  margin: 0; font-weight: 700; font-variant-numeric: tabular-nums; font-size: 0.95rem;
+}
+
+.pcard__news { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.45rem; }
+.pcard__news li { color: var(--text-muted); line-height: 1.35; }
+.pcard__news small { display: block; color: var(--text-dim); font-size: 0.74rem; margin-top: 0.1rem; }
+
+/* --- Weekly challenges ---------------------------------------------------- */
+.challenge {
+  background: var(--bg-raised); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 1rem 1.1rem;
+  display: flex; flex-direction: column; gap: 0.3rem;
+}
+.challenge__week {
+  font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-dim); margin: 0; font-variant-numeric: tabular-nums;
+}
+.challenge__label { font-weight: 700; font-size: 1.02rem; margin: 0; }
+.challenge__rule { font-size: 0.84rem; color: var(--text-dim); margin: 0; }
+.challenge__winner { margin: 0.45rem 0 0; font-weight: 660; }
+.challenge__detail { font-size: 0.86rem; color: var(--text-muted); margin: 0; }
+.challenge__payout { margin: 0.2rem 0 0; font-weight: 700; color: var(--accent); }
+
+/* State is carried by the label text ("Sealed", "Not played yet") as well as
+   by these treatments — the border alone is never the only signal. */
+.challenge--live { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-wash); }
+.challenge--sealed { opacity: 0.6; border-style: dashed; }
+.challenge--void { opacity: 0.78; }
+
 /* --- Draft board --------------------------------------------------------- */
 .draft-round { margin-bottom: 1.35rem; }
 .draft-round h3 {
@@ -5503,7 +6806,7 @@ tr.playoff-cut td, tr.playoff-cut th { border-bottom: 2px solid var(--accent); }
 
 ### `docs/assets/app.js`
 
-*1962 lines*
+*2439 lines*
 
 ```javascript
 import { createMockDraft, advanceToUser, makePick, gradeDraft, rosterNeeds } from './mock.js';
@@ -5526,10 +6829,10 @@ import { createMockDraft, advanceToUser, makePick, gradeDraft, rosterNeeds } fro
  *     than advertising that something is being withheld.
  */
 
-const ALL_VIEWS = ['overview', 'standings', 'teams', 'team', 'draft', 'board', 'mock', 'trades', 'prizes', 'money'];
+const ALL_VIEWS = ['overview', 'standings', 'teams', 'team', 'draft', 'board', 'mock', 'trades', 'challenges', 'prizes', 'money'];
 let VIEWS = ALL_VIEWS.filter((v) => v !== 'money' && v !== 'mock' && v !== 'board');
 
-const state = { hub: null, season: null, draft: null, money: null, teamDetail: null, draftPool: null, bigBoard: null };
+const state = { hub: null, season: null, draft: null, money: null, teamDetail: null, draftPool: null, bigBoard: null, playerCards: null };
 let countdownTimer = null;
 
 /** Which team the visitor has claimed as theirs, remembered across visits. */
@@ -5604,6 +6907,331 @@ const starterCount = (league) =>
 /** Slot 7 is ESPN's OP slot — QB-eligible, i.e. a superflex league. */
 const isSuperflex = (league) =>
   (league.startingSlots ?? []).some((slot) => slot.slotId === 7);
+
+// --- Pictures --------------------------------------------------------------
+//
+// Headshots and logos are hotlinked from ESPN rather than committed, so every
+// one of them can fail: ESPN has no photo for a fringe rookie, a URL shape
+// changes, a manager is offline. None of that may leave a broken-image icon
+// on the page.
+//
+// The fallback is a monogram drawn underneath the <img>. If the image loads it
+// covers the monogram; if it 404s the handler below hides the <img> and the
+// monogram is simply what was already there. No layout shift either way.
+//
+// The handler is attached once, in the capture phase, because `error` does not
+// bubble from <img> — and an inline onerror= attribute would need
+// script-src 'unsafe-inline', which is exactly the CSP relaxation this app
+// refuses to make.
+
+const ESPN_HEADSHOT = 'https://a.espncdn.com/i/headshots/nfl/players/full';
+const ESPN_TEAM_LOGO = 'https://a.espncdn.com/i/teamlogos/nfl/500';
+
+function initImageFallbacks() {
+  document.addEventListener(
+    'error',
+    (event) => {
+      const el = event.target;
+      if (el instanceof HTMLImageElement && el.classList.contains('avatar__img')) el.hidden = true;
+    },
+    true
+  );
+}
+
+/** Up to two letters, so a monogram stays legible at 30px. */
+function initials(name) {
+  const words = String(name ?? '').trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return '?';
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+}
+
+/**
+ * The right picture for a roster row.
+ *
+ * D/ST is the case worth care: a defence has a real playerId, so the headshot
+ * URL builds fine and then 404s every time. Defences get their NFL team's
+ * shield instead.
+ */
+function playerImage(player) {
+  if (!player) return null;
+  if (player.position === 'D/ST') {
+    const team = player.proTeam;
+    return team && team !== 'FA' ? `${ESPN_TEAM_LOGO}/${String(team).toLowerCase()}.png` : null;
+  }
+  const id = Number(player.playerId);
+  return id > 0 ? `${ESPN_HEADSHOT}/${id}.png` : null;
+}
+
+/**
+ * An image with a monogram behind it.
+ *
+ * `variant` only changes the shape: round for faces, square for team logos,
+ * which reads better for a badge that is usually not circular to begin with.
+ */
+function avatar(src, name, { variant = 'player', size = null } = {}) {
+  const style = size ? ` style="--avatar-size:${Number(size)}px"` : '';
+  return `<span class="avatar avatar--${esc(variant)}"${style}>
+    <span class="avatar__initials" aria-hidden="true">${esc(initials(name))}</span>
+    ${src ? `<img class="avatar__img" src="${esc(src)}" alt="" loading="lazy" decoding="async">` : ''}
+  </span>`;
+}
+
+/**
+ * A player's picture next to their name — the shape used in every table.
+ *
+ * When a card exists for this player the name becomes a <button>, which is what
+ * makes the card reachable by keyboard and tappable on a phone rather than
+ * hover-only. Players with no card stay plain text: a control that opens
+ * nothing is worse than no control.
+ */
+const playerCell = (player, sub = null) => {
+  const label = esc(player?.name ?? '—');
+  const tail = sub === null ? '' : `<small>${esc(sub)}</small>`;
+  const name = hasCard(player?.playerId)
+    ? `<button type="button" class="pcard-trigger"
+         data-player-id="${esc(player.playerId)}"
+         data-player-name="${esc(player.name ?? '')}"
+         data-player-pos="${esc(player.position ?? '')}"
+         data-player-team="${esc(player.proTeam ?? '')}"
+         aria-describedby="player-card" aria-expanded="false">${label}</button>`
+    : label;
+  return `
+  <span class="named">
+    ${avatar(playerImage(player), player?.name, { variant: 'player' })}
+    <span class="named__text">${name}${tail}</span>
+  </span>`;
+};
+
+/** A fantasy team's logo next to its name. */
+const teamCell = (team, sub = null, href = null) => {
+  const label = team?.teamName ?? team?.name ?? '—';
+  const inner = `
+    ${avatar(team?.logo ?? null, label, { variant: 'team' })}
+    <span class="named__text">${
+      href ? `<a href="${esc(href)}">${esc(label)}</a>` : esc(label)
+    }${sub === null ? '' : `<small>${esc(sub)}</small>`}</span>`;
+  return `<span class="named">${inner}</span>`;
+};
+
+// --- Player cards ----------------------------------------------------------
+//
+// Hover a player to see last season's production, their injury status and any
+// news. Three interaction notes, none of them optional:
+//
+//   Hover is not enough. This site is meant to be opened on a phone — the
+//   README says so — and a phone has no hover. So the same card opens on tap,
+//   and closes on the next tap outside it.
+//
+//   Keyboard users get it too. The trigger is a <button>, so it is focusable
+//   and the card opens on focus and closes on Escape. A div with a mouseover
+//   handler would have shipped this feature to two-thirds of the ways people
+//   read a web page.
+//
+//   One card element, moved and refilled. Rendering 250 popovers into the Big
+//   Board and hiding them would put a quarter of a megabyte of hidden DOM on
+//   the page for the one card anybody looks at.
+
+const STAT_LINES = {
+  QB: [['passingYards', 'Pass yds'], ['passingTouchdowns', 'Pass TD'], ['passingInterceptions', 'INT'],
+       ['rushingYards', 'Rush yds'], ['rushingTouchdowns', 'Rush TD']],
+  RB: [['rushingAttempts', 'Carries'], ['rushingYards', 'Rush yds'], ['rushingTouchdowns', 'Rush TD'],
+       ['receptions', 'Rec'], ['receivingYards', 'Rec yds'], ['receivingTouchdowns', 'Rec TD']],
+  WR: [['receivingTargets', 'Targets'], ['receptions', 'Rec'], ['receivingYards', 'Rec yds'],
+       ['receivingTouchdowns', 'Rec TD'], ['rushingYards', 'Rush yds']],
+  TE: [['receivingTargets', 'Targets'], ['receptions', 'Rec'], ['receivingYards', 'Rec yds'],
+       ['receivingTouchdowns', 'Rec TD']],
+  K: [['madeFieldGoalsFromUnder40', 'FG <40'], ['madeFieldGoalsFrom40To49', 'FG 40-49'],
+      ['madeFieldGoalsFrom50Plus', 'FG 50+'], ['missedFieldGoals', 'Missed'], ['madeExtraPoints', 'XP']],
+  'D/ST': [['defensiveSacks', 'Sacks'], ['defensiveInterceptions', 'INT'], ['defensiveFumbles', 'Fum rec'],
+           ['defensivePointsAllowed', 'Pts allowed'], ['defensiveYardsAllowed', 'Yds allowed']],
+};
+
+let cardEl = null;
+let cardOwner = null;
+
+/** "3 days ago" — news that cannot say when it is from is news you cannot use. */
+function timeAgo(iso) {
+  if (!iso) return null;
+  const then = new Date(iso);
+  if (Number.isNaN(then.getTime())) return null;
+  const mins = Math.round((Date.now() - then.getTime()) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  return days === 1 ? 'yesterday' : `${days}d ago`;
+}
+
+function cardHtml(player, card) {
+  const parts = [];
+
+  parts.push(`<p class="pcard__name">${esc(player.name)}
+    <span class="pcard__meta">${esc(player.position ?? '')}${
+      player.proTeam ? ` · ${esc(player.proTeam)}` : ''
+    }</span></p>`);
+
+  if (card.injury && card.injury !== 'Active') {
+    parts.push(`<p class="pcard__injury"><span class="pill pill--warn">${esc(card.injury)}</span></p>`);
+  }
+
+  const prior = card.lastSeason;
+  const line = prior ? (STAT_LINES[player.position] ?? []).filter(([k]) => prior.stats[k] != null) : [];
+
+  if (line.length) {
+    parts.push(`<p class="pcard__heading">${esc(prior.season)} season${
+      prior.fantasyPoints != null ? ` · ${esc(num(prior.fantasyPoints, 1))} fantasy pts` : ''
+    }</p>`);
+    parts.push(`<dl class="pcard__stats">${line
+      .map(([key, label]) => `<div><dt>${esc(label)}</dt><dd>${esc(num(prior.stats[key], 0))}</dd></div>`)
+      .join('')}</dl>`);
+  } else {
+    parts.push(`<p class="pcard__empty">No ${esc(state.playerCards?.priorSeason ?? 'prior')} stats — rookie, or did not play.</p>`);
+  }
+
+  if (card.news?.length) {
+    parts.push('<p class="pcard__heading">Latest news</p>');
+    parts.push(`<ul class="pcard__news">${card.news
+      .map((item) => {
+        const when = timeAgo(item.published);
+        return `<li>${esc(item.headline)}${
+          when ? `<small>${esc(when)}${item.source ? ` · ${esc(item.source)}` : ''}</small>` : ''
+        }</li>`;
+      })
+      .join('')}</ul>`);
+  }
+
+  return parts.join('');
+}
+
+function positionCard(trigger) {
+  const rect = trigger.getBoundingClientRect();
+  const width = cardEl.offsetWidth;
+  const height = cardEl.offsetHeight;
+  const margin = 8;
+
+  // Below the name by default, above it when there is no room — a card that
+  // opens off the bottom of a phone screen is a card nobody reads.
+  let top = rect.bottom + window.scrollY + 6;
+  if (rect.bottom + height + margin > window.innerHeight && rect.top - height - margin > 0) {
+    top = rect.top + window.scrollY - height - 6;
+  }
+
+  let left = rect.left + window.scrollX;
+  const maxLeft = window.scrollX + document.documentElement.clientWidth - width - margin;
+  left = Math.max(window.scrollX + margin, Math.min(left, maxLeft));
+
+  cardEl.style.top = `${Math.round(top)}px`;
+  cardEl.style.left = `${Math.round(left)}px`;
+}
+
+function showCard(trigger) {
+  if (cardOwner === trigger && !cardEl.hidden) return;
+  const id = Number(trigger.dataset.playerId);
+  const card = state.playerCards?.cards?.[id];
+  if (!card) return;
+
+  const player = {
+    name: trigger.dataset.playerName ?? '',
+    position: trigger.dataset.playerPos ?? '',
+    proTeam: trigger.dataset.playerTeam ?? '',
+  };
+
+  cardEl.innerHTML = cardHtml(player, card);
+  cardEl.hidden = false;
+  positionCard(trigger);
+  trigger.setAttribute('aria-expanded', 'true');
+  cardOwner = trigger;
+}
+
+function hideCard() {
+  if (!cardEl || cardEl.hidden) return;
+  cardEl.hidden = true;
+  cardOwner?.setAttribute('aria-expanded', 'false');
+  cardOwner = null;
+}
+
+/**
+ * One set of listeners on the document, delegated, so cards keep working on
+ * content rendered after boot — every view replaces its own innerHTML, and
+ * per-element listeners would die with it.
+ */
+function initPlayerCards() {
+  cardEl = document.createElement('div');
+  cardEl.className = 'pcard';
+  cardEl.id = 'player-card';
+  cardEl.setAttribute('role', 'tooltip');
+  cardEl.hidden = true;
+  document.body.appendChild(cardEl);
+
+  const triggerFor = (target) => target?.closest?.('[data-player-id]');
+  const insideCard = (target) => Boolean(target?.closest?.('.pcard'));
+
+  // Was the last thing the user did a pointer action? Focus follows a tap or a
+  // click as well as a Tab key, and without knowing which, the focus handler
+  // fights the click handler: the tap focuses the button (card opens), then the
+  // click toggles it (card closes), and a phone user sees nothing at all.
+  let pointerIntent = false;
+  document.addEventListener('pointerdown', () => { pointerIntent = true; }, true);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Tab') pointerIntent = false; }, true);
+
+  // Enter and leave are both decided here rather than with a matching
+  // pointerout handler. pointerout fires while the pointer is still logically
+  // over the trigger — crossing between the button and the card counts as
+  // leaving — which closed the card the instant it opened. Since every element
+  // fires pointerover, "the pointer is now over something that is neither a
+  // trigger nor the card" is a complete and much less fragile leave condition.
+  document.addEventListener('pointerover', (e) => {
+    if (e.pointerType === 'touch') return;
+    const trigger = triggerFor(e.target);
+    if (trigger) showCard(trigger);
+    else if (!insideCard(e.target)) hideCard();
+  });
+
+  document.addEventListener('click', (e) => {
+    const trigger = triggerFor(e.target);
+    if (!trigger) {
+      if (!insideCard(e.target)) hideCard();
+      return;
+    }
+    e.preventDefault();
+    // On touch this is the only way in, so it toggles. The focus that arrived
+    // with the same tap has already been ignored, so `cardOwner` here really
+    // does mean "this card was open before you tapped".
+    if (cardOwner === trigger) hideCard();
+    else showCard(trigger);
+  });
+
+  document.addEventListener('focusin', (e) => {
+    if (pointerIntent) return;
+    const trigger = triggerFor(e.target);
+    if (trigger) showCard(trigger);
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      const owner = cardOwner;
+      hideCard();
+      owner?.focus();
+    }
+  });
+
+  // No scroll handler on purpose. The card is positioned in *document*
+  // coordinates (the scroll offset is baked into top/left at open time), so it
+  // scrolls with its trigger and stays glued to the right name for free.
+  // Closing on scroll instead looks reasonable and is not: anything that
+  // scrolls the page while opening — a browser bringing a focused element into
+  // view, a tap near the bottom of a phone screen — dismisses the card the
+  // instant it appears.
+  //
+  // Resize is different: it reflows the page, so the coordinates the card was
+  // given no longer point at anything.
+  window.addEventListener('resize', hideCard);
+}
+
+/** Whether this player has a card worth opening. */
+const hasCard = (playerId) => Boolean(state.playerCards?.cards?.[Number(playerId)]);
 
 function emptyState(icon, title, message) {
   return `<div class="empty">
@@ -5854,7 +7482,7 @@ function renderStandings() {
       (t) => `
       <tr class="${t.rank === league.playoffTeams ? 'playoff-cut' : ''}">
         <td class="num rank">${esc(t.rank)}</td>
-        <th scope="row" class="row-team">${esc(t.teamName)}<small>${esc(t.managerName ?? '')}</small></th>
+        <th scope="row" class="row-team">${teamCell(t, t.managerName ?? '')}</th>
         <td class="num">${esc(t.wins)}-${esc(t.losses)}${t.ties ? `-${esc(t.ties)}` : ''}</td>
         <td class="bar-cell">${bar(t.pointsFor, maxPF, { digits: 0 })}</td>
         <td class="num">${num(t.pointsAgainst, 1)}</td>
@@ -5901,7 +7529,10 @@ function renderTeams() {
     const roster = hub.teams
       .map(
         (t) => `<a class="card" href="#team/${esc(t.id)}" style="text-decoration:none;color:inherit;display:block">
-          <h3>${esc(t.name)}</h3>
+          <h3 class="named">
+            ${avatar(t.logo ?? null, t.name, { variant: 'team', size: 40 })}
+            <span class="named__text">${esc(t.name)}</span>
+          </h3>
           <p>${
             t.isPlaceholder
               ? '<span class="pill pill--warn">Open spot</span>'
@@ -5920,7 +7551,10 @@ function renderTeams() {
     .sort((a, b) => b.pointsFor - a.pointsFor)
     .map(
       (t) => `<div class="card">
-        <h3><a href="#team/${esc(t.teamId)}">${esc(t.teamName)}</a></h3>
+        <h3 class="named">
+          ${avatar(t.logo ?? null, t.teamName, { variant: 'team', size: 40 })}
+          <span class="named__text"><a href="#team/${esc(t.teamId)}">${esc(t.teamName)}</a></span>
+        </h3>
         <p class="stat__note">${esc(t.managerName ?? '')}</p>
         <ul class="stats" style="margin:0.75rem 0 0">
           <li class="stat"><span class="stat__label">Record</span>
@@ -5989,7 +7623,8 @@ function renderTeam(teamId) {
 
   // --- Header -----------------------------------------------------------
   parts.push(`
-    <section class="hero" aria-labelledby="team-hero">
+    <section class="hero hero--team" aria-labelledby="team-hero">
+      ${avatar(team.logo ?? null, team.teamName, { variant: 'team', size: 72 })}
       <p class="hero__eyebrow">${esc(team.managerName ?? 'Unclaimed')}</p>
       <h2 id="team-hero">${esc(team.teamName)}</h2>
       <p class="hero__sub">
@@ -6187,7 +7822,7 @@ function renderTeam(teamId) {
         .map(
           (p) => `<tr>
             <td>${esc(p.slot)}</td>
-            <th scope="row" class="row-team">${esc(p.name)}<small>${esc(p.proTeam)}</small></th>
+            <th scope="row" class="row-team">${playerCell(p, p.proTeam)}</th>
             <td>${esc(p.position)}</td>
             <td class="num">${num(p.projected, 1)}</td>
             <td>${p.injuryStatus && p.injuryStatus !== 'ACTIVE' && p.injuryStatus !== 'NORMAL'
@@ -6581,11 +8216,14 @@ function renderBoard() {
               (p) => `<tr>
                 <td class="num rank">${esc(p.valueRank)}</td>
                 <th scope="row" class="row-team">
-                  ${esc(p.name)}<small>${esc(p.proTeam)}${
-                    p.injuryStatus && !['ACTIVE', 'NORMAL'].includes(p.injuryStatus)
-                      ? ` · ${esc(p.injuryStatus)}`
-                      : ''
-                  }</small>
+                  ${playerCell(
+                    p,
+                    `${p.proTeam}${
+                      p.injuryStatus && !['ACTIVE', 'NORMAL'].includes(p.injuryStatus)
+                        ? ` · ${p.injuryStatus}`
+                        : ''
+                    }`
+                  )}
                 </th>
                 <td>${esc(p.position)}${esc(p.positionRank)}</td>
                 <td class="num">${esc(p.tier)}</td>
@@ -6870,7 +8508,7 @@ function renderMock() {
                 .map(
                   (p) => `<tr>
                     <td class="num rank">${esc(p.rank)}</td>
-                    <th scope="row" class="row-team">${esc(p.name)}<small>${esc(p.proTeam)}</small></th>
+                    <th scope="row" class="row-team">${playerCell(p, p.proTeam)}</th>
                     <td>${esc(p.position)}</td>
                     <td class="num">${p.projected === null ? '—' : num(p.projected, 0)}</td>
                     <td class="num">${p.adp === null ? '—' : num(p.adp, 1)}</td>
@@ -7050,7 +8688,21 @@ function renderDraft() {
             .map(
               (p) => `<li class="pick">
                 <span class="pick__num">${esc(p.overall)}.</span>
-                <span class="pick__player">${esc(p.playerName)}</span>
+                ${avatar(
+                  playerImage({ playerId: p.playerId, position: p.position, proTeam: p.proTeam }),
+                  p.playerName,
+                  { variant: 'player', size: 44 }
+                )}
+                <span class="pick__player">${
+                  hasCard(p.playerId)
+                    ? `<button type="button" class="pcard-trigger"
+                         data-player-id="${esc(p.playerId)}"
+                         data-player-name="${esc(p.playerName)}"
+                         data-player-pos="${esc(p.position)}"
+                         data-player-team="${esc(p.proTeam)}"
+                         aria-describedby="player-card" aria-expanded="false">${esc(p.playerName)}</button>`
+                    : esc(p.playerName)
+                }</span>
                 <span class="pick__meta">${esc(p.position)} · ${esc(p.proTeam)}</span><br>
                 <span class="pick__meta">${esc(p.teamName)}</span>
                 ${draft.hasResults ? `<br>${deltaPill(p.valueDelta, 0)}` : ''}
@@ -7176,7 +8828,7 @@ function renderPrizes() {
       (p) => `<div class="prize">
         <p class="prize__label">${esc(p.label)}</p>
         <p class="prize__desc">${esc(p.description)}</p>
-        <p class="prize__winner">${esc(p.winner.teamName)}</p>
+        <p class="prize__winner">${teamCell(p.winner)}</p>
         <p class="prize__detail">${esc(p.winner.detail ?? '')}</p>
       </div>`
     )
@@ -7191,7 +8843,7 @@ function renderPrizes() {
            <tbody>${weeklyHigh
              .map(
                (w) => `<tr><td class="num rank">${esc(w.week)}</td>
-                 <th scope="row" class="row-team">${esc(w.teamName)}</th>
+                 <th scope="row" class="row-team">${teamCell(w)}</th>
                  <td class="num">${num(w.score, 2)}</td></tr>`
              )
              .join('')}</tbody>
@@ -7300,6 +8952,127 @@ function renderMoney() {
   $('#money-body').innerHTML = parts.join('');
 }
 
+// --- Weekly challenge ------------------------------------------------------
+
+/**
+ * The weekly challenge board.
+ *
+ * Three states share this view and each needs to read as deliberate:
+ *
+ *   settled   played, scored, somebody got paid
+ *   live      announced, not yet played — this is the one people came to see
+ *   sealed    dealt but face-down, because revealing Week 9 in Week 2 turns a
+ *             season of small surprises into a spoiler
+ *
+ * The seed is printed at the bottom on purpose. It is the only thing that makes
+ * "the draw was random" checkable rather than merely claimed: anyone can take
+ * that string, run the same shuffle, and confirm the deck was never restacked
+ * after the games were played.
+ */
+function renderChallenges() {
+  const c = state.hub?.challenges;
+  const body = $('#challenges-body');
+
+  if (!c || !c.enabled || !c.weeks.length) {
+    body.innerHTML = emptyState(
+      '🎲',
+      'No weekly challenge configured',
+      'Set weeklyChallenge.enabled in config/money.json to turn this on.'
+    );
+    return;
+  }
+
+  const currency = c.currency ?? 'USD';
+  const settled = c.weeks.filter((w) => w.winner);
+  const live = c.weeks.find((w) => !w.sealed && !w.played);
+  const parts = [];
+
+  // --- What is on right now ---------------------------------------------
+  parts.push(`
+    <section class="hero">
+      <p class="hero__eyebrow">${esc(c.cadence === 'biweekly' ? 'Every other week' : 'Every week')} · ${esc(money(c.pot, currency))} in play</p>
+      <h2>${live ? `Week ${esc(live.week)}: ${esc(live.label)}` : 'Weekly challenge'}</h2>
+      <p class="hero__sub">${
+        live
+          ? `${esc(live.rule)} <strong>${esc(money(live.amount, currency))}</strong> to the winner.`
+          : settled.length === c.weeks.length
+            ? 'Every challenge has been settled for the season.'
+            : 'The first challenge is revealed once the season is underway.'
+      }</p>
+    </section>`);
+
+  // --- Money won so far ---------------------------------------------------
+  if (c.leaderboard.length) {
+    parts.push(`
+      <div class="table-scroll">
+        <table>
+          <caption>Challenge winnings so far</caption>
+          <thead><tr>
+            <th scope="col" class="num">#</th><th scope="col">Team</th>
+            <th scope="col" class="num">Won</th><th scope="col" class="num">Cash</th>
+          </tr></thead>
+          <tbody>
+            ${c.leaderboard
+              .map(
+                (t, i) => `<tr>
+                  <td class="num rank">${esc(i + 1)}</td>
+                  <th scope="row" class="row-team">${teamCell(t, t.managerName ?? '', `#team/${t.teamId}`)}</th>
+                  <td class="num">${esc(t.challengesWon)}</td>
+                  <td class="num">${esc(money(t.amountWon, currency))}</td>
+                </tr>`
+              )
+              .join('')}
+          </tbody>
+        </table>
+      </div>`);
+  }
+
+  // --- Every week ---------------------------------------------------------
+  const cards = c.weeks
+    .map((w) => {
+      if (w.sealed) {
+        return `<div class="challenge challenge--sealed">
+          <p class="challenge__week">Week ${esc(w.week)} · ${esc(money(w.amount, currency))}</p>
+          <p class="challenge__label"><span aria-hidden="true">🔒</span> Sealed</p>
+          <p class="challenge__rule">Revealed the week it is played.</p>
+        </div>`;
+      }
+
+      const status = w.winner ? 'won' : w.noWinner ? 'void' : 'live';
+      const outcome = w.winner
+        ? `<p class="challenge__winner">${teamCell(w.winner, null, `#team/${w.winner.teamId}`)}</p>
+           <p class="challenge__detail">${esc(w.winner.detail ?? '')}</p>
+           <p class="challenge__payout">${esc(money(w.winner.amount, currency))}${
+             (w.tiedWith ?? []).length
+               ? ` each — tied with ${esc(w.tiedWith.map((t) => t.teamName).join(', '))}`
+               : ''
+           }</p>`
+        : w.noWinner
+          ? '<p class="challenge__detail"><em>Nobody qualified. The pot rolls into the season awards.</em></p>'
+          : '<p class="challenge__detail"><em>Not played yet.</em></p>';
+
+      return `<div class="challenge challenge--${esc(status)}">
+        <p class="challenge__week">Week ${esc(w.week)} · ${esc(money(w.amount, currency))}</p>
+        <p class="challenge__label">${esc(w.label)}</p>
+        <p class="challenge__rule">${esc(w.rule)}</p>
+        ${outcome}
+      </div>`;
+    })
+    .join('');
+
+  parts.push(`<h3 style="margin-top:2rem">Every week</h3><div class="grid">${cards}</div>`);
+
+  parts.push(`
+    <p class="view__intro" style="margin-top:2rem">
+      The schedule is a seeded shuffle, dealt once and fixed for the season — no
+      challenge repeats, and none of them can change after the games are played.
+      Verify it yourself against the seed
+      <code>${esc(c.seed)}</code>.
+    </p>`);
+
+  body.innerHTML = parts.join('');
+}
+
 const RENDERERS = {
   overview: renderOverview,
   standings: renderStandings,
@@ -7310,6 +9083,7 @@ const RENDERERS = {
   mock: renderMock,
   trades: renderTrades,
   prizes: renderPrizes,
+  challenges: renderChallenges,
   money: renderMoney,
 };
 
@@ -7393,13 +9167,15 @@ function initTheme() {
 
 async function boot() {
   initTheme();
+  initImageFallbacks();
+  initPlayerCards();
 
   try {
     const hub = await loadJson('data/hub.json');
     state.hub = hub;
 
     const year = hub.league.season ?? hub.seasons?.[hub.seasons.length - 1];
-    const [season, draft, teamDetail, draftPool, bigBoard, ledger] = await Promise.all([
+    const [season, draft, teamDetail, draftPool, bigBoard, ledger, playerCards] = await Promise.all([
       loadJson(`data/season-${year}.json`).catch(() => null),
       loadJson(`data/draft-${year}.json`).catch(() => null),
       loadJson(`data/teams-${year}.json`).catch(() => null),
@@ -7407,6 +9183,9 @@ async function boot() {
       loadJson(`data/bigboard-${year}.json`).catch(() => null),
       // Absent on the published site by design — the ledger is never uploaded.
       loadJson('data/money.json').catch(() => null),
+      // Hover cards. Optional: an older build has no such file, and every
+      // player name simply stays plain text.
+      loadJson(`data/players-${year}.json`).catch(() => null),
     ]);
     state.season = season;
     state.draft = draft;
@@ -7414,6 +9193,7 @@ async function boot() {
     state.draftPool = draftPool;
     state.bigBoard = bigBoard;
     state.money = ledger;
+    state.playerCards = playerCards;
     syncMyTeamNav();
 
     if (bigBoard?.available) {
@@ -7737,16 +9517,24 @@ export function pickValue(pick) {
 
 ### `docs/_headers`
 
-*25 lines*
+*33 lines*
 
 ```
 # Cloudflare Pages response headers.
 #
-# The site is fully self-contained — no CDNs, no external fonts, no analytics,
-# no outbound requests of any kind — so the policy below can be strict without
-# breaking anything. If you ever add an external resource (team logos from
-# ESPN, for example), it will be blocked until you widen the matching
-# directive here.
+# The site loads no scripts, styles, fonts or data from anywhere but itself.
+# The one exception is images: player headshots, NFL team logos and each
+# manager's fantasy team logo are hotlinked from ESPN's CDN rather than
+# committed to the repo, so `img-src` names those hosts and nothing else.
+#
+# That list is not decoration. A fantasy team logo is a URL ESPN hands back
+# from the league payload, and ESPN's classic UI lets a manager paste in any
+# URL they like — so without an allowlist, one manager could point every
+# visitor's browser at a server of their choosing and collect the IP and
+# user-agent of everyone who opens the site. `sanitizeTeamLogo()` in
+# scripts/lib/images.mjs drops off-list logos at build time and this header is
+# the second line of the same defence. Keep the two in sync; widening one
+# without the other either breaks images or removes the guard.
 #
 # style-src allows 'unsafe-inline' because the app sets a few styles inline
 # (the money progress bar width, some spacing). That is the weakest line here
@@ -7759,7 +9547,7 @@ export function pickValue(pick) {
   X-Frame-Options: DENY
   Referrer-Policy: no-referrer
   Permissions-Policy: geolocation=(), microphone=(), camera=(), interest-cohort=()
-  Content-Security-Policy: default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'self'; img-src 'self' data: https://a.espncdn.com https://g.espncdn.com https://i.espncdn.com https://s.espncdn.com https://secure.espncdn.com; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
 
 # League data is regenerated on every push; never let a stale week be cached.
 /data/*
@@ -8744,6 +10532,837 @@ describe('phase detection', () => {
 });
 ```
 
+### `tests/challenges.test.mjs`
+
+*405 lines*
+
+```javascript
+/**
+ * Verification for the weekly challenge.
+ *
+ * The determinism tests are the important ones and are not a formality. This
+ * feature pays real money off a random draw, and the draw runs on every build —
+ * including the builds that happen *after* the games. If the shuffle were ever
+ * to become non-reproducible, the site would silently re-pick Week 4's
+ * challenge with Week 4's results already known, which is indistinguishable
+ * from rigging it. A test that fails loudly is the only thing standing between
+ * that and a league argument nobody can settle.
+ *
+ *   npm test
+ */
+
+import { test, describe } from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+  CHALLENGE_DECK,
+  buildChallengeSchedule,
+  challengeSeed,
+  computeChallenges,
+  challengeLeaderboard,
+} from '../scripts/lib/challenges.mjs';
+import { splitPot, computePayouts, challengePayout } from '../scripts/lib/money.mjs';
+
+const LEAGUE = { leagueId: 274568741, season: 2026, weeks: 13 };
+
+/** A started player. */
+const s = (name, position, points, extra = {}) => ({
+  playerId: name.length * 7,
+  name,
+  position,
+  points,
+  projected: points,
+  started: true,
+  slotId: 20,
+  ...extra,
+});
+
+/**
+ * One team's week. Mirrors what buildTeamWeeks() emits, which is what the
+ * challenge scorers actually run against.
+ */
+function row(teamId, week, score, opts = {}) {
+  const starters = opts.starters ?? [s(`P${teamId}`, 'QB', score)];
+  const sorted = [...starters].sort((a, b) => b.points - a.points);
+  return {
+    week,
+    teamId,
+    opponentId: opts.opponentId ?? null,
+    score,
+    opponentScore: opts.opponentScore ?? 0,
+    margin: Number((score - (opts.opponentScore ?? 0)).toFixed(2)),
+    result: opts.result ?? 'WIN',
+    optimalScore: opts.optimalScore ?? score,
+    efficiency: opts.efficiency ?? 100,
+    benchPoints: opts.benchPoints ?? 0,
+    isPerfectLineup: true,
+    starters,
+    benchPlayers: opts.benchPlayers ?? [],
+    topStarter: sorted[0] ?? null,
+    worstStarter: sorted[sorted.length - 1] ?? null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+describe('challenge schedule', () => {
+  test('the same league and season always deal the same cards', () => {
+    const a = buildChallengeSchedule(LEAGUE);
+    const b = buildChallengeSchedule(LEAGUE);
+    assert.deepEqual(
+      a.weeks.map((w) => w.challengeId),
+      b.weeks.map((w) => w.challengeId),
+      'the draw must be reproducible — a build after the games must not re-pick'
+    );
+  });
+
+  test('a different league gets a different deal', () => {
+    const ours = buildChallengeSchedule(LEAGUE).weeks.map((w) => w.challengeId);
+    const theirs = buildChallengeSchedule({ ...LEAGUE, leagueId: 999 }).weeks.map((w) => w.challengeId);
+    assert.notDeepEqual(ours, theirs);
+  });
+
+  test('changing the salt reshuffles the season', () => {
+    const before = buildChallengeSchedule(LEAGUE).weeks.map((w) => w.challengeId);
+    const after = buildChallengeSchedule({ ...LEAGUE, salt: 'redo' }).weeks.map((w) => w.challengeId);
+    assert.notDeepEqual(before, after);
+  });
+
+  test('nothing repeats within a season', () => {
+    const ids = buildChallengeSchedule(LEAGUE).weeks.map((w) => w.challengeId);
+    assert.equal(new Set(ids).size, ids.length);
+  });
+
+  test('one challenge per regular-season week', () => {
+    const schedule = buildChallengeSchedule(LEAGUE);
+    assert.equal(schedule.weeks.length, 13);
+    assert.deepEqual(
+      schedule.weeks.map((w) => w.week),
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    );
+  });
+
+  test('bi-weekly deals every other week', () => {
+    const schedule = buildChallengeSchedule({ ...LEAGUE, cadence: 'biweekly' });
+    assert.deepEqual(
+      schedule.weeks.map((w) => w.week),
+      [1, 3, 5, 7, 9, 11, 13]
+    );
+  });
+
+  test('a season longer than the deck reshuffles instead of running dry', () => {
+    const long = buildChallengeSchedule({ ...LEAGUE, weeks: CHALLENGE_DECK.length + 4 });
+    assert.equal(long.weeks.length, CHALLENGE_DECK.length + 4);
+    assert.ok(long.weeks.every((w) => w.challengeId));
+  });
+
+  test('every dealt card exists in the deck', () => {
+    const ids = new Set(CHALLENGE_DECK.map((c) => c.id));
+    for (const week of buildChallengeSchedule(LEAGUE).weeks) {
+      assert.ok(ids.has(week.challengeId), `unknown challenge ${week.challengeId}`);
+    }
+  });
+
+  test('the seed names the league and season, so it can be checked by hand', () => {
+    assert.equal(challengeSeed({ leagueId: 1, season: 2026 }), 'roe-challenge:1:2026');
+    assert.equal(challengeSeed({ leagueId: 1, season: 2026, salt: 'x' }), 'roe-challenge:1:2026:x');
+  });
+
+  test('deck ids are unique — a duplicate would silently drop a challenge', () => {
+    const ids = CHALLENGE_DECK.map((c) => c.id);
+    assert.equal(new Set(ids).size, ids.length);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('challenge scoring', () => {
+  const deck = CHALLENGE_DECK;
+  const only = (id) => deck.filter((c) => c.id === id);
+  const scheduleFor = (id, week = 1) => ({
+    seed: 'test',
+    cadence: 'weekly',
+    startWeek: 1,
+    weeks: [{ week, challengeId: id, label: id, rule: '' }],
+  });
+
+  const resolve = (id, teamWeeks, opts = {}) =>
+    computeChallenges({
+      schedule: scheduleFor(id),
+      teamWeeks,
+      weeksPlayed: 1,
+      deck: only(id),
+      payouts: new Map([[1, 15]]),
+      ...opts,
+    })[0];
+
+  test('highest score wins Top Gun', () => {
+    const out = resolve('highScore', [row(1, 1, 110), row(2, 1, 130), row(3, 1, 99)]);
+    assert.equal(out.winner.teamId, 2);
+    assert.equal(out.winner.amount, 15);
+  });
+
+  test('Price Is Right busts anyone over 100', () => {
+    // Team 2 scores highest but goes over, so 99.5 beats it.
+    const out = resolve('closestTo100', [row(1, 1, 99.5), row(2, 1, 140), row(3, 1, 80)]);
+    assert.equal(out.winner.teamId, 1);
+  });
+
+  test('Price Is Right has no winner when everybody busts', () => {
+    const out = resolve('closestTo100', [row(1, 1, 120), row(2, 1, 140)]);
+    assert.equal(out.winner, null);
+    assert.equal(out.noWinner, true);
+  });
+
+  test('Photo Finish wants the smallest winning margin, not the largest', () => {
+    const out = resolve('narrowestWin', [
+      row(1, 1, 100, { opponentScore: 99, result: 'WIN' }),
+      row(2, 1, 150, { opponentScore: 100, result: 'WIN' }),
+      row(3, 1, 90, { opponentScore: 120, result: 'LOSS' }),
+    ]);
+    assert.equal(out.winner.teamId, 1);
+  });
+
+  test('Stole One wants the lowest winning score', () => {
+    const out = resolve('uglyWin', [
+      row(1, 1, 80, { opponentScore: 79, result: 'WIN' }),
+      row(2, 1, 150, { opponentScore: 100, result: 'WIN' }),
+      row(3, 1, 60, { opponentScore: 200, result: 'LOSS' }),
+    ]);
+    assert.equal(out.winner.teamId, 1, 'the 60 lost, so it must not win a prize for winning');
+  });
+
+  test('Robbed only considers losses', () => {
+    const out = resolve('toughLuck', [
+      row(1, 1, 160, { opponentScore: 100, result: 'WIN' }),
+      row(2, 1, 150, { opponentScore: 155, result: 'LOSS' }),
+    ]);
+    assert.equal(out.winner.teamId, 2);
+  });
+
+  test('a position challenge reads only that position', () => {
+    const out = resolve('bestTE', [
+      row(1, 1, 100, { starters: [s('Big QB', 'QB', 40), s('Small TE', 'TE', 8)] }),
+      row(2, 1, 90, { starters: [s('Ok QB', 'QB', 20), s('Big TE', 'TE', 22)] }),
+    ]);
+    assert.equal(out.winner.teamId, 2);
+    assert.match(out.winner.detail, /Big TE/);
+  });
+
+  test('a team with nobody at that position simply does not qualify', () => {
+    const out = resolve('bestTE', [
+      row(1, 1, 100, { starters: [s('QB only', 'QB', 40)] }),
+      row(2, 1, 50, { starters: [s('A TE', 'TE', 5)] }),
+    ]);
+    assert.equal(out.winner.teamId, 2);
+  });
+
+  test('Best In Show counts how many teams you would have beaten', () => {
+    const out = resolve('allPlayWeek', [row(1, 1, 100), row(2, 1, 120), row(3, 1, 90)]);
+    assert.equal(out.winner.teamId, 2);
+    assert.equal(out.winner.value, 2);
+  });
+
+  test('a tie splits the pot rather than inventing a tiebreak', () => {
+    const out = resolve('highScore', [row(1, 1, 120), row(2, 1, 120), row(3, 1, 90)]);
+    assert.equal(out.winner.amount, 7.5);
+    assert.equal(out.tiedWith.length, 1);
+    assert.equal(out.tiedWith[0].amount, 7.5);
+    assert.equal(out.winner.amount + out.tiedWith[0].amount, 15);
+  });
+
+  test('every challenge in the deck scores a normal week without throwing', () => {
+    const starters = [
+      s('QB', 'QB', 24, { slotId: 0 }),
+      s('RB1', 'RB', 14, { slotId: 2 }),
+      s('RB2', 'RB', 9, { slotId: 2 }),
+      s('WR1', 'WR', 18, { slotId: 4 }),
+      s('WR2', 'WR', 11, { slotId: 4 }),
+      s('TE', 'TE', 7, { slotId: 6 }),
+      s('OP', 'QB', 21, { slotId: 7 }),
+      s('DST', 'D/ST', 6, { slotId: 16 }),
+      s('K', 'K', 8, { slotId: 17 }),
+    ];
+    const teamWeeks = [
+      row(1, 1, 118, { starters, opponentScore: 100, result: 'WIN', benchPoints: 12, efficiency: 91 }),
+      row(2, 1, 100, { starters, opponentScore: 118, result: 'LOSS', benchPoints: 3, efficiency: 97 }),
+    ];
+
+    for (const card of CHALLENGE_DECK) {
+      const out = computeChallenges({
+        schedule: scheduleFor(card.id),
+        teamWeeks,
+        weeksPlayed: 1,
+        payouts: new Map([[1, 15]]),
+      })[0];
+      assert.ok(out.winner || out.noWinner, `${card.id} produced neither a winner nor a void`);
+      if (out.winner) {
+        assert.equal(typeof out.winner.value, 'number', `${card.id} scored a non-number`);
+        assert.ok(!Number.isNaN(out.winner.value), `${card.id} scored NaN`);
+      }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('sealing future weeks', () => {
+  const schedule = buildChallengeSchedule(LEAGUE);
+
+  test('an unplayed season reveals week 1 and seals the rest', () => {
+    const out = computeChallenges({ schedule, teamWeeks: [], weeksPlayed: 0 });
+    assert.equal(out[0].sealed, false, 'the week being played must be announced before kickoff');
+    assert.equal(out[0].label !== null, true);
+    assert.ok(out.slice(1).every((w) => w.sealed));
+  });
+
+  test('a sealed week gives away nothing — not even which challenge it is', () => {
+    const out = computeChallenges({ schedule, teamWeeks: [], weeksPlayed: 0 });
+    const sealed = out[5];
+    assert.equal(sealed.label, null);
+    assert.equal(sealed.rule, null);
+    assert.equal(sealed.winner, null);
+  });
+
+  test('the reveal advances one week at a time', () => {
+    const out = computeChallenges({ schedule, teamWeeks: [], weeksPlayed: 4 });
+    assert.ok(out.slice(0, 5).every((w) => !w.sealed));
+    assert.ok(out.slice(5).every((w) => w.sealed));
+  });
+
+  test('revealAll opens the whole schedule', () => {
+    const out = computeChallenges({ schedule, teamWeeks: [], weeksPlayed: 0, revealAll: true });
+    assert.ok(out.every((w) => !w.sealed));
+  });
+
+  test('a sealed week still shows what it is worth', () => {
+    const out = computeChallenges({
+      schedule,
+      teamWeeks: [],
+      weeksPlayed: 0,
+      payouts: new Map(schedule.weeks.map((w) => [w.week, 15])),
+    });
+    assert.equal(out[8].sealed, true);
+    assert.equal(out[8].amount, 15);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('challenge leaderboard', () => {
+  test('adds up wins and cash across the season', () => {
+    const resolved = [
+      { winner: { teamId: 1, amount: 15 }, tiedWith: [] },
+      { winner: { teamId: 1, amount: 15 }, tiedWith: [] },
+      { winner: { teamId: 2, amount: 15 }, tiedWith: [] },
+      { winner: null, tiedWith: [] },
+    ];
+    const board = challengeLeaderboard(resolved, [
+      { teamId: 1, teamName: 'A', managerName: 'Ann' },
+      { teamId: 2, teamName: 'B', managerName: 'Bo' },
+    ]);
+    assert.equal(board[0].teamId, 1);
+    assert.equal(board[0].challengesWon, 2);
+    assert.equal(board[0].amountWon, 30);
+    assert.equal(board[1].amountWon, 15);
+  });
+
+  test('a split counts for both teams', () => {
+    const board = challengeLeaderboard(
+      [{ winner: { teamId: 1, amount: 7.5 }, tiedWith: [{ teamId: 2, amount: 7.5 }] }],
+      []
+    );
+    assert.equal(board.length, 2);
+    assert.equal(board[0].amountWon, 7.5);
+    assert.equal(board[1].amountWon, 7.5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('splitting the challenge pot', () => {
+  test('$195 across 13 weeks is a clean $15', () => {
+    const split = splitPot(195, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+    assert.ok(split.every((w) => w.amount === 15));
+  });
+
+  test('an uneven split still adds back up to the pot exactly', () => {
+    // 200 / 13 = 15.3846…, which naive rounding turns into 199.94.
+    const weeks = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+    const split = splitPot(200, weeks);
+    const total = Math.round(split.reduce((a, w) => a + w.amount, 0) * 100) / 100;
+    assert.equal(total, 200);
+  });
+
+  test('the leftover cents go to the earliest weeks, never lost', () => {
+    const split = splitPot(10, [1, 2, 3]);
+    assert.deepEqual(split.map((w) => w.amount), [3.34, 3.33, 3.33]);
+  });
+
+  test('no weeks or no pot yields nothing rather than dividing by zero', () => {
+    assert.deepEqual(splitPot(195, []), []);
+    assert.deepEqual(splitPot(0, [1, 2]), []);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('the league’s actual payout structure', () => {
+  const config = {
+    buyIn: 75,
+    payouts: {
+      structure: [
+        { id: 'first', label: '1st Place', amount: 350 },
+        { id: 'second', label: '2nd Place', amount: 130 },
+        { id: 'third', label: '3rd Place', amount: 75 },
+        { id: 'challenges', label: 'Weekly Challenges', remainder: true },
+      ],
+    },
+  };
+
+  test('10 x $75 pays 350 / 130 / 75 and leaves 195 for the challenges', () => {
+    const { payouts } = computePayouts(config, 750);
+    assert.deepEqual(payouts.map((p) => p.amount), [350, 130, 75, 195]);
+    assert.equal(
+      payouts.reduce((a, p) => a + p.amount, 0),
+      750,
+      'the four slots must account for the whole pot'
+    );
+  });
+
+  test('third place is exactly the buy-in back', () => {
+    const { payouts } = computePayouts(config, 750);
+    assert.equal(payouts.find((p) => p.id === 'third').amount, config.buyIn);
+  });
+
+  test('an eleventh manager grows the challenge pot and leaves the places alone', () => {
+    const { payouts } = computePayouts(config, 825);
+    assert.deepEqual(payouts.slice(0, 3).map((p) => p.amount), [350, 130, 75]);
+    assert.equal(challengePayout(payouts), 270);
+  });
+
+  test('13 weekly challenges out of a 10-team pot are $15 each', () => {
+    const { payouts } = computePayouts(config, 750);
+    const split = splitPot(challengePayout(payouts), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+    assert.ok(split.every((w) => w.amount === 15));
+  });
+});
+```
+
+### `tests/images.test.mjs`
+
+*139 lines*
+
+```javascript
+/**
+ * Verification for the image layer.
+ *
+ * `sanitizeTeamLogo` is the one function here that is doing security work
+ * rather than presentation. A fantasy team logo is a URL ESPN hands back from
+ * the league payload, and ESPN's classic UI lets a manager paste in any URL —
+ * so without the filter, one manager could point every visitor's browser at a
+ * server of their choosing and harvest the IP and user-agent of everyone in the
+ * league who opens the site.
+ *
+ *   npm test
+ */
+
+import { test, describe } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+
+import {
+  ESPN_IMAGE_HOSTS,
+  headshotUrl,
+  proTeamLogoUrl,
+  playerImageUrl,
+  sanitizeTeamLogo,
+} from '../scripts/lib/images.mjs';
+
+describe('player pictures', () => {
+  test('a headshot is addressed by ESPN player id', () => {
+    assert.equal(
+      headshotUrl(4429795),
+      'https://a.espncdn.com/i/headshots/nfl/players/full/4429795.png'
+    );
+  });
+
+  test('an unknown or placeholder player id yields no URL', () => {
+    // ESPN pre-builds every draft slot with playerId -1; that is not a person.
+    assert.equal(headshotUrl(-1), null);
+    assert.equal(headshotUrl(0), null);
+    assert.equal(headshotUrl(undefined), null);
+  });
+
+  test('a defence gets its team shield, not a headshot that will 404 forever', () => {
+    const dst = { playerId: 16021, position: 'D/ST', proTeam: 'WSH' };
+    assert.equal(playerImageUrl(dst), 'https://a.espncdn.com/i/teamlogos/nfl/500/wsh.png');
+  });
+
+  test('a real player gets a headshot even though a team is on the row', () => {
+    const wr = { playerId: 4262921, position: 'WR', proTeam: 'MIA' };
+    assert.match(playerImageUrl(wr), /headshots/);
+  });
+
+  test('a free agent defence has no shield to show', () => {
+    assert.equal(proTeamLogoUrl('FA'), null);
+    assert.equal(proTeamLogoUrl(null), null);
+  });
+});
+
+describe('fantasy team logos', () => {
+  test('an ESPN-hosted logo passes through unchanged', () => {
+    const url = 'https://g.espncdn.com/lm-static/ffl/images/default_logos/6.svg';
+    assert.equal(sanitizeTeamLogo(url), url);
+  });
+
+  test('every allowed host is actually allowed', () => {
+    for (const host of ESPN_IMAGE_HOSTS) {
+      assert.equal(sanitizeTeamLogo(`https://${host}/x.png`), `https://${host}/x.png`);
+    }
+  });
+
+  test('a logo pointed at somebody else’s server is dropped', () => {
+    assert.equal(sanitizeTeamLogo('https://evil.example.com/tracker.png'), null);
+  });
+
+  test('a lookalike host does not sneak past', () => {
+    assert.equal(sanitizeTeamLogo('https://a.espncdn.com.evil.example/x.png'), null);
+    assert.equal(sanitizeTeamLogo('https://notespncdn.com/x.png'), null);
+  });
+
+  test('http is refused even on an allowed host', () => {
+    // Mixed content would be blocked anyway; refusing here keeps the rule in
+    // one place rather than relying on the browser to enforce it.
+    assert.equal(sanitizeTeamLogo('http://a.espncdn.com/x.png'), null);
+  });
+
+  test('a javascript: or data: URL is refused', () => {
+    assert.equal(sanitizeTeamLogo('javascript:alert(1)'), null);
+    assert.equal(sanitizeTeamLogo('data:image/svg+xml,<svg onload="alert(1)"/>'), null);
+  });
+
+  test('nonsense and absent values are treated the same as no logo', () => {
+    assert.equal(sanitizeTeamLogo(''), null);
+    assert.equal(sanitizeTeamLogo(null), null);
+    assert.equal(sanitizeTeamLogo(undefined), null);
+    assert.equal(sanitizeTeamLogo('not a url'), null);
+    assert.equal(sanitizeTeamLogo(42), null);
+  });
+});
+
+describe('the CSP and the code agree on which hosts are allowed', () => {
+  // Two allowlists guard the same thing from opposite ends: the build drops
+  // off-list logos, the browser refuses to load them. Widening one without the
+  // other either silently breaks every image or silently removes the guard, and
+  // neither failure announces itself. So they are pinned to each other here.
+  const headers = readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs', '_headers'),
+    'utf8'
+  );
+  const csp = headers.match(/Content-Security-Policy:.*/)?.[0] ?? '';
+  const imgSrc = csp.match(/img-src ([^;]+);/)?.[1] ?? '';
+
+  test('every host the build allows is loadable under the CSP', () => {
+    for (const host of ESPN_IMAGE_HOSTS) {
+      assert.ok(
+        imgSrc.includes(`https://${host}`),
+        `${host} passes sanitizeTeamLogo() but img-src would block it`
+      );
+    }
+  });
+
+  test('the CSP allows no image host the build does not sanitize against', () => {
+    const cspHosts = imgSrc
+      .split(/\s+/)
+      .filter((token) => token.startsWith('https://'))
+      .map((token) => token.replace('https://', ''));
+    for (const host of cspHosts) {
+      assert.ok(
+        ESPN_IMAGE_HOSTS.includes(host),
+        `img-src allows ${host} but sanitizeTeamLogo() would strip it`
+      );
+    }
+  });
+
+  test('img-src still permits the site’s own images and data URIs', () => {
+    assert.match(imgSrc, /'self'/);
+    assert.match(imgSrc, /data:/);
+  });
+});
+```
+
+### `tests/playercard.test.mjs`
+
+*269 lines*
+
+```javascript
+/**
+ * Verification for the player hover cards.
+ *
+ * The stat-key tests are the ones that matter. ESPN keys everything four ways
+ * (season, source, split, period) and reversing any pair returns real data of
+ * the wrong kind — a projection instead of an actual, or one week instead of a
+ * season — so nothing throws and every number on every card is quietly wrong.
+ * `STAT_SPLIT` in constants.mjs was in fact reversed until this file existed.
+ *
+ *   npm test
+ */
+
+import { test, describe } from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+  STAT_LINES,
+  buildPlayerCards,
+  nameStats,
+  normalizeNews,
+  seasonActuals,
+  statLine,
+} from '../scripts/lib/playercard.mjs';
+import { STAT_SPLIT, STAT_SOURCE, STAT_KEYS } from '../scripts/lib/constants.mjs';
+
+/** A stats entry as ESPN shapes it. */
+const entry = (seasonId, sourceId, splitId, stats, appliedTotal = 0) => ({
+  seasonId,
+  statSourceId: sourceId,
+  statSplitTypeId: splitId,
+  stats,
+  appliedTotal,
+});
+
+const RB_2025 = { 23: 250, 24: 1412, 25: 16, 41: 52, 42: 517, 43: 4 };
+
+// ---------------------------------------------------------------------------
+describe('ESPN stat key constants', () => {
+  test('a season total is split type 0, not 1', () => {
+    // Pinned against HANDOFF.md and buildDraftPool(), which both use 0 for a
+    // season total. This constant was defined the other way round and unused;
+    // the first consumer would have silently read single weeks as seasons.
+    assert.equal(STAT_SPLIT.SEASON, 0);
+    assert.equal(STAT_SPLIT.WEEK, 1);
+  });
+
+  test('actual is 0 and projected is 1', () => {
+    assert.equal(STAT_SOURCE.ACTUAL, 0);
+    assert.equal(STAT_SOURCE.PROJECTED, 1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('naming raw stats', () => {
+  test('numeric ids become readable fields', () => {
+    const named = nameStats({ 24: 1412, 25: 16, 41: 52 });
+    assert.deepEqual(named, { rushingYards: 1412, rushingTouchdowns: 16, receptions: 52 });
+  });
+
+  test('unknown ids are dropped, never rendered as a number', () => {
+    const named = nameStats({ 24: 1412, 9999: 7 });
+    assert.deepEqual(Object.keys(named), ['rushingYards']);
+  });
+
+  test('non-numeric values are dropped rather than printed as junk', () => {
+    assert.deepEqual(nameStats({ 24: 'lots', 25: null, 41: 52 }), { receptions: 52 });
+  });
+
+  test('nothing in, empty object out', () => {
+    assert.deepEqual(nameStats(undefined), {});
+    assert.deepEqual(nameStats({}), {});
+  });
+
+  test('every STAT_LINES field is a name STAT_KEYS can actually produce', () => {
+    // A typo in a stat line is invisible at runtime: the field is simply never
+    // found and silently omitted from the card.
+    const producible = new Set(Object.values(STAT_KEYS));
+    for (const [position, spec] of Object.entries(STAT_LINES)) {
+      for (const [key] of spec) {
+        assert.ok(producible.has(key), `${position} wants "${key}", which STAT_KEYS never emits`);
+      }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('reading a season out of stats[]', () => {
+  const player = {
+    id: 1,
+    stats: [
+      entry(2025, STAT_SOURCE.ACTUAL, STAT_SPLIT.SEASON, RB_2025, 301.4),
+      entry(2025, STAT_SOURCE.PROJECTED, STAT_SPLIT.SEASON, { 24: 1, 25: 1 }, 999),
+      entry(2025, STAT_SOURCE.ACTUAL, STAT_SPLIT.WEEK, { 24: 88 }, 14.2),
+      entry(2026, STAT_SOURCE.PROJECTED, STAT_SPLIT.SEASON, { 24: 2 }, 888),
+    ],
+  };
+
+  test('finds what actually happened, not the projection', () => {
+    const out = seasonActuals(player, 2025);
+    assert.equal(out.fantasyPoints, 301.4);
+    assert.equal(out.stats.rushingYards, 1412);
+  });
+
+  test('finds the season, not a single week', () => {
+    assert.notEqual(seasonActuals(player, 2025).stats.rushingYards, 88);
+  });
+
+  test('does not reach into the wrong season', () => {
+    assert.equal(seasonActuals(player, 2024), null);
+  });
+
+  test('a player with no stats returns null rather than throwing', () => {
+    assert.equal(seasonActuals({ id: 2 }, 2025), null);
+    assert.equal(seasonActuals(null, 2025), null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('per-position stat lines', () => {
+  test('a running back gets carries and receptions', () => {
+    const line = statLine('RB', nameStats(RB_2025));
+    const labels = line.map((f) => f.label);
+    assert.deepEqual(labels, ['Carries', 'Rush yds', 'Rush TD', 'Rec', 'Rec yds', 'Rec TD']);
+  });
+
+  test('a quarterback is never shown receptions', () => {
+    const line = statLine('QB', { passingYards: 4306, receptions: 1 });
+    assert.ok(!line.some((f) => f.key === 'receptions'));
+  });
+
+  test('missing fields are omitted, not shown as zero', () => {
+    // "0 rushing TDs" and "we have no rushing data" look identical on screen
+    // and are different claims.
+    const line = statLine('RB', { rushingYards: 900 });
+    assert.deepEqual(line.map((f) => f.key), ['rushingYards']);
+  });
+
+  test('a zero that really is zero survives', () => {
+    const line = statLine('RB', { rushingYards: 900, rushingTouchdowns: 0 });
+    assert.deepEqual(line.map((f) => f.value), [900, 0]);
+  });
+
+  test('an unknown position yields no line rather than throwing', () => {
+    assert.deepEqual(statLine('LS', { rushingYards: 1 }), []);
+    assert.deepEqual(statLine('RB', null), []);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('building the card index', () => {
+  const players = [
+    { id: 10, injuryStatus: 'ACTIVE', stats: [entry(2025, 0, 0, RB_2025, 301.4)] },
+    { id: 11, injuryStatus: 'QUESTIONABLE', stats: [] },
+    { id: 12, injuryStatus: 'ACTIVE', stats: [] },
+  ];
+
+  test('a player with last season’s stats gets a card', () => {
+    const cards = buildPlayerCards({ players, seasonId: 2026 });
+    assert.ok(cards[10]);
+    assert.equal(cards[10].lastSeason.season, 2025);
+    assert.equal(cards[10].lastSeason.stats.rushingYards, 1412);
+  });
+
+  test('an injury alone is enough to earn a card', () => {
+    const cards = buildPlayerCards({ players, seasonId: 2026 });
+    assert.ok(cards[11]);
+    assert.equal(cards[11].injury, 'Questionable');
+  });
+
+  test('a healthy rookie with nothing to say gets no card at all', () => {
+    // An empty popover teaches people the feature is broken.
+    const cards = buildPlayerCards({ players, seasonId: 2026 });
+    assert.equal(cards[12], undefined);
+  });
+
+  test('news alone is enough to earn a card', () => {
+    const cards = buildPlayerCards({
+      players,
+      seasonId: 2026,
+      news: { 12: [{ headline: 'Signed to the active roster', published: null }] },
+    });
+    assert.ok(cards[12]);
+    assert.equal(cards[12].news.length, 1);
+  });
+
+  test('injury codes are humanized, not shown as ESPN enums', () => {
+    const cards = buildPlayerCards({
+      players: [{ id: 20, injuryStatus: 'INJURY_RESERVE', stats: [] }],
+      seasonId: 2026,
+    });
+    assert.equal(cards[20].injury, 'IR');
+  });
+
+  test('placeholder ids are skipped', () => {
+    // ESPN pre-builds draft slots with playerId -1.
+    const cards = buildPlayerCards({
+      players: [{ id: -1, injuryStatus: 'OUT', stats: [] }, { id: 0, injuryStatus: 'OUT', stats: [] }],
+      seasonId: 2026,
+    });
+    assert.deepEqual(Object.keys(cards), []);
+  });
+
+  test('the first (richest) source wins for a duplicated player', () => {
+    const cards = buildPlayerCards({
+      players: [
+        { id: 30, injuryStatus: 'OUT', stats: [entry(2025, 0, 0, RB_2025, 300)] },
+        { id: 30, injuryStatus: 'ACTIVE', stats: [] },
+      ],
+      seasonId: 2026,
+    });
+    assert.equal(cards[30].injury, 'Out');
+    assert.ok(cards[30].lastSeason);
+  });
+
+  test('no players at all produces an empty index, not a crash', () => {
+    assert.deepEqual(buildPlayerCards({ seasonId: 2026 }), {});
+    assert.deepEqual(buildPlayerCards(), {});
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('news normalization', () => {
+  const raw = [
+    {
+      playerId: 5,
+      items: [
+        { headline: 'Old news', published: '2026-08-01T00:00:00Z' },
+        { headline: 'Fresh news', published: '2026-09-01T00:00:00Z' },
+        { headline: 'Middle news', published: '2026-08-20T00:00:00Z' },
+      ],
+    },
+  ];
+
+  test('newest first', () => {
+    const out = normalizeNews(raw);
+    assert.deepEqual(out[5].map((i) => i.headline), ['Fresh news', 'Middle news', 'Old news']);
+  });
+
+  test('capped per player', () => {
+    assert.equal(normalizeNews(raw, { perPlayer: 2 })[5].length, 2);
+  });
+
+  test('an item with no headline is dropped', () => {
+    const out = normalizeNews([{ playerId: 6, items: [{ published: '2026-09-01T00:00:00Z' }] }]);
+    assert.equal(out[6], undefined);
+  });
+
+  test('undated news is kept but sorted last — it just cannot claim recency', () => {
+    const out = normalizeNews([
+      {
+        playerId: 7,
+        items: [
+          { headline: 'No date' },
+          { headline: 'Dated', published: '2026-09-01T00:00:00Z' },
+        ],
+      },
+    ]);
+    assert.deepEqual(out[7].map((i) => i.headline), ['Dated', 'No date']);
+  });
+
+  test('a missing or malformed feed yields nothing rather than throwing', () => {
+    // The news endpoint is optional; every failure has to look like "no news".
+    assert.deepEqual(normalizeNews(undefined), {});
+    assert.deepEqual(normalizeNews(null), {});
+    assert.deepEqual(normalizeNews([{ noPlayerId: true }]), {});
+    assert.deepEqual(normalizeNews([{ playerId: 9 }]), {});
+  });
+});
+```
+
 ## Automation
 
 Daily GitHub Actions run: fetch, build, test, commit only on change.
@@ -8899,4 +11518,4 @@ jobs:
 
 ---
 
-*27 files, 8,677 lines.*
+*33 files, 11,259 lines.*

@@ -50,6 +50,11 @@ async function readJsonIfExists(file) {
   }
 }
 
+// News is one request per player, so it is both the slowest step and the one
+// most likely to get rate limited. Capped and paced accordingly.
+const NEWS_PLAYER_LIMIT = 300;
+const NEWS_DELAY_MS = 120;
+
 async function fetchSeason(client, season) {
   const dir = path.join(RAW, String(season));
   log(`\n=== Season ${season} ===`);
@@ -202,6 +207,44 @@ async function fetchSeason(client, season) {
     log(`  free agents: unavailable (${error.message})`);
   }
   await sleep(POLITE_DELAY_MS);
+
+  // ---- Player news (for the hover cards) --------------------------------
+  // One request per player, so this is scoped to the people who actually
+  // appear on a card people would hover: the draft pool's top ranks plus
+  // everyone currently rostered. Fetching news for all 11,600 players would be
+  // 11,600 requests for data nobody will read.
+  //
+  // Entirely optional. Every failure mode here — endpoint moved, rate limited,
+  // offline — degrades to a card with stats and injury status and no news,
+  // which is why nothing in this block throws.
+  try {
+    const newsIds = new Set();
+    for (const entry of (await readJsonIfExists(path.join(dir, 'draftpool.json')))?.players ?? []) {
+      const id = entry?.player?.id;
+      if (id) newsIds.add(id);
+      if (newsIds.size >= NEWS_PLAYER_LIMIT) break;
+    }
+    for (const team of (await readJsonIfExists(path.join(dir, 'current.json')))?.teams ?? []) {
+      for (const entry of team?.roster?.entries ?? []) {
+        if (entry?.playerId) newsIds.add(entry.playerId);
+      }
+    }
+
+    const feeds = [];
+    let withNews = 0;
+    for (const id of newsIds) {
+      const feed = await client.getPlayerNews(id);
+      if (feed) {
+        feeds.push(feed);
+        withNews += 1;
+      }
+      await sleep(NEWS_DELAY_MS);
+    }
+    await writeJson(path.join(dir, 'news.json'), { fetchedAt: new Date().toISOString(), feeds });
+    log(`  player news: ${withNews} of ${newsIds.size} players have items`);
+  } catch (error) {
+    log(`  player news: skipped (${error.message}) — cards will show stats only`);
+  }
 
   await writeJson(path.join(dir, 'meta.json'), {
     season,

@@ -4,61 +4,83 @@
     "",
     "PRIVACY: this file is committed, but the LEDGER IT GENERATES is not.",
     "docs/data/money.json is gitignored, so the Money tab shows locally via",
-    "`npm run serve` and never reaches the public site.",
+    "`npm run serve` and never reaches the public site. Payout AMOUNTS are",
+    "published (the league has to know what a challenge is worth); who has paid",
+    "and who still owes is not.",
     "",
     "MEMBERS: list everyone who is in the pot, whether or not they have claimed",
     "an ESPN team yet. People commit and pay long before they click the invite",
     "link. Add `teamId` once you know which ESPN team is theirs, and the ledger",
     "will pull their real team name through.",
     "",
-    "Payouts are percentages, so changing buyIn or the member count rebalances",
-    "the amounts automatically. They must total 100."
+    "A payout slot can be a fixed 'amount', a 'pct' share of the pot, or",
+    "'remainder': true to absorb whatever is left."
   ],
 
   "currency": "USD",
-  "buyIn": 50,
+  "buyIn": 75,
   "buyInDueDate": "2026-09-05",
 
-  "_membersNote": "10 managers, all paid in full. Names are placeholders until teams are claimed — edit them and add teamId as people join.",
+  "_membersNote": "10 managers. Names are placeholders until teams are claimed — edit them and add teamId as people join. NOTE: paid flags below were set at the old $50 buy-in; re-check who has settled the $25 difference.",
   "members": [
-    { "name": "Geordon Roe", "teamId": 1, "paid": true, "method": "Cash" },
-    { "name": "Anthony Steff", "teamId": 8, "paid": true, "method": "Cash" },
-    { "name": "Manager 3", "paid": true, "method": "Cash" },
-    { "name": "Manager 4", "paid": true, "method": "Cash" },
-    { "name": "Manager 5", "paid": true, "method": "Cash" },
-    { "name": "Manager 6", "paid": true, "method": "Cash" },
-    { "name": "Manager 7", "paid": true, "method": "Cash" },
-    { "name": "Manager 8", "paid": true, "method": "Cash" },
-    { "name": "Manager 9", "paid": true, "method": "Cash" },
-    { "name": "Manager 10", "paid": true, "method": "Cash" }
+    { "name": "Geordon Roe", "teamId": 1, "amountPaid": 50, "method": "Cash", "note": "paid $50 before the buy-in went to $75" },
+    { "name": "Anthony Steff", "teamId": 8, "amountPaid": 50, "method": "Cash", "note": "paid $50 before the buy-in went to $75" },
+    { "name": "Manager 3", "amountPaid": 50, "method": "Cash" },
+    { "name": "Manager 4", "amountPaid": 50, "method": "Cash" },
+    { "name": "Manager 5", "amountPaid": 50, "method": "Cash" },
+    { "name": "Manager 6", "amountPaid": 50, "method": "Cash" },
+    { "name": "Manager 7", "amountPaid": 50, "method": "Cash" },
+    { "name": "Manager 8", "amountPaid": 50, "method": "Cash" },
+    { "name": "Manager 9", "amountPaid": 50, "method": "Cash" },
+    { "name": "Manager 10", "amountPaid": 50, "method": "Cash" }
   ],
 
   "payouts": {
     "_note": [
-      "A slot can be a fixed 'amount', a 'pct' share of the pot, or",
-      "'remainder': true to absorb whatever is left.",
+      "10 x $75 = $750.",
       "",
-      "At 10 x $50 = $500: 275 + 125 + 50 = 450, leaving $50 for side prizes.",
-      "If a manager joins or drops, the three places stay fixed and the side",
-      "prize pot moves — which is usually what a league actually wants."
+      "  1st         $350   the season",
+      "  2nd         $130",
+      "  3rd          $75   your buy-in back — third place costs you nothing",
+      "  Challenges  $195   the remainder, $15 a week across 13 weeks",
+      "",
+      "The challenge slot is the remainder on purpose. If an eleventh manager",
+      "joins, the three places stay exactly as announced and the weekly",
+      "challenge grows to $20 — rather than every prize shifting by a few",
+      "dollars and nobody being sure what was agreed."
     ],
     "structure": [
-      { "id": "first", "label": "1st Place", "amount": 275, "note": "Champion" },
-      { "id": "second", "label": "2nd Place", "amount": 125, "note": "Runner-up" },
-      { "id": "third", "label": "3rd Place", "amount": 50, "note": "Buy-in back" },
-      { "id": "sidePots", "label": "Side Prizes", "remainder": true, "note": "Weekly high score and season awards" }
+      { "id": "first", "label": "1st Place", "amount": 350, "note": "Champion" },
+      { "id": "second", "label": "2nd Place", "amount": 130, "note": "Runner-up" },
+      { "id": "third", "label": "3rd Place", "amount": 75, "note": "Buy-in back" },
+      { "id": "challenges", "label": "Weekly Challenges", "remainder": true, "note": "A random challenge every week, paid in cash" }
     ]
   },
 
-  "sidePots": {
-    "_note": "Optional smaller pots funded from the sidePots share above.",
-    "weeklyHighScore": { "enabled": true, "amountPerWeek": 0, "note": "Set an amount or leave 0 to split the pot evenly across weeks" },
-    "seasonAwards": []
+  "weeklyChallenge": {
+    "_note": [
+      "One challenge is drawn at random for each week from the deck in",
+      "scripts/lib/challenges.mjs. The draw is SEEDED on the league id and",
+      "season, so it is identical on every build — it cannot reshuffle itself",
+      "after the games are played.",
+      "",
+      "cadence:  'weekly' or 'biweekly'",
+      "startWeek: the first week that draws a challenge",
+      "salt:      change this to reshuffle the entire season. Doing that mid-",
+      "           season re-draws weeks that have already been played, so only",
+      "           ever touch it before Week 1.",
+      "payoutId:  which payout slot above funds the challenges."
+    ],
+    "enabled": true,
+    "cadence": "weekly",
+    "startWeek": 1,
+    "salt": "",
+    "payoutId": "challenges"
   },
 
   "_paymentsNote": "Only needed for per-team overrides once teams are claimed; `members` above covers the common case.",
   "payments": [],
 
-  "_payoutsPaidNote": "Filled in at the end of the season as you pay winners out.",
+  "_payoutsPaidNote": "Filled in at the end of the season as you pay winners out. Weekly challenge payouts go here too — { teamId, amount, note: 'Week 3 challenge' }.",
   "payoutsPaid": []
 }

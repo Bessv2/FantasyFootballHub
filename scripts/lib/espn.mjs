@@ -222,6 +222,34 @@ export function createClient({ leagueId, secrets = null, log = () => {} }) {
   }
 
   /**
+   * Player news, for the hover cards.
+   *
+   * This is the one endpoint here that is NOT part of the fantasy league API —
+   * it hangs off ESPN's public site API, takes no auth, and is the only source
+   * for "why is this player questionable". It is fetched one player at a time,
+   * so callers must pass a short list (the drafted/rostered players), never the
+   * whole 11,600-player pool.
+   *
+   * Deliberately soft-failing: a null return means "no news for this player",
+   * which is also what an unreachable endpoint looks like. News is a garnish on
+   * the card, and the card must still render its stat line without it.
+   */
+  async function getPlayerNews(playerId, { limit = 3 } = {}) {
+    const url =
+      `https://site.api.espn.com/apis/fantasy/v2/games/ffl/news/players` +
+      `?playerId=${encodeURIComponent(playerId)}&limit=${limit}`;
+    try {
+      const response = await fetch(url, { headers });
+      if (!response.ok) return null;
+      const json = await response.json();
+      const feed = json?.feed ?? json?.items ?? [];
+      return Array.isArray(feed) && feed.length ? { playerId, items: feed } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * The league activity feed, which is where trade detail actually lives.
    *
    * This hangs off a `/communication/` sub-path. Requesting the same view on
@@ -314,5 +342,5 @@ export function createClient({ leagueId, secrets = null, log = () => {} }) {
     }
     return response.json();
   }
-  return { getView, getPlayers, getActivity, getFreeAgents, getRostersForWeek, getDraftPool, urlFor, hasAuth: Boolean(secrets) };
+  return { getView, getPlayers, getActivity, getFreeAgents, getRostersForWeek, getDraftPool, getPlayerNews, urlFor, hasAuth: Boolean(secrets) };
 }

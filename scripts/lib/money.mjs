@@ -8,7 +8,95 @@
 
 const round2 = (n) => Number((n ?? 0).toFixed(2));
 
-export function computeLedger(moneyConfig, season, standings) {
+/**
+ * Divides one pot across N weeks so the parts add back up to the whole.
+ *
+ * Done in whole cents with the leftover handed to the earliest weeks. The
+ * obvious `pot / weeks` rounded per week drifts — $195 over 13 weeks is fine,
+ * but $200 over 13 is $15.38 a week, which is $199.94, and a ledger that
+ * cannot account for six cents is a ledger nobody trusts with the other $500.
+ *
+ * Exported because the public site needs these amounts and the private ledger
+ * needs them too. Two implementations would eventually disagree, and the week
+ * they disagreed would be the week somebody got paid the wrong number.
+ */
+export function splitPot(pot, weeks) {
+  const amount = Number(pot) || 0;
+  if (!Array.isArray(weeks) || !weeks.length || amount <= 0) return [];
+
+  const cents = Math.round(amount * 100);
+  const base = Math.floor(cents / weeks.length);
+  let extra = cents - base * weeks.length;
+
+  return weeks.map((week) => {
+    const share = base + (extra > 0 ? 1 : 0);
+    if (extra > 0) extra -= 1;
+    return { week, amount: round2(share / 100) };
+  });
+}
+
+/**
+ * What each payout slot is worth, given the size of the pot.
+ *
+ * A slot can be defined three ways, so the config can say what the league
+ * actually agreed rather than being forced into one shape:
+ *
+ *   amount: 350      a fixed sum, unchanged if the pot moves
+ *   pct: 25          a share of the pot, rebalances automatically
+ *   remainder: true  whatever is left after the others
+ *
+ * Fixed amounts are what people actually announce ("winner gets 350"), while a
+ * remainder slot means the challenge pot absorbs any drift rather than the
+ * numbers silently failing to add up.
+ *
+ * Computed off the full expected pot, never off what has been collected so far
+ * — otherwise every prize would move each time somebody paid.
+ *
+ * Exported because the published site needs the payout amounts (the league has
+ * to know what this week's challenge is worth) while the ledger around them
+ * stays private. One function, so the public number and the private one can
+ * never disagree.
+ */
+export function computePayouts(moneyConfig, expectedPot) {
+  const structure = moneyConfig.payouts?.structure ?? [];
+
+  const fixedTotal = structure.reduce((a, s) => a + (Number(s.amount) || 0), 0);
+  const pctTotal = structure.reduce((a, s) => a + (Number(s.pct) || 0), 0);
+  const pctAmount = round2((expectedPot * pctTotal) / 100);
+
+  const remainderSlots = structure.filter((s) => s.remainder);
+  const leftOver = round2(expectedPot - fixedTotal - pctAmount);
+  const perRemainder = remainderSlots.length ? round2(leftOver / remainderSlots.length) : 0;
+
+  const payouts = structure.map((slot) => {
+    let amount;
+    if (slot.remainder) amount = perRemainder;
+    else if (slot.amount !== undefined) amount = round2(Number(slot.amount) || 0);
+    else amount = round2((expectedPot * (Number(slot.pct) || 0)) / 100);
+
+    return {
+      id: slot.id,
+      label: slot.label,
+      note: slot.note ?? null,
+      isRemainder: Boolean(slot.remainder),
+      // Share of the pot, whichever way the slot was defined — so the UI can
+      // always show a percentage even for fixed amounts.
+      pct: expectedPot ? Number(((amount / expectedPot) * 100).toFixed(1)) : 0,
+      amount,
+    };
+  });
+
+  return { payouts, structure, fixedTotal, pctAmount, remainderSlots, leftOver };
+}
+
+/** Which payout slot funds the weekly challenges, by id. */
+export const CHALLENGE_SLOT_ID = 'challenges';
+
+/** The dollar value of the challenge slot, from an already-computed payout list. */
+export const challengePayout = (payouts, moneyConfig = {}) =>
+  payouts.find((p) => p.id === (moneyConfig.weeklyChallenge?.payoutId ?? CHALLENGE_SLOT_ID))?.amount ?? 0;
+
+export function computeLedger(moneyConfig, season, standings, { challengeWeeks = [] } = {}) {
   const buyIn = Number(moneyConfig.buyIn) || 0;
   const currency = moneyConfig.currency ?? 'USD';
 
@@ -69,46 +157,8 @@ export function computeLedger(moneyConfig, season, standings) {
   const outstanding = round2(expectedPot - collected);
 
   // ---- Payout structure ---------------------------------------------------
-  //
-  // A slot can be defined three ways, so the config can say what the league
-  // actually agreed rather than being forced into one shape:
-  //
-  //   amount: 275      a fixed sum, unchanged if the pot moves
-  //   pct: 25          a share of the pot, rebalances automatically
-  //   remainder: true  whatever is left after the others
-  //
-  // Fixed amounts are what people actually announce ("winner gets 275"), while
-  // a remainder slot means the side-prize pot absorbs any drift rather than
-  // the numbers silently failing to add up.
-  const structure = moneyConfig.payouts?.structure ?? [];
-
-  // Payouts are computed off the full expected pot, not what has been collected
-  // so far, otherwise every prize moves each time somebody pays.
-  const fixedTotal = structure.reduce((a, s) => a + (Number(s.amount) || 0), 0);
-  const pctTotal = structure.reduce((a, s) => a + (Number(s.pct) || 0), 0);
-  const pctAmount = round2((expectedPot * pctTotal) / 100);
-
-  const remainderSlots = structure.filter((s) => s.remainder);
-  const leftOver = round2(expectedPot - fixedTotal - pctAmount);
-  const perRemainder = remainderSlots.length ? round2(leftOver / remainderSlots.length) : 0;
-
-  const payouts = structure.map((slot) => {
-    let amount;
-    if (slot.remainder) amount = perRemainder;
-    else if (slot.amount !== undefined) amount = round2(Number(slot.amount) || 0);
-    else amount = round2((expectedPot * (Number(slot.pct) || 0)) / 100);
-
-    return {
-      id: slot.id,
-      label: slot.label,
-      note: slot.note ?? null,
-      isRemainder: Boolean(slot.remainder),
-      // Share of the pot, whichever way the slot was defined — so the UI can
-      // always show a percentage even for fixed amounts.
-      pct: expectedPot ? Number(((amount / expectedPot) * 100).toFixed(1)) : 0,
-      amount,
-    };
-  });
+  const { payouts, structure, fixedTotal, pctAmount, remainderSlots, leftOver } =
+    computePayouts(moneyConfig, expectedPot);
 
   // ---- Who currently occupies each paying place --------------------------
   const placeOrder = ['first', 'second', 'third'];
@@ -124,6 +174,13 @@ export function computeLedger(moneyConfig, season, standings) {
       projected: true,
     };
   });
+
+  // ---- The weekly challenge pot ------------------------------------------
+  // One payout slot funds every weekly challenge; `challengeWeeks` says which
+  // weeks are drawing from it. The site computes the same split from the same
+  // slot — see splitPot above for why that is one function and not two.
+  const challengePot = challengePayout(payouts, moneyConfig);
+  const perWeek = splitPot(challengePot, challengeWeeks);
 
   const paidOut = (moneyConfig.payoutsPaid ?? []).map((p) => ({
     ...p,
@@ -167,6 +224,8 @@ export function computeLedger(moneyConfig, season, standings) {
     members,
     unpaid: members.filter((m) => !m.paid),
     payouts: projected,
+    challengePot: round2(challengePot),
+    challengePerWeek: perWeek,
     paidOut,
     totalPaidOut,
     remainingToPay: round2(expectedPot - totalPaidOut),

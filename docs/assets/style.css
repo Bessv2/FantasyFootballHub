@@ -369,6 +369,115 @@ tr.playoff-cut td, tr.playoff-cut th { border-bottom: 2px solid var(--accent); }
 }
 .prize__detail { font-size: 0.86rem; color: var(--text-muted); margin: 0; }
 
+/* --- Avatars -------------------------------------------------------------
+   Every picture on this site is hotlinked from ESPN and every one of them can
+   fail — no headshot exists for a fringe rookie, a manager never set a logo.
+   So a monogram sits underneath, always rendered, and the image is layered on
+   top of it. A load covers the monogram; a 404 hides the <img> (app.js) and
+   the monogram was already there. Same box either way, so nothing reflows.
+
+   The monogram is decorative, not information: the name is always in the text
+   beside it, and every <img> here carries alt="" for exactly that reason. */
+.avatar {
+  --avatar-size: 30px;
+  position: relative; flex: 0 0 auto;
+  display: inline-grid; place-items: center;
+  inline-size: var(--avatar-size); block-size: var(--avatar-size);
+  background: var(--bg-hover); border: 1px solid var(--border);
+  overflow: hidden; user-select: none;
+}
+.avatar--player { border-radius: 50%; }
+.avatar--team { border-radius: var(--radius-sm); }
+.avatar__initials {
+  font-size: calc(var(--avatar-size) * 0.38); font-weight: 700;
+  color: var(--text-dim); letter-spacing: 0.02em; line-height: 1;
+}
+.avatar__img {
+  position: absolute; inset: 0;
+  inline-size: 100%; block-size: 100%;
+  object-fit: cover;
+  /* Headshots are cut off at the chin at this size unless biased upward. */
+  object-position: top center;
+  background: var(--bg-hover);
+}
+.avatar--team .avatar__img { object-fit: contain; object-position: center; padding: 2px; }
+
+/* Name-with-picture, the shape used in every table cell and card heading. */
+.named { display: flex; align-items: center; gap: 0.55rem; min-inline-size: 0; }
+.named__text { min-inline-size: 0; }
+.named__text small {
+  display: block; font-weight: 400; color: var(--text-dim); font-size: 0.79rem;
+}
+.hero--team { display: flex; flex-direction: column; align-items: flex-start; gap: 0.15rem; }
+.hero--team .avatar { margin-bottom: 0.5rem; }
+.pick .avatar { margin: 0.3rem 0; }
+
+/* --- Player cards ---------------------------------------------------------
+   Opens on hover, on tap, and on keyboard focus — see app.js for why all
+   three. Positioned in JS because it has to flip above the trigger near the
+   bottom of a phone screen, which CSS alone cannot decide. */
+.pcard-trigger {
+  font: inherit; color: inherit; background: none; border: 0; padding: 0;
+  text-align: left; cursor: pointer;
+  text-decoration: underline dotted; text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+}
+.pcard-trigger:hover, .pcard-trigger[aria-expanded="true"] { text-decoration-color: var(--accent); }
+
+.pcard {
+  position: absolute; z-index: 50;
+  inline-size: min(22rem, calc(100vw - 1.5rem));
+  background: var(--bg-raised); border: 1px solid var(--border-strong);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 0.8rem 0.9rem; font-size: 0.85rem;
+}
+.pcard__name { margin: 0 0 0.15rem; font-weight: 700; font-size: 0.98rem; }
+.pcard__meta { font-weight: 400; color: var(--text-dim); font-size: 0.8rem; }
+.pcard__injury { margin: 0.35rem 0 0; }
+.pcard__heading {
+  margin: 0.7rem 0 0.35rem; font-size: 0.72rem; letter-spacing: 0.07em;
+  text-transform: uppercase; color: var(--text-dim);
+}
+.pcard__empty { margin: 0.5rem 0 0; color: var(--text-dim); }
+
+/* Auto-fit rather than a fixed column count: a kicker has five stats and a
+   tight end four, and neither should leave a hole in the grid. */
+.pcard__stats {
+  margin: 0; display: grid; gap: 0.4rem 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(4.5rem, 1fr));
+}
+.pcard__stats div { min-inline-size: 0; }
+.pcard__stats dt { color: var(--text-dim); font-size: 0.72rem; }
+.pcard__stats dd {
+  margin: 0; font-weight: 700; font-variant-numeric: tabular-nums; font-size: 0.95rem;
+}
+
+.pcard__news { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.45rem; }
+.pcard__news li { color: var(--text-muted); line-height: 1.35; }
+.pcard__news small { display: block; color: var(--text-dim); font-size: 0.74rem; margin-top: 0.1rem; }
+
+/* --- Weekly challenges ---------------------------------------------------- */
+.challenge {
+  background: var(--bg-raised); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 1rem 1.1rem;
+  display: flex; flex-direction: column; gap: 0.3rem;
+}
+.challenge__week {
+  font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-dim); margin: 0; font-variant-numeric: tabular-nums;
+}
+.challenge__label { font-weight: 700; font-size: 1.02rem; margin: 0; }
+.challenge__rule { font-size: 0.84rem; color: var(--text-dim); margin: 0; }
+.challenge__winner { margin: 0.45rem 0 0; font-weight: 660; }
+.challenge__detail { font-size: 0.86rem; color: var(--text-muted); margin: 0; }
+.challenge__payout { margin: 0.2rem 0 0; font-weight: 700; color: var(--accent); }
+
+/* State is carried by the label text ("Sealed", "Not played yet") as well as
+   by these treatments — the border alone is never the only signal. */
+.challenge--live { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-wash); }
+.challenge--sealed { opacity: 0.6; border-style: dashed; }
+.challenge--void { opacity: 0.78; }
+
 /* --- Draft board --------------------------------------------------------- */
 .draft-round { margin-bottom: 1.35rem; }
 .draft-round h3 {

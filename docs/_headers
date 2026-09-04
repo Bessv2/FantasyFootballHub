@@ -1,10 +1,18 @@
 # Cloudflare Pages response headers.
 #
-# The site is fully self-contained — no CDNs, no external fonts, no analytics,
-# no outbound requests of any kind — so the policy below can be strict without
-# breaking anything. If you ever add an external resource (team logos from
-# ESPN, for example), it will be blocked until you widen the matching
-# directive here.
+# The site loads no scripts, styles, fonts or data from anywhere but itself.
+# The one exception is images: player headshots, NFL team logos and each
+# manager's fantasy team logo are hotlinked from ESPN's CDN rather than
+# committed to the repo, so `img-src` names those hosts and nothing else.
+#
+# That list is not decoration. A fantasy team logo is a URL ESPN hands back
+# from the league payload, and ESPN's classic UI lets a manager paste in any
+# URL they like — so without an allowlist, one manager could point every
+# visitor's browser at a server of their choosing and collect the IP and
+# user-agent of everyone who opens the site. `sanitizeTeamLogo()` in
+# scripts/lib/images.mjs drops off-list logos at build time and this header is
+# the second line of the same defence. Keep the two in sync; widening one
+# without the other either breaks images or removes the guard.
 #
 # style-src allows 'unsafe-inline' because the app sets a few styles inline
 # (the money progress bar width, some spacing). That is the weakest line here
@@ -17,7 +25,7 @@
   X-Frame-Options: DENY
   Referrer-Policy: no-referrer
   Permissions-Policy: geolocation=(), microphone=(), camera=(), interest-cohort=()
-  Content-Security-Policy: default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'self'; img-src 'self' data: https://a.espncdn.com https://g.espncdn.com https://i.espncdn.com https://s.espncdn.com https://secure.espncdn.com; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
 
 # League data is regenerated on every push; never let a stale week be cached.
 /data/*
