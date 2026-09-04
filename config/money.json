@@ -23,8 +23,8 @@
 
   "_membersNote": "10 managers. Names are placeholders until teams are claimed — edit them and add teamId as people join. NOTE: paid flags below were set at the old $50 buy-in; re-check who has settled the $25 difference.",
   "members": [
-    { "name": "Geordon Roe", "teamId": 1, "amountPaid": 75, "method": "Cash", "note": "paid $50 before the buy-in went to $75" },
-    { "name": "Anthony Steff", "teamId": 8, "amountPaid": 75, "method": "Cash", "note": "paid $50 before the buy-in went to $75" },
+    { "name": "Geordon Roe", "teamId": 1, "amountPaid": 75, "method": "Cash", "note": "" },
+    { "name": "Anthony Steff", "teamId": 8, "amountPaid": 75, "method": "Cash", "note": "" },
     { "name": "Manager 3", "amountPaid": 75, "method": "Cash" },
     { "name": "Manager 4", "amountPaid": 75, "method": "Cash" },
     { "name": "Manager 5", "amountPaid": 75, "method": "Cash" },
