@@ -109,6 +109,17 @@ Sortable on every numeric column, filterable by position, searchable by name.
 Once the draft happens the Status column fills in automatically and you can hide
 drafted players to see only what's left.
 
+### Beer sheet
+
+**🍺 Beer sheet (print / save PDF)**, next to the search box, opens the browser's
+print dialog on a paper-ready cheat sheet: the overall top 250 plus one table per
+position, each with a checkbox to cross a player off as they're drafted. A heavy
+rule marks every tier break so the cliffs are visible at a glance, and injury
+status prints right next to the name. It reads straight from the same board data
+on screen, so re-fetching mid-draft and reprinting picks up whatever's changed —
+including who's already been drafted, once the draft is underway. "Save as PDF"
+in the print dialog downloads it instead of printing.
+
 ### Two honest caveats
 
 **Kickers and defences grade too well.** VORP counts 26 points above replacement

@@ -574,3 +574,56 @@ tr.playoff-cut td, tr.playoff-cut th { border-bottom: 2px solid var(--accent); }
   white-space: nowrap;
 }
 .sort-btn:hover { color: var(--text); text-decoration: underline; }
+
+/* --- Beer sheet (printable draft cheat sheet) ----------------------------- */
+/* Built and populated on demand by printBeerSheet(); stays empty and hidden
+   the rest of the time. Fixed light-on-white regardless of the app's theme —
+   this is going on paper, and a dark background would waste a cartridge of
+   ink for nothing anyone can see once it's printed. */
+#beer-sheet {
+  display: none;
+  background: #fff;
+  color: #111;
+}
+
+body.beer-sheet-mode > *:not(#beer-sheet) { display: none !important; }
+body.beer-sheet-mode #beer-sheet { display: block; }
+
+.beer-sheet__head { margin-bottom: 1rem; }
+.beer-sheet__head h1 { font-size: 1.3rem; margin: 0 0 0.2rem; }
+.beer-sheet__head p { margin: 0.15rem 0; font-size: 0.85rem; color: #333; }
+.beer-sheet__legend { font-size: 0.78rem !important; color: #444 !important; }
+
+.beer-sheet__page { margin-bottom: 1.5rem; }
+.beer-sheet__page h2 { font-size: 1.05rem; margin: 0 0 0.4rem; }
+.beer-sheet__page table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+.beer-sheet__page th,
+.beer-sheet__page td {
+  border: 1px solid #999;
+  padding: 0.2rem 0.4rem;
+  text-align: left;
+}
+.beer-sheet__page th.num,
+.beer-sheet__page td.num { text-align: right; }
+.beer-sheet__page tbody tr:nth-child(even) { background: #f2f2f2; }
+.beer-sheet__page tr.tier-start td { border-top: 2px solid #111; }
+.beer-sheet__page tr.is-drafted { color: #999; text-decoration: line-through; }
+.beer-sheet__page tr.is-drafted .beer-sheet__drafted { text-decoration: none; }
+.beer-sheet__team { color: #555; font-size: 0.9em; }
+.beer-sheet__box {
+  display: inline-block;
+  width: 0.8em;
+  height: 0.8em;
+  border: 1px solid #333;
+}
+
+@media print {
+  @page { margin: 1.2cm; }
+  .beer-sheet__page { page-break-inside: auto; }
+  .beer-sheet__page + .beer-sheet__page { page-break-before: always; }
+  .beer-sheet__page tr { page-break-inside: avoid; }
+}

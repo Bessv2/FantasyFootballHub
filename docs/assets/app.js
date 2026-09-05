@@ -1354,6 +1354,9 @@ function renderBoard() {
             </button>`
           : ''
       }
+      <button type="button" class="theme-toggle" id="board-print" style="margin-left:auto">
+        🍺 Beer sheet (print / save PDF)
+      </button>
     </div>`);
 
   // --- The board ---------------------------------------------------------
@@ -1471,6 +1474,7 @@ function renderBoard() {
     boardState.hideDrafted = !boardState.hideDrafted;
     renderBoard();
   });
+  $('#board-print')?.addEventListener('click', () => printBeerSheet(board));
   for (const btn of body.querySelectorAll('.board-slot')) {
     btn.addEventListener('click', () => {
       localStorage.setItem(DRAFT_SLOT_KEY, btn.dataset.slot);
@@ -1494,6 +1498,109 @@ function renderBoard() {
     });
   }
 }
+
+// --- Beer sheet (printable draft cheat sheet) -------------------------------
+
+const POSITION_TITLES = {
+  QB: 'Quarterbacks (superflex-eligible)',
+  RB: 'Running backs',
+  WR: 'Wide receivers',
+  TE: 'Tight ends',
+  'D/ST': 'Defense / special teams',
+  K: 'Kickers',
+};
+
+/** One row. `isNewTier` gets a heavy top rule — the cliff a beer sheet exists to mark. */
+function beerSheetRow(p, isNewTier) {
+  const note =
+    p.injuryStatus && !['ACTIVE', 'NORMAL'].includes(p.injuryStatus) ? ` · ${p.injuryStatus}` : '';
+  const takeAt = p.recommendedPick === null ? '—' : `${p.recommendedPick} (R${p.recommendedRound})`;
+  const status = p.drafted
+    ? `<span class="beer-sheet__drafted">${esc(p.pick.teamName)} · pk ${esc(p.pick.overall)}</span>`
+    : '<span class="beer-sheet__box" aria-hidden="true"></span>';
+  const classes = [isNewTier ? 'tier-start' : '', p.drafted ? 'is-drafted' : ''].filter(Boolean).join(' ');
+
+  return `<tr${classes ? ` class="${classes}"` : ''}>
+    <td class="num">${esc(p.valueRank)}</td>
+    <td>${esc(p.name)}<span class="beer-sheet__team"> · ${esc(p.proTeam)}${esc(note)}</span></td>
+    <td>${esc(p.position)}${esc(p.positionRank)}</td>
+    <td class="num">${esc(p.tier)}</td>
+    <td class="num">${p.adp === null ? '—' : num(p.adp, 1)}</td>
+    <td class="num">${esc(takeAt)}</td>
+    <td>${esc(p.grade ?? '—')}</td>
+    <td>${status}</td>
+  </tr>`;
+}
+
+/** A titled table. Tiers reset per position, so track the last-seen tier per group key. */
+function beerSheetSection(title, players, { byPosition = false } = {}) {
+  const lastTier = new Map();
+  const rows = players
+    .map((p) => {
+      const key = byPosition ? p.position : '__overall__';
+      const isNewTier = lastTier.get(key) !== p.tier;
+      lastTier.set(key, p.tier);
+      return beerSheetRow(p, isNewTier);
+    })
+    .join('');
+
+  return `
+    <section class="beer-sheet__page">
+      <h2>${esc(title)}</h2>
+      <table>
+        <thead>
+          <tr>
+            <th class="num">#</th><th>Player</th><th>Pos</th><th class="num">Tier</th>
+            <th class="num">ADP</th><th class="num">Take at</th><th>Grade</th><th>Drafted</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </section>`;
+}
+
+function buildBeerSheetHtml(board, hub) {
+  const overall = [...board.players].sort((a, b) => a.valueRank - b.valueRank);
+  const generated = hub?.generatedAt ? new Date(hub.generatedAt).toLocaleString() : new Date().toLocaleString();
+  const leagueName = hub?.league?.displayName ?? hub?.league?.name ?? 'Fantasy Football';
+
+  const sections = [beerSheetSection(`Overall — top ${overall.length}`, overall)];
+  for (const pos of POSITIONS_ORDER) {
+    const players = board.players
+      .filter((p) => p.position === pos)
+      .sort((a, b) => a.positionRank - b.positionRank);
+    if (players.length) sections.push(beerSheetSection(POSITION_TITLES[pos] ?? pos, players, { byPosition: true }));
+  }
+
+  return `
+    <header class="beer-sheet__head">
+      <h1>${esc(leagueName)} — Superflex PPR beer sheet</h1>
+      <p>
+        ${esc(board.teamCount ?? '')} teams · PPR · Superflex (OP) · Generated ${esc(generated)}
+        ${board.draftHeld ? ' · draft in progress — refresh and reprint for the latest picks' : ''}
+      </p>
+      <p class="beer-sheet__legend">
+        Ranked by value over replacement, not raw projections — see the site for why. A heavy top
+        rule marks a tier break: a bigger drop there means less reason to reach. "Take at" is where
+        a well-run draft would take this player. Check a box as a player comes off the board;
+        anyone already drafted (as of the last data refresh) shows who took them instead.
+      </p>
+    </header>
+    ${sections.join('')}`;
+}
+
+function printBeerSheet(board) {
+  if (!board?.available) return;
+  const sheet = $('#beer-sheet');
+  if (!sheet) return;
+  sheet.innerHTML = buildBeerSheetHtml(board, state.hub);
+  document.body.classList.add('beer-sheet-mode');
+  window.print();
+}
+
+window.addEventListener('afterprint', () => {
+  document.body.classList.remove('beer-sheet-mode');
+});
 
 // --- Mock draft ------------------------------------------------------------
 
