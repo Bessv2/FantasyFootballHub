@@ -69,13 +69,34 @@
       "salt:      change this to reshuffle the entire season. Doing that mid-",
       "           season re-draws weeks that have already been played, so only",
       "           ever touch it before Week 1.",
-      "payoutId:  which payout slot above funds the challenges."
+      "payoutId:  which payout slot above funds the challenges.",
+      "overrides: week number -> challenge id, for hand-picking a specific",
+      "           week instead of trusting the shuffle. An overridden card is",
+      "           removed from the deck before the remaining weeks are dealt,",
+      "           so it can never also land on another week. Only ever add or",
+      "           change an override for a week that has not been played yet —",
+      "           same rule as salt."
     ],
     "enabled": true,
     "cadence": "weekly",
     "startWeek": 1,
     "salt": "",
-    "payoutId": "challenges"
+    "payoutId": "challenges",
+    "overrides": {
+      "1": "highScore",
+      "2": "receiverRoom",
+      "3": "bestDefense",
+      "4": "balanced",
+      "5": "supportingCast",
+      "6": "narrowestWin",
+      "7": "underdog",
+      "8": "overProjection",
+      "9": "closestTo100",
+      "10": "bestKicker",
+      "11": "allPlayWeek",
+      "12": "uglyWin",
+      "13": "benchWarmer"
+    }
   },
 
   "_paymentsNote": "Only needed for per-team overrides once teams are claimed; `members` above covers the common case.",

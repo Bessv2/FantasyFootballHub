@@ -366,6 +366,7 @@ export function buildChallengeSchedule({
   cadence = 'weekly',
   startWeek = 1,
   deck = CHALLENGE_DECK,
+  overrides = {},
 }) {
   const seed = challengeSeed({ leagueId, season, salt });
   const rand = mulberry32(hashSeed(seed));
@@ -374,16 +375,27 @@ export function buildChallengeSchedule({
   const playWeeks = [];
   for (let week = startWeek; week <= weeks; week += step) playWeeks.push(week);
 
+  const cardById = new Map(deck.map((c) => [c.id, c]));
+  // A commissioner-picked card for one week is pulled out of the shuffle deck
+  // entirely, so it can never also land on a different week by chance.
+  const overriddenIds = new Set(Object.values(overrides));
+  const shuffleDeck = deck.filter((c) => !overriddenIds.has(c.id));
+
   const dealt = [];
   let pack = [];
   for (const week of playWeeks) {
-    if (!pack.length) pack = shuffle(deck, rand);
-    const card = pack.shift();
+    const overrideId = overrides[week];
+    const card = overrideId ? cardById.get(overrideId) : null;
+    if (overrideId && !card) {
+      throw new Error(`weekly challenge override for week ${week} names an unknown challenge "${overrideId}"`);
+    }
+    if (!card && !pack.length) pack = shuffle(shuffleDeck, rand);
+    const dealtCard = card ?? pack.shift();
     dealt.push({
       week,
-      challengeId: card.id,
-      label: card.label,
-      rule: card.rule,
+      challengeId: dealtCard.id,
+      label: dealtCard.label,
+      rule: dealtCard.rule,
       // Bi-weekly challenges cover the week they are scored in, not a range —
       // the schedule just skips the weeks in between.
       cadence,

@@ -144,6 +144,7 @@ function buildChallenges(season, teamStats, teamWeeks, moneyConfig) {
     salt: config.salt ?? '',
     cadence: config.cadence ?? 'weekly',
     startWeek: config.startWeek ?? 1,
+    overrides: config.overrides ?? {},
   });
 
   const weekNumbers = schedule.weeks.map((w) => w.week);

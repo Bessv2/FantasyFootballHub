@@ -132,6 +132,34 @@ describe('challenge schedule', () => {
     const ids = CHALLENGE_DECK.map((c) => c.id);
     assert.equal(new Set(ids).size, ids.length);
   });
+
+  test('an override pins a week to a specific card', () => {
+    const schedule = buildChallengeSchedule({ ...LEAGUE, overrides: { 1: 'highScore' } });
+    assert.equal(schedule.weeks[0].challengeId, 'highScore');
+  });
+
+  test('an overridden card is pulled from the deck so it cannot also land elsewhere', () => {
+    const schedule = buildChallengeSchedule({ ...LEAGUE, overrides: { 1: 'highScore' } });
+    const laterIds = schedule.weeks.slice(1).map((w) => w.challengeId);
+    assert.ok(!laterIds.includes('highScore'));
+  });
+
+  test('an unknown override id fails loudly instead of silently ignoring the pin', () => {
+    assert.throws(() => buildChallengeSchedule({ ...LEAGUE, overrides: { 1: 'notACard' } }));
+  });
+
+  test('fully overriding every week reproduces exactly what was pinned', () => {
+    const overrides = {
+      1: 'highScore', 2: 'receiverRoom', 3: 'bestDefense', 4: 'balanced',
+      5: 'supportingCast', 6: 'narrowestWin', 7: 'underdog', 8: 'overProjection',
+      9: 'closestTo100', 10: 'bestKicker', 11: 'allPlayWeek', 12: 'uglyWin', 13: 'benchWarmer',
+    };
+    const schedule = buildChallengeSchedule({ ...LEAGUE, overrides });
+    assert.deepEqual(
+      Object.fromEntries(schedule.weeks.map((w) => [w.week, w.challengeId])),
+      overrides
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
