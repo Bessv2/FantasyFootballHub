@@ -26,7 +26,7 @@ the way they are.
 | Buy-in | **$75** (was $50). Payouts **350 / 130 / 75** + **$195** funding weekly challenges at $15/wk. |
 | Money owed | Everyone paid **$50** under the old buy-in. The ledger shows each of them **$25 short** until somebody confirms otherwise — see below. |
 | Tests | 141, all passing |
-| Automation | GitHub Actions, daily 11:00 UTC — **verified working**, it has pushed real commits |
+| Automation | GitHub Actions, every 3 hours — **verified working**, it has pushed real commits |
 
 The league had no rosters, no picks and no games at time of writing. Every
 "available: false" and empty state you see is correct, not broken.
@@ -177,7 +177,7 @@ ID was an empty shell and the account had three others.
   Use `;`, or `npm run ship`. Documented in the README because it bit us.
 - **`git rebase` has no `--allow-unrelated-histories`** (that's a merge flag).
   To reparent onto an unrelated history: `git reset --soft <target>` then commit.
-- **The daily automation pushes commits.** Expect to need `git pull --rebase`
+- **The automation pushes commits every 3 hours.** Expect to need `git pull --rebase`
   before pushing. Conflicts will be in `docs/data/*.json`, which are build
   artefacts — resolve by running `node scripts/build.mjs`, never by hand-merging
   minified JSON.
@@ -245,9 +245,10 @@ announced every second is unusable with a screen reader.
 **The weekly challenge draw is seeded, and that is load-bearing.** The schedule
 is a Fisher-Yates shuffle over `CHALLENGE_DECK` driven by mulberry32 seeded on
 `roe-challenge:{leagueId}:{season}{:salt}`. `Math.random()` here would not be a
-style problem — the build runs daily, *after* the games, so a non-reproducible
-draw would silently re-pick Week 4's challenge with Week 4's results already
-known. That is indistinguishable from rigging it. `tests/challenges.test.mjs`
+style problem — the build runs every few hours, repeatedly *after* the games
+too, so a non-reproducible draw would silently re-pick Week 4's challenge with
+Week 4's results already known, and could re-pick it differently on every run.
+That is indistinguishable from rigging it. `tests/challenges.test.mjs`
 pins reproducibility; do not "simplify" those tests away, and do not swap the
 generator for something whose output varies across Node versions.
 
@@ -321,7 +322,7 @@ up in a unit test:
    pointing at anything.
 
 **News carries its own age on every item, deliberately.** The site rebuilds
-daily, so a headline can be 24 hours old. Last season's stat line does not decay;
+every few hours, so a headline can still be stale between runs. Last season's stat line does not decay;
 an injury note is the most perishable thing in fantasy football. Showing "3h
 ago" next to each headline is what keeps a stale note from reading as current —
 somebody starting a player who was ruled out that morning is the failure mode
@@ -394,8 +395,8 @@ documented API and on `espn-api`'s behaviour, not observed here.
   wants a reshuffle; **never** after Week 1
 - Agree which of the 18 season prizes actually pay out (they are bragging
   rights now that the cash funds the weekly challenges)
-- Run a few reps of `#mock` — the board auto-refreshes daily, so it tracks the
-  real market as the date approaches
+- Run a few reps of `#mock` — the board auto-refreshes every few hours, so it
+  tracks the real market as the date approaches
 
 **Immediately after the draft:**
 ```bash
