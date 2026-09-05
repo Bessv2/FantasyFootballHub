@@ -21,7 +21,12 @@ const customMessage = process.argv.slice(2).join(' ').trim();
 
 /** Runs a command, streaming output. Returns the exit code. */
 function run(command, args, { allowFailure = false } = {}) {
-  const result = spawnSync(command, args, {
+  // On Windows, quote the command if it contains spaces (like Node.js path)
+  const quotedCommand = process.platform === 'win32' && command.includes(' ') 
+    ? `"${command}"`
+    : command;
+  
+  const result = spawnSync(quotedCommand, args, {
     cwd: ROOT,
     stdio: 'inherit',
     shell: process.platform === 'win32',
@@ -35,7 +40,11 @@ function run(command, args, { allowFailure = false } = {}) {
 
 /** Captures stdout instead of streaming it. */
 function capture(command, args) {
-  const result = spawnSync(command, args, {
+  const quotedCommand = process.platform === 'win32' && command.includes(' ')
+    ? `"${command}"`
+    : command;
+  
+  const result = spawnSync(quotedCommand, args, {
     cwd: ROOT,
     encoding: 'utf8',
     shell: process.platform === 'win32',
