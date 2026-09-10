@@ -51,8 +51,11 @@ ESPN API  ──fetch.mjs──▶  data/raw/     (gitignored, regenerable cache
 
 Four rules that shape everything:
 
-1. **The browser never calls ESPN.** No CORS headers, so it can't. All fetching
-   happens in Node; the site only reads pre-computed JSON.
+1. **The browser never calls the *fantasy* API.** `lm-api-reads.fantasy.espn.com`
+   sends no CORS headers, so it can't. All league fetching happens in Node; the
+   site only reads pre-computed JSON. The single exception is the live
+   scoreboard, which calls `site.api.espn.com` — a different host that *does*
+   allow it — for public scores only, with no credentials. See below.
 2. **All analysis happens at build time.** The front end is presentational. This
    keeps the site fast on a phone and the maths unit-testable.
 3. **`docs/` is the published artefact.** Cloudflare Pages serves it directly.
@@ -163,6 +166,43 @@ league ever leaves superflex that switches back to PPR automatically.
 `npm run myleagues` hits `fan.api.espn.com/apis/v2/fans/{SWID}` and lists every
 league on the account. This is how we discovered the originally-supplied league
 ID was an empty shell and the account had three others.
+
+---
+
+## The live scoreboard is the one client-side fetch
+
+Everything else in this project is computed at build time and served as static
+JSON. `#live` is the exception: it calls
+`site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard` from the
+browser, because scores move by the minute and the build runs every three
+hours.
+
+Things to know before touching it:
+
+- **That endpoint sends `Access-Control-Allow-Origin: *`** — it is a different
+  host from the fantasy API (`lm-api-reads.fantasy.espn.com`), which does NOT,
+  and that is the whole reason the rest of the project fetches server-side.
+- **`docs/_headers` must keep `site.api.espn.com` in `connect-src`.** Remove it
+  and the panel dies silently with a CSP violation while the rest of the site
+  keeps working.
+- **No credentials are ever sent to it.** The league cookies live only in the
+  Node fetcher. Never move them into the page to "simplify" this.
+- **Polling is guarded three ways**: only while a game is in progress, only
+  while the tab is visible, and stopped on navigating away (`stopLivePolling`
+  is called from the router). A leaked timer here hammers ESPN from every open
+  tab in the league.
+- **Scoreboard and fantasy APIs disagree on team abbreviations** (WAS/WSH,
+  LA/LAR, JAC/JAX and others). `TEAM_ALIASES` in `docs/assets/live.js`
+  reconciles them; without it, rosters silently fail to match games for those
+  teams — silently, because a player simply does not appear rather than
+  throwing.
+
+**Game video is deliberately not embedded.** A request to wire in a "free NFL
+streams" API was declined: those are unauthorised rebroadcasts of exclusively
+licensed feeds, and hosting one on a public Cloudflare Pages project under a
+real GitHub account invites takedowns and account termination. The broadcast
+network per game is shown instead, which is the legitimate version of the same
+question. If this comes up again, the answer has not changed.
 
 ---
 

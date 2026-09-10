@@ -50,6 +50,32 @@ section fills in on its own schedule:
 | Team pages: coaching report, week log, head-to-head | After Week 1 |
 | Trades | First completed trade |
 
+## Live scoreboard
+
+`#live` shows every NFL game today: score, clock, down and distance, the network
+carrying it, and a link to ESPN's Gamecast. Set your team once (Teams → yours →
+"Set as my team") and each game also lists **which of your players are on the
+field**, starters in bold.
+
+This is the one panel that does **not** come from the build. Scores move by the
+minute and the build runs every few hours, so a "live" panel refreshed on that
+cadence would be worse than none. ESPN's public scoreboard sends
+`Access-Control-Allow-Origin: *`, so the page calls it directly and re-polls
+every 45 seconds — but only while a game is actually in progress, only while the
+tab is visible, and it stops the moment you navigate away.
+
+`docs/_headers` names `site.api.espn.com` in `connect-src` for this. It's a
+read-only GET of public data; no credentials go with it, since the league
+cookies live only in the Node fetcher and never reach the page.
+
+> **On streaming.** The network column tells you where each game is legitimately
+> broadcast — NBC, FOX, CBS, ESPN/ABC, Netflix, Prime. The hub deliberately does
+> not embed game video. NFL feeds are exclusively licensed, and "free stream"
+> aggregators are unauthorised rebroadcasts; putting one on a public site under
+> your own GitHub account and Cloudflare project invites takedowns and account
+> termination. Live scores plus "where is it on" gets you most of the value with
+> none of that.
+
 ## Big Board
 
 `#board` ranks the **top 250 players by value over replacement**, not by ESPN's

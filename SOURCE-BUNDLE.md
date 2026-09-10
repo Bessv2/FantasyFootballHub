@@ -2,8 +2,9 @@
 
 Every source file in one place, for reading or for handing to a fresh session.
 
-- **Commit:** `9bf921a` (2026-09-05 15:12:38 +0000)
-- **Generated:** 2026-09-05T15:12:42.057Z
+- **Commit:** `b3acdd4` (2026-09-05 19:02:10 -0400)
+- **Generated:** 2026-09-10T02:27:56.086Z
+- **WARNING:** the working tree had uncommitted changes when this was generated, so this may not match any commit.
 - **Regenerate with:** `npm run bundle`
 
 **Read [HANDOFF.md](HANDOFF.md) first.** It carries the ESPN API gotchas,
@@ -70,7 +71,7 @@ League identity, money rules, and the credentials template. Real credentials liv
 
 ### `config/money.json`
 
-*87 lines*
+*108 lines*
 
 ```json
 {
@@ -144,13 +145,34 @@ League identity, money rules, and the credentials template. Real credentials liv
       "salt:      change this to reshuffle the entire season. Doing that mid-",
       "           season re-draws weeks that have already been played, so only",
       "           ever touch it before Week 1.",
-      "payoutId:  which payout slot above funds the challenges."
+      "payoutId:  which payout slot above funds the challenges.",
+      "overrides: week number -> challenge id, for hand-picking a specific",
+      "           week instead of trusting the shuffle. An overridden card is",
+      "           removed from the deck before the remaining weeks are dealt,",
+      "           so it can never also land on another week. Only ever add or",
+      "           change an override for a week that has not been played yet —",
+      "           same rule as salt."
     ],
     "enabled": true,
     "cadence": "weekly",
     "startWeek": 1,
     "salt": "",
-    "payoutId": "challenges"
+    "payoutId": "challenges",
+    "overrides": {
+      "1": "highScore",
+      "2": "receiverRoom",
+      "3": "bestDefense",
+      "4": "balanced",
+      "5": "supportingCast",
+      "6": "narrowestWin",
+      "7": "underdog",
+      "8": "overProjection",
+      "9": "closestTo100",
+      "10": "bestKicker",
+      "11": "allPlayWeek",
+      "12": "uglyWin",
+      "13": "benchWarmer"
+    }
   },
 
   "_paymentsNote": "Only needed for per-team overrides once teams are claimed; `members` above covers the common case.",
@@ -2055,7 +2077,7 @@ export function computePositionalStats(teamWeeks, teamStats) {
 
 ### `scripts/lib/challenges.mjs`
 
-*523 lines*
+*535 lines*
 
 ```javascript
 /**
@@ -2426,6 +2448,7 @@ export function buildChallengeSchedule({
   cadence = 'weekly',
   startWeek = 1,
   deck = CHALLENGE_DECK,
+  overrides = {},
 }) {
   const seed = challengeSeed({ leagueId, season, salt });
   const rand = mulberry32(hashSeed(seed));
@@ -2434,16 +2457,27 @@ export function buildChallengeSchedule({
   const playWeeks = [];
   for (let week = startWeek; week <= weeks; week += step) playWeeks.push(week);
 
+  const cardById = new Map(deck.map((c) => [c.id, c]));
+  // A commissioner-picked card for one week is pulled out of the shuffle deck
+  // entirely, so it can never also land on a different week by chance.
+  const overriddenIds = new Set(Object.values(overrides));
+  const shuffleDeck = deck.filter((c) => !overriddenIds.has(c.id));
+
   const dealt = [];
   let pack = [];
   for (const week of playWeeks) {
-    if (!pack.length) pack = shuffle(deck, rand);
-    const card = pack.shift();
+    const overrideId = overrides[week];
+    const card = overrideId ? cardById.get(overrideId) : null;
+    if (overrideId && !card) {
+      throw new Error(`weekly challenge override for week ${week} names an unknown challenge "${overrideId}"`);
+    }
+    if (!card && !pack.length) pack = shuffle(shuffleDeck, rand);
+    const dealtCard = card ?? pack.shift();
     dealt.push({
       week,
-      challengeId: card.id,
-      label: card.label,
-      rule: card.rule,
+      challengeId: dealtCard.id,
+      label: dealtCard.label,
+      rule: dealtCard.rule,
       // Bi-weekly challenges cover the week they are scored in, not a range —
       // the schedule just skips the weeks in between.
       cadence,
@@ -4485,7 +4519,7 @@ main().catch((error) => {
 
 ### `scripts/build.mjs`
 
-*584 lines*
+*585 lines*
 
 ```javascript
 /**
@@ -4634,6 +4668,7 @@ function buildChallenges(season, teamStats, teamWeeks, moneyConfig) {
     salt: config.salt ?? '',
     cadence: config.cadence ?? 'weekly',
     startWeek: config.startWeek ?? 1,
+    overrides: config.overrides ?? {},
   });
 
   const weekNumbers = schedule.weeks.map((w) => w.week);
@@ -5190,7 +5225,7 @@ server.listen(PORT, () => {
 
 ### `scripts/ship.mjs`
 
-*99 lines*
+*108 lines*
 
 ```javascript
 /**
@@ -5216,7 +5251,12 @@ const customMessage = process.argv.slice(2).join(' ').trim();
 
 /** Runs a command, streaming output. Returns the exit code. */
 function run(command, args, { allowFailure = false } = {}) {
-  const result = spawnSync(command, args, {
+  // On Windows, quote the command if it contains spaces (like Node.js path)
+  const quotedCommand = process.platform === 'win32' && command.includes(' ') 
+    ? `"${command}"`
+    : command;
+  
+  const result = spawnSync(quotedCommand, args, {
     cwd: ROOT,
     stdio: 'inherit',
     shell: process.platform === 'win32',
@@ -5230,7 +5270,11 @@ function run(command, args, { allowFailure = false } = {}) {
 
 /** Captures stdout instead of streaming it. */
 function capture(command, args) {
-  const result = spawnSync(command, args, {
+  const quotedCommand = process.platform === 'win32' && command.includes(' ')
+    ? `"${command}"`
+    : command;
+  
+  const result = spawnSync(quotedCommand, args, {
     cwd: ROOT,
     encoding: 'utf8',
     shell: process.platform === 'win32',
@@ -6048,7 +6092,7 @@ Dependency-free front end. Reads pre-computed JSON from docs/data/ and renders i
 
 ### `docs/index.html`
 
-*172 lines*
+*183 lines*
 
 ```html
 <!doctype html>
@@ -6083,6 +6127,7 @@ Dependency-free front end. Reads pre-computed JSON from docs/data/ and renders i
       <nav class="site-nav" aria-label="Sections">
         <ul>
           <li><a href="#overview" data-view="overview">Overview</a></li>
+          <li><a href="#live" data-view="live">Live</a></li>
           <li><a href="#standings" data-view="standings">Standings</a></li>
           <li><a href="#teams" data-view="teams">Teams</a></li>
           <li data-nav="myteam" hidden><a href="#team" data-view="team">My Team</a></li>
@@ -6108,6 +6153,16 @@ Dependency-free front end. Reads pre-computed JSON from docs/data/ and renders i
       <section class="view" id="view-overview" hidden aria-labelledby="h-overview">
         <h2 id="h-overview">Overview</h2>
         <div id="overview-body"></div>
+      </section>
+
+      <section class="view" id="view-live" hidden aria-labelledby="h-live">
+        <h2 id="h-live">Live NFL Scoreboard</h2>
+        <p class="view__intro">
+          Every game today with the live score, clock, and the network carrying it — and
+          which of your own players are on the field. Scores come straight from ESPN in
+          your browser, so they refresh while games are in progress.
+        </p>
+        <div id="live-body"></div>
       </section>
 
       <section class="view" id="view-standings" hidden aria-labelledby="h-standings">
@@ -6862,10 +6917,11 @@ body.beer-sheet-mode #beer-sheet { display: block; }
 
 ### `docs/assets/app.js`
 
-*2546 lines*
+*2720 lines*
 
 ```javascript
 import { createMockDraft, advanceToUser, makePick, gradeDraft, rosterNeeds } from './mock.js';
+import { fetchScoreboard, attachRoster, hasLiveGames } from './live.js';
 
 /**
  * Fantasy Football Hub — client.
@@ -6885,7 +6941,7 @@ import { createMockDraft, advanceToUser, makePick, gradeDraft, rosterNeeds } fro
  *     than advertising that something is being withheld.
  */
 
-const ALL_VIEWS = ['overview', 'standings', 'teams', 'team', 'draft', 'board', 'mock', 'trades', 'challenges', 'prizes', 'money'];
+const ALL_VIEWS = ['overview', 'live', 'standings', 'teams', 'team', 'draft', 'board', 'mock', 'trades', 'challenges', 'prizes', 'money'];
 let VIEWS = ALL_VIEWS.filter((v) => v !== 'money' && v !== 'mock' && v !== 'board');
 
 const state = { hub: null, season: null, draft: null, money: null, teamDetail: null, draftPool: null, bigBoard: null, playerCards: null };
@@ -9236,8 +9292,176 @@ function renderChallenges() {
   body.innerHTML = parts.join('');
 }
 
+// --- Live scoreboard -------------------------------------------------------
+
+let liveTimer = null;
+let liveAbort = null;
+let liveCache = null;
+
+/** How often to re-poll while games are running. */
+const LIVE_REFRESH_MS = 45_000;
+
+function stopLivePolling() {
+  if (liveTimer) clearInterval(liveTimer);
+  liveTimer = null;
+  liveAbort?.abort();
+  liveAbort = null;
+}
+
+function gameCard(game) {
+  const scoreLine = (side, isWinner) => `
+    <div style="display:flex;align-items:center;gap:0.5rem;justify-content:space-between">
+      <span style="display:flex;align-items:center;gap:0.45rem;min-width:0">
+        ${side.logo ? `<img src="${esc(side.logo)}" alt="" width="22" height="22" loading="lazy">` : ''}
+        <span style="font-weight:${isWinner ? 700 : 550};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+          ${esc(side.name)}
+        </span>
+        ${side.record ? `<small style="color:var(--text-dim)">${esc(side.record)}</small>` : ''}
+      </span>
+      <span style="font-variant-numeric:tabular-nums;font-weight:${isWinner ? 700 : 550};font-size:1.05rem">
+        ${side.score === null ? '—' : esc(side.score)}
+      </span>
+    </div>`;
+
+  const statusPill = game.isLive
+    ? `<span class="pill pill--good">Live</span>`
+    : game.isFinal
+      ? `<span class="pill pill--neutral">Final</span>`
+      : `<span class="pill pill--accent">Upcoming</span>`;
+
+  return `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:0.5rem;margin-bottom:0.6rem">
+        ${statusPill}
+        <small style="color:var(--text-muted);text-align:right">
+          ${esc(game.statusDetail)}
+          ${game.networks.length ? ` · <strong>${esc(game.networks.join(', '))}</strong>` : ''}
+        </small>
+      </div>
+
+      ${scoreLine(game.away, game.away.winner)}
+      <div style="height:0.4rem"></div>
+      ${scoreLine(game.home, game.home.winner)}
+
+      ${
+        game.situation
+          ? `<p class="stat__note" style="margin:0.6rem 0 0">${esc(game.situation)}${
+              game.possession ? ` · ${esc(game.possession)} ball` : ''
+            }</p>`
+          : ''
+      }
+
+      ${
+        game.myPlayers?.length
+          ? `<p style="margin:0.7rem 0 0;padding-top:0.6rem;border-top:1px solid var(--border)">
+              <span class="pill pill--accent">${esc(game.myPlayers.length)} of yours</span>
+              <span class="stat__note" style="display:block;margin-top:0.35rem">
+                ${game.myPlayers
+                  .map(
+                    (p) =>
+                      `${p.started ? '<strong>' : ''}${esc(p.name)}${p.started ? '</strong>' : ''} <small>(${esc(p.position)}${p.started ? '' : ', bench'})</small>`
+                  )
+                  .join(' · ')}
+              </span>
+            </p>`
+          : ''
+      }
+
+      ${
+        game.gamecast
+          ? `<p style="margin:0.6rem 0 0"><a href="${esc(game.gamecast)}" target="_blank" rel="noopener noreferrer">ESPN Gamecast &rarr;</a></p>`
+          : ''
+      }
+    </div>`;
+}
+
+async function renderLive({ silent = false } = {}) {
+  const body = $('#live-body');
+  if (!silent && !liveCache) {
+    body.innerHTML = '<div class="loading">Loading today&rsquo;s games…</div>';
+  }
+
+  // Cross-reference against whichever team the visitor claimed as theirs.
+  const myTeamId = getMyTeamId();
+  const myTeam = state.teamDetail?.teams?.find((t) => t.teamId === myTeamId) ?? null;
+
+  try {
+    liveAbort?.abort();
+    liveAbort = new AbortController();
+    const data = await fetchScoreboard({ signal: liveAbort.signal });
+    liveCache = data;
+
+    const games = attachRoster(data.games, myTeam?.roster ?? []);
+    const live = games.filter((g) => g.isLive);
+
+    if (!games.length) {
+      body.innerHTML = emptyState(
+        '🏈',
+        'No games scheduled',
+        'ESPN has nothing on the board right now. Check back on game day.'
+      );
+      stopLivePolling();
+      return;
+    }
+
+    const mineInPlay = games.reduce((a, g) => a + (g.myStarters ?? 0), 0);
+
+    body.innerHTML = `
+      <ul class="stats">
+        <li class="stat">
+          <span class="stat__label">Week</span>
+          <span class="stat__value">${esc(data.week ?? '—')}</span>
+          <span class="stat__note">${esc(games.length)} games</span>
+        </li>
+        <li class="stat">
+          <span class="stat__label">In progress</span>
+          <span class="stat__value">${esc(live.length)}</span>
+          <span class="stat__note">${live.length ? 'refreshing automatically' : 'nothing live'}</span>
+        </li>
+        <li class="stat">
+          <span class="stat__label">Your starters playing</span>
+          <span class="stat__value">${myTeam ? esc(mineInPlay) : '—'}</span>
+          <span class="stat__note">${
+            myTeam ? esc(myTeam.teamName) : '<a href="#teams">pick your team</a>'
+          }</span>
+        </li>
+      </ul>
+
+      <div class="grid">${games.map(gameCard).join('')}</div>
+
+      <p class="stat__note" style="margin-top:1.25rem">
+        Scores from ESPN, fetched in your browser. The network column tells you where the
+        game is being broadcast — this hub links to official coverage only.
+        <span id="live-updated">Updated ${esc(new Date(data.fetchedAt).toLocaleTimeString())}.</span>
+      </p>`;
+
+    // Only poll while something is actually running.
+    stopLivePolling();
+    if (hasLiveGames(games)) {
+      liveTimer = setInterval(() => {
+        // Pointless to poll a tab nobody is looking at.
+        if (document.visibilityState === 'visible' && currentRoute?.startsWith('live')) {
+          renderLive({ silent: true });
+        }
+      }, LIVE_REFRESH_MS);
+    }
+  } catch (error) {
+    if (error.name === 'AbortError') return;
+    body.innerHTML = `
+      <div class="error" role="alert">
+        <strong>Could not load the scoreboard.</strong>
+        <p>${esc(error.message)}</p>
+        <p>This panel calls ESPN directly from your browser, so an ad blocker or a
+        network that blocks <code>site.api.espn.com</code> will stop it. Everything else
+        on the hub is unaffected.</p>
+      </div>`;
+    stopLivePolling();
+  }
+}
+
 const RENDERERS = {
   overview: renderOverview,
+  live: renderLive,
   standings: renderStandings,
   teams: renderTeams,
   team: renderTeam,
@@ -9269,6 +9493,11 @@ function show(view, { focus = false, param = null } = {}) {
   }
 
   const routeKey = `${view}/${param ?? ''}`;
+
+  // The scoreboard polls ESPN on a timer. Leaving the view must stop it —
+  // otherwise it keeps firing forever against a hidden panel.
+  if (view !== 'live' && currentRoute?.startsWith('live')) stopLivePolling();
+
   if (routeKey !== currentRoute) {
     try {
       RENDERERS[view](param === null ? undefined : Number(param));
@@ -9680,7 +9909,7 @@ export function pickValue(pick) {
 
 ### `docs/_headers`
 
-*33 lines*
+*39 lines*
 
 ```
 # Cloudflare Pages response headers.
@@ -9699,6 +9928,12 @@ export function pickValue(pick) {
 # the second line of the same defence. Keep the two in sync; widening one
 # without the other either breaks images or removes the guard.
 #
+# `connect-src` names one host for the same reason: site.api.espn.com is
+# ESPN's public scoreboard, fetched in the browser rather than at build time
+# because scores move by the minute and the build runs every few hours. It is a
+# read-only GET of public data, and no credentials go with it — the league
+# cookies live only in the Node fetcher and never reach the page.
+#
 # style-src allows 'unsafe-inline' because the app sets a few styles inline
 # (the money progress bar width, some spacing). That is the weakest line here
 # and it is deliberate: script-src stays locked to 'self', which is what
@@ -9710,7 +9945,7 @@ export function pickValue(pick) {
   X-Frame-Options: DENY
   Referrer-Policy: no-referrer
   Permissions-Policy: geolocation=(), microphone=(), camera=(), interest-cohort=()
-  Content-Security-Policy: default-src 'self'; img-src 'self' data: https://a.espncdn.com https://g.espncdn.com https://i.espncdn.com https://s.espncdn.com https://secure.espncdn.com; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'self'; img-src 'self' data: https://a.espncdn.com https://g.espncdn.com https://i.espncdn.com https://s.espncdn.com https://secure.espncdn.com; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://site.api.espn.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
 
 # League data is regenerated on every push; never let a stale week be cached.
 /data/*
@@ -10697,7 +10932,7 @@ describe('phase detection', () => {
 
 ### `tests/challenges.test.mjs`
 
-*405 lines*
+*433 lines*
 
 ```javascript
 /**
@@ -10833,6 +11068,34 @@ describe('challenge schedule', () => {
   test('deck ids are unique — a duplicate would silently drop a challenge', () => {
     const ids = CHALLENGE_DECK.map((c) => c.id);
     assert.equal(new Set(ids).size, ids.length);
+  });
+
+  test('an override pins a week to a specific card', () => {
+    const schedule = buildChallengeSchedule({ ...LEAGUE, overrides: { 1: 'highScore' } });
+    assert.equal(schedule.weeks[0].challengeId, 'highScore');
+  });
+
+  test('an overridden card is pulled from the deck so it cannot also land elsewhere', () => {
+    const schedule = buildChallengeSchedule({ ...LEAGUE, overrides: { 1: 'highScore' } });
+    const laterIds = schedule.weeks.slice(1).map((w) => w.challengeId);
+    assert.ok(!laterIds.includes('highScore'));
+  });
+
+  test('an unknown override id fails loudly instead of silently ignoring the pin', () => {
+    assert.throws(() => buildChallengeSchedule({ ...LEAGUE, overrides: { 1: 'notACard' } }));
+  });
+
+  test('fully overriding every week reproduces exactly what was pinned', () => {
+    const overrides = {
+      1: 'highScore', 2: 'receiverRoom', 3: 'bestDefense', 4: 'balanced',
+      5: 'supportingCast', 6: 'narrowestWin', 7: 'underdog', 8: 'overProjection',
+      9: 'closestTo100', 10: 'bestKicker', 11: 'allPlayWeek', 12: 'uglyWin', 13: 'benchWarmer',
+    };
+    const schedule = buildChallengeSchedule({ ...LEAGUE, overrides });
+    assert.deepEqual(
+      Object.fromEntries(schedule.weeks.map((w) => [w.week, w.challengeId])),
+      overrides
+    );
   });
 });
 
@@ -11681,4 +11944,4 @@ jobs:
 
 ---
 
-*33 files, 11,423 lines.*
+*33 files, 11,685 lines.*

@@ -1,4 +1,5 @@
 import { createMockDraft, advanceToUser, makePick, gradeDraft, rosterNeeds } from './mock.js';
+import { fetchScoreboard, attachRoster, hasLiveGames } from './live.js';
 
 /**
  * Fantasy Football Hub — client.
@@ -18,7 +19,7 @@ import { createMockDraft, advanceToUser, makePick, gradeDraft, rosterNeeds } fro
  *     than advertising that something is being withheld.
  */
 
-const ALL_VIEWS = ['overview', 'standings', 'teams', 'team', 'draft', 'board', 'mock', 'trades', 'challenges', 'prizes', 'money'];
+const ALL_VIEWS = ['overview', 'live', 'standings', 'teams', 'team', 'draft', 'board', 'mock', 'trades', 'challenges', 'prizes', 'money'];
 let VIEWS = ALL_VIEWS.filter((v) => v !== 'money' && v !== 'mock' && v !== 'board');
 
 const state = { hub: null, season: null, draft: null, money: null, teamDetail: null, draftPool: null, bigBoard: null, playerCards: null };
@@ -2369,8 +2370,176 @@ function renderChallenges() {
   body.innerHTML = parts.join('');
 }
 
+// --- Live scoreboard -------------------------------------------------------
+
+let liveTimer = null;
+let liveAbort = null;
+let liveCache = null;
+
+/** How often to re-poll while games are running. */
+const LIVE_REFRESH_MS = 45_000;
+
+function stopLivePolling() {
+  if (liveTimer) clearInterval(liveTimer);
+  liveTimer = null;
+  liveAbort?.abort();
+  liveAbort = null;
+}
+
+function gameCard(game) {
+  const scoreLine = (side, isWinner) => `
+    <div style="display:flex;align-items:center;gap:0.5rem;justify-content:space-between">
+      <span style="display:flex;align-items:center;gap:0.45rem;min-width:0">
+        ${side.logo ? `<img src="${esc(side.logo)}" alt="" width="22" height="22" loading="lazy">` : ''}
+        <span style="font-weight:${isWinner ? 700 : 550};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+          ${esc(side.name)}
+        </span>
+        ${side.record ? `<small style="color:var(--text-dim)">${esc(side.record)}</small>` : ''}
+      </span>
+      <span style="font-variant-numeric:tabular-nums;font-weight:${isWinner ? 700 : 550};font-size:1.05rem">
+        ${side.score === null ? '—' : esc(side.score)}
+      </span>
+    </div>`;
+
+  const statusPill = game.isLive
+    ? `<span class="pill pill--good">Live</span>`
+    : game.isFinal
+      ? `<span class="pill pill--neutral">Final</span>`
+      : `<span class="pill pill--accent">Upcoming</span>`;
+
+  return `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:0.5rem;margin-bottom:0.6rem">
+        ${statusPill}
+        <small style="color:var(--text-muted);text-align:right">
+          ${esc(game.statusDetail)}
+          ${game.networks.length ? ` · <strong>${esc(game.networks.join(', '))}</strong>` : ''}
+        </small>
+      </div>
+
+      ${scoreLine(game.away, game.away.winner)}
+      <div style="height:0.4rem"></div>
+      ${scoreLine(game.home, game.home.winner)}
+
+      ${
+        game.situation
+          ? `<p class="stat__note" style="margin:0.6rem 0 0">${esc(game.situation)}${
+              game.possession ? ` · ${esc(game.possession)} ball` : ''
+            }</p>`
+          : ''
+      }
+
+      ${
+        game.myPlayers?.length
+          ? `<p style="margin:0.7rem 0 0;padding-top:0.6rem;border-top:1px solid var(--border)">
+              <span class="pill pill--accent">${esc(game.myPlayers.length)} of yours</span>
+              <span class="stat__note" style="display:block;margin-top:0.35rem">
+                ${game.myPlayers
+                  .map(
+                    (p) =>
+                      `${p.started ? '<strong>' : ''}${esc(p.name)}${p.started ? '</strong>' : ''} <small>(${esc(p.position)}${p.started ? '' : ', bench'})</small>`
+                  )
+                  .join(' · ')}
+              </span>
+            </p>`
+          : ''
+      }
+
+      ${
+        game.gamecast
+          ? `<p style="margin:0.6rem 0 0"><a href="${esc(game.gamecast)}" target="_blank" rel="noopener noreferrer">ESPN Gamecast &rarr;</a></p>`
+          : ''
+      }
+    </div>`;
+}
+
+async function renderLive({ silent = false } = {}) {
+  const body = $('#live-body');
+  if (!silent && !liveCache) {
+    body.innerHTML = '<div class="loading">Loading today&rsquo;s games…</div>';
+  }
+
+  // Cross-reference against whichever team the visitor claimed as theirs.
+  const myTeamId = getMyTeamId();
+  const myTeam = state.teamDetail?.teams?.find((t) => t.teamId === myTeamId) ?? null;
+
+  try {
+    liveAbort?.abort();
+    liveAbort = new AbortController();
+    const data = await fetchScoreboard({ signal: liveAbort.signal });
+    liveCache = data;
+
+    const games = attachRoster(data.games, myTeam?.roster ?? []);
+    const live = games.filter((g) => g.isLive);
+
+    if (!games.length) {
+      body.innerHTML = emptyState(
+        '🏈',
+        'No games scheduled',
+        'ESPN has nothing on the board right now. Check back on game day.'
+      );
+      stopLivePolling();
+      return;
+    }
+
+    const mineInPlay = games.reduce((a, g) => a + (g.myStarters ?? 0), 0);
+
+    body.innerHTML = `
+      <ul class="stats">
+        <li class="stat">
+          <span class="stat__label">Week</span>
+          <span class="stat__value">${esc(data.week ?? '—')}</span>
+          <span class="stat__note">${esc(games.length)} games</span>
+        </li>
+        <li class="stat">
+          <span class="stat__label">In progress</span>
+          <span class="stat__value">${esc(live.length)}</span>
+          <span class="stat__note">${live.length ? 'refreshing automatically' : 'nothing live'}</span>
+        </li>
+        <li class="stat">
+          <span class="stat__label">Your starters playing</span>
+          <span class="stat__value">${myTeam ? esc(mineInPlay) : '—'}</span>
+          <span class="stat__note">${
+            myTeam ? esc(myTeam.teamName) : '<a href="#teams">pick your team</a>'
+          }</span>
+        </li>
+      </ul>
+
+      <div class="grid">${games.map(gameCard).join('')}</div>
+
+      <p class="stat__note" style="margin-top:1.25rem">
+        Scores from ESPN, fetched in your browser. The network column tells you where the
+        game is being broadcast — this hub links to official coverage only.
+        <span id="live-updated">Updated ${esc(new Date(data.fetchedAt).toLocaleTimeString())}.</span>
+      </p>`;
+
+    // Only poll while something is actually running.
+    stopLivePolling();
+    if (hasLiveGames(games)) {
+      liveTimer = setInterval(() => {
+        // Pointless to poll a tab nobody is looking at.
+        if (document.visibilityState === 'visible' && currentRoute?.startsWith('live')) {
+          renderLive({ silent: true });
+        }
+      }, LIVE_REFRESH_MS);
+    }
+  } catch (error) {
+    if (error.name === 'AbortError') return;
+    body.innerHTML = `
+      <div class="error" role="alert">
+        <strong>Could not load the scoreboard.</strong>
+        <p>${esc(error.message)}</p>
+        <p>This panel calls ESPN directly from your browser, so an ad blocker or a
+        network that blocks <code>site.api.espn.com</code> will stop it. Everything else
+        on the hub is unaffected.</p>
+      </div>`;
+    stopLivePolling();
+  }
+}
+
 const RENDERERS = {
   overview: renderOverview,
+  live: renderLive,
   standings: renderStandings,
   teams: renderTeams,
   team: renderTeam,
@@ -2402,6 +2571,11 @@ function show(view, { focus = false, param = null } = {}) {
   }
 
   const routeKey = `${view}/${param ?? ''}`;
+
+  // The scoreboard polls ESPN on a timer. Leaving the view must stop it —
+  // otherwise it keeps firing forever against a hidden panel.
+  if (view !== 'live' && currentRoute?.startsWith('live')) stopLivePolling();
+
   if (routeKey !== currentRoute) {
     try {
       RENDERERS[view](param === null ? undefined : Number(param));

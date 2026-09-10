@@ -14,6 +14,12 @@
 # the second line of the same defence. Keep the two in sync; widening one
 # without the other either breaks images or removes the guard.
 #
+# `connect-src` names one host for the same reason: site.api.espn.com is
+# ESPN's public scoreboard, fetched in the browser rather than at build time
+# because scores move by the minute and the build runs every few hours. It is a
+# read-only GET of public data, and no credentials go with it — the league
+# cookies live only in the Node fetcher and never reach the page.
+#
 # style-src allows 'unsafe-inline' because the app sets a few styles inline
 # (the money progress bar width, some spacing). That is the weakest line here
 # and it is deliberate: script-src stays locked to 'self', which is what
@@ -25,7 +31,7 @@
   X-Frame-Options: DENY
   Referrer-Policy: no-referrer
   Permissions-Policy: geolocation=(), microphone=(), camera=(), interest-cohort=()
-  Content-Security-Policy: default-src 'self'; img-src 'self' data: https://a.espncdn.com https://g.espncdn.com https://i.espncdn.com https://s.espncdn.com https://secure.espncdn.com; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'self'; img-src 'self' data: https://a.espncdn.com https://g.espncdn.com https://i.espncdn.com https://s.espncdn.com https://secure.espncdn.com; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://site.api.espn.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
 
 # League data is regenerated on every push; never let a stale week be cached.
 /data/*
