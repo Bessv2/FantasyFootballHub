@@ -1,9 +1,13 @@
 name: Build
 
+# Validates that the site still builds and its tests still pass on every push
+# and PR. This does NOT talk to ESPN — that requires the ESPN_S2/ESPN_SWID
+# secrets that only the scheduled "Update league data" workflow (update.yml)
+# has, and re-fetching live league data on every push would just duplicate
+# that job. Instead this builds from the committed synthetic fixtures, which
+# exercises the exact same build.mjs code path without any network access.
+
 on:
-  schedule:
-    - cron: '03 3 * * *'      # 11:59 PM UTC-4 (3:59 AM UTC)
-    - cron: '03 15 * * *'     # 11:59 AM UTC-4 (3:59 PM UTC)
   push:
     branches: [ main ]
   pull_request:
@@ -14,15 +18,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
-    
+    - uses: actions/checkout@v4
+
     - name: Setup Node.js
-      uses: actions/setup-node@v3
+      uses: actions/setup-node@v4
       with:
-        node-version: 'latest'
-    
+        node-version: '22'
+
     - name: Install dependencies
       run: npm install
-    
-    - name: Fetch data and build
-      run: npm run update
+
+    - name: Build from fixtures
+      run: npm run fixtures
+
+    - name: Run tests
+      run: npm test
