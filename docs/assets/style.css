@@ -12,6 +12,11 @@
    (never one colour per team — 12 teams exceeds any CVD-safe categorical set,
    and identity isn't the job), bars capped at 24px with a 4px rounded data-end
    squared at the baseline, and text in ink tokens rather than the data colour.
+
+   The one exception is the season points-for line chart: "which team" IS the
+   job there, so it gets a categorical palette (--cat-0..11). Colour still
+   isn't the only channel — every line ends in a text label and has a legend
+   entry with the full team name — it just isn't the ONLY rule anymore.
    ========================================================================== */
 
 /* --- Tokens -------------------------------------------------------------- */
@@ -52,6 +57,21 @@
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
 
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.18);
+
+  /* Categorical palette for the points-line chart only — see the note at the
+     top of this file. Tuned light enough to read against --bg-raised. */
+  --cat-0: hsl(210 85% 65%);
+  --cat-1: hsl(25 90% 60%);
+  --cat-2: hsl(150 60% 50%);
+  --cat-3: hsl(0 75% 65%);
+  --cat-4: hsl(280 65% 70%);
+  --cat-5: hsl(190 70% 55%);
+  --cat-6: hsl(45 85% 60%);
+  --cat-7: hsl(320 65% 68%);
+  --cat-8: hsl(95 55% 55%);
+  --cat-9: hsl(255 55% 70%);
+  --cat-10: hsl(15 70% 60%);
+  --cat-11: hsl(170 50% 55%);
 }
 
 @media (prefers-color-scheme: light) {
@@ -81,6 +101,19 @@
     --warn-dim: #fdf1d6;
 
     --shadow: 0 1px 2px rgba(16, 23, 30, 0.06), 0 4px 16px rgba(16, 23, 30, 0.06);
+
+    --cat-0: hsl(210 80% 42%);
+    --cat-1: hsl(25 85% 42%);
+    --cat-2: hsl(150 65% 30%);
+    --cat-3: hsl(0 70% 45%);
+    --cat-4: hsl(280 55% 45%);
+    --cat-5: hsl(190 75% 32%);
+    --cat-6: hsl(45 90% 35%);
+    --cat-7: hsl(320 60% 42%);
+    --cat-8: hsl(95 45% 32%);
+    --cat-9: hsl(255 50% 48%);
+    --cat-10: hsl(15 70% 38%);
+    --cat-11: hsl(170 55% 30%);
   }
 }
 
@@ -106,6 +139,18 @@
   --warn: #8a5a00;
   --warn-dim: #fdf1d6;
   --shadow: 0 1px 2px rgba(16, 23, 30, 0.06), 0 4px 16px rgba(16, 23, 30, 0.06);
+  --cat-0: hsl(210 80% 42%);
+  --cat-1: hsl(25 85% 42%);
+  --cat-2: hsl(150 65% 30%);
+  --cat-3: hsl(0 70% 45%);
+  --cat-4: hsl(280 55% 45%);
+  --cat-5: hsl(190 75% 32%);
+  --cat-6: hsl(45 90% 35%);
+  --cat-7: hsl(320 60% 42%);
+  --cat-8: hsl(95 45% 32%);
+  --cat-9: hsl(255 50% 48%);
+  --cat-10: hsl(15 70% 38%);
+  --cat-11: hsl(170 55% 30%);
 }
 
 @media (prefers-contrast: more) {
@@ -627,3 +672,157 @@ body.beer-sheet-mode #beer-sheet { display: block; }
   .beer-sheet__page + .beer-sheet__page { page-break-before: always; }
   .beer-sheet__page tr { page-break-inside: avoid; }
 }
+
+/* --- Charts ---------------------------------------------------------------
+   Hand-rolled SVG, no library. See the note at the top of this file on why
+   the line chart alone gets a categorical (--cat-*) palette. */
+
+.chart { width: 100%; }
+.chart-svg {
+  display: block; width: 100%; height: auto;
+  font-size: 11px; font-family: var(--font);
+}
+
+.chart-axis { stroke: var(--border-strong); stroke-width: 1; }
+.chart-gridline { stroke: var(--border); stroke-width: 1; }
+.chart-axis-label { fill: var(--text-dim); font-variant-numeric: tabular-nums; }
+
+/* --- Points-for line chart: one colour per team, backed by text -------- */
+.chart-line {
+  fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round;
+  transition: opacity 0.15s, stroke-width 0.15s;
+}
+.chart-point { transition: opacity 0.15s; }
+.chart-endlabel text {
+  font-weight: 600; font-size: 11px;
+  transition: opacity 0.15s;
+}
+.chart-line.is-dim, .chart-point.is-dim, .chart-endlabel.is-dim { opacity: 0.15; }
+
+/* A hovered line also thickens, so the highlight doesn't rely purely on
+   everything else dimming around it — a second, non-colour channel. */
+.chart-line:hover { stroke-width: 3; }
+
+/* Line and point share a hue but not a property: a <path> takes its colour
+   on `stroke` (fill must stay none, or the browser floods the area the line
+   encloses), a <circle> and a legend swatch take it on `fill`. Two rules per
+   hue, deliberately, rather than one rule that sets both and silently wins
+   over the `fill="none"` a <path> needs. */
+.chart-line.cat-0  { stroke: var(--cat-0); }
+.chart-line.cat-1  { stroke: var(--cat-1); }
+.chart-line.cat-2  { stroke: var(--cat-2); }
+.chart-line.cat-3  { stroke: var(--cat-3); }
+.chart-line.cat-4  { stroke: var(--cat-4); }
+.chart-line.cat-5  { stroke: var(--cat-5); }
+.chart-line.cat-6  { stroke: var(--cat-6); }
+.chart-line.cat-7  { stroke: var(--cat-7); }
+.chart-line.cat-8  { stroke: var(--cat-8); }
+.chart-line.cat-9  { stroke: var(--cat-9); }
+.chart-line.cat-10 { stroke: var(--cat-10); }
+.chart-line.cat-11 { stroke: var(--cat-11); }
+
+.chart-point.cat-0  { fill: var(--cat-0); }
+.chart-point.cat-1  { fill: var(--cat-1); }
+.chart-point.cat-2  { fill: var(--cat-2); }
+.chart-point.cat-3  { fill: var(--cat-3); }
+.chart-point.cat-4  { fill: var(--cat-4); }
+.chart-point.cat-5  { fill: var(--cat-5); }
+.chart-point.cat-6  { fill: var(--cat-6); }
+.chart-point.cat-7  { fill: var(--cat-7); }
+.chart-point.cat-8  { fill: var(--cat-8); }
+.chart-point.cat-9  { fill: var(--cat-9); }
+.chart-point.cat-10 { fill: var(--cat-10); }
+.chart-point.cat-11 { fill: var(--cat-11); }
+
+.chart-endlabel.cat-0  text { fill: var(--cat-0); }
+.chart-endlabel.cat-1  text { fill: var(--cat-1); }
+.chart-endlabel.cat-2  text { fill: var(--cat-2); }
+.chart-endlabel.cat-3  text { fill: var(--cat-3); }
+.chart-endlabel.cat-4  text { fill: var(--cat-4); }
+.chart-endlabel.cat-5  text { fill: var(--cat-5); }
+.chart-endlabel.cat-6  text { fill: var(--cat-6); }
+.chart-endlabel.cat-7  text { fill: var(--cat-7); }
+.chart-endlabel.cat-8  text { fill: var(--cat-8); }
+.chart-endlabel.cat-9  text { fill: var(--cat-9); }
+.chart-endlabel.cat-10 text { fill: var(--cat-10); }
+.chart-endlabel.cat-11 text { fill: var(--cat-11); }
+
+.chart-legend {
+  display: flex; flex-wrap: wrap; gap: 0.4rem;
+  margin-top: 0.85rem; padding-top: 0.85rem; border-top: 1px solid var(--border);
+}
+.chart-legend__item {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  background: var(--bg-sunken); border: 1px solid var(--border); border-radius: 999px;
+  padding: 0.3rem 0.65rem 0.3rem 0.5rem; font-size: 0.78rem; color: var(--text-muted);
+  cursor: pointer; line-height: 1.2;
+}
+.chart-legend__item:hover, .chart-legend__item.is-active { border-color: var(--border-strong); color: var(--text); }
+.chart-legend__item[aria-pressed="true"] { background: var(--bg-hover); color: var(--text); font-weight: 600; }
+.chart-legend__swatch {
+  width: 0.65rem; height: 0.65rem; border-radius: 50%; flex: none;
+  background: currentColor;
+}
+.chart-legend__item.cat-0  .chart-legend__swatch,
+.chart-legend__item.cat-1  .chart-legend__swatch,
+.chart-legend__item.cat-2  .chart-legend__swatch,
+.chart-legend__item.cat-3  .chart-legend__swatch,
+.chart-legend__item.cat-4  .chart-legend__swatch,
+.chart-legend__item.cat-5  .chart-legend__swatch,
+.chart-legend__item.cat-6  .chart-legend__swatch,
+.chart-legend__item.cat-7  .chart-legend__swatch,
+.chart-legend__item.cat-8  .chart-legend__swatch,
+.chart-legend__item.cat-9  .chart-legend__swatch,
+.chart-legend__item.cat-10 .chart-legend__swatch,
+.chart-legend__item.cat-11 .chart-legend__swatch { color: inherit; }
+.chart-legend__item.cat-0  { color: var(--cat-0); }
+.chart-legend__item.cat-1  { color: var(--cat-1); }
+.chart-legend__item.cat-2  { color: var(--cat-2); }
+.chart-legend__item.cat-3  { color: var(--cat-3); }
+.chart-legend__item.cat-4  { color: var(--cat-4); }
+.chart-legend__item.cat-5  { color: var(--cat-5); }
+.chart-legend__item.cat-6  { color: var(--cat-6); }
+.chart-legend__item.cat-7  { color: var(--cat-7); }
+.chart-legend__item.cat-8  { color: var(--cat-8); }
+.chart-legend__item.cat-9  { color: var(--cat-9); }
+.chart-legend__item.cat-10 { color: var(--cat-10); }
+.chart-legend__item.cat-11 { color: var(--cat-11); }
+.chart-legend__reset {
+  background: none; border: 1px dashed var(--border-strong); border-radius: 999px;
+  padding: 0.3rem 0.65rem; font-size: 0.78rem; color: var(--text-dim); cursor: pointer;
+}
+.chart-legend__reset:hover { color: var(--text); }
+
+/* --- Points-differential bar chart: HTML/CSS, good/bad, same pair as
+   everywhere else on the site. Grid, not SVG, so long team names reflow
+   instead of colliding with the bar or running off the edge. */
+.chart--diffbars { display: flex; flex-direction: column; gap: 0.4rem; }
+.diffrow {
+  display: grid; grid-template-columns: minmax(6rem, 11rem) 1fr auto;
+  align-items: center; gap: 0.6rem;
+}
+.diffrow__name {
+  font-size: 0.86rem; color: var(--text-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.diffrow__track {
+  position: relative; height: 10px;
+  background: var(--bg-sunken); border-radius: 3px;
+}
+/* The zero line: a real element, not implied by two bars meeting, so it
+   stays visible even on a row where every bar is tiny. */
+.diffrow__track::before {
+  content: ''; position: absolute; left: 50%; top: -3px; bottom: -3px;
+  width: 1px; background: var(--border-strong);
+}
+.diffrow__fill { position: absolute; top: 0; height: 100%; border-radius: 2px; }
+.diffrow__fill.fill-right { left: 50%; }
+.diffrow__fill.fill-left { right: 50%; }
+.diffrow__fill.is-good { background: var(--good); }
+.diffrow__fill.is-bad { background: var(--bad); }
+.diffrow__value {
+  font-variant-numeric: tabular-nums; font-size: 0.86rem; font-weight: 700;
+  min-width: 3.4rem; text-align: right;
+}
+.diffrow__value.is-good { color: var(--good); }
+.diffrow__value.is-bad { color: var(--bad); }

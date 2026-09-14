@@ -1,5 +1,6 @@
 import { createMockDraft, advanceToUser, makePick, gradeDraft, rosterNeeds } from './mock.js';
 import { fetchScoreboard, attachRoster, hasLiveGames } from './live.js';
+import { pointsLineChart, pointDiffChart } from './charts.js';
 
 /**
  * Fantasy Football Hub — client.
@@ -559,6 +560,17 @@ function renderOverview() {
       </li>
     </ul>`);
 
+  // --- Season points chart ------------------------------------------------
+  // Same gate as power rankings: nothing to plot before Week 1 finishes.
+  const teamWeeks = state.season?.teamWeeks ?? [];
+  if (teamWeeks.length) {
+    parts.push(`
+      <div class="card" style="margin-bottom:1.5rem">
+        <h3>Points for, every week</h3>
+        ${pointsLineChart(teamWeeks, hub.teams, league.regularSeasonWeeks)}
+      </div>`);
+  }
+
   // --- Power rankings, or the season roadmap ----------------------------
   if (power.length) {
     const maxPower = Math.max(...power.map((t) => t.powerScore), 1);
@@ -667,6 +679,8 @@ function renderStandings() {
 
   const maxPF = Math.max(...standings.map((t) => t.pointsFor), 1);
 
+  const diffChart = pointDiffChart(standings);
+
   const rows = standings
     .map(
       (t) => `
@@ -686,6 +700,15 @@ function renderStandings() {
     .join('');
 
   $('#standings-body').innerHTML = `
+    ${diffChart ? `
+    <div class="card" style="margin-bottom:1.5rem">
+      <h3>Points for, minus points against</h3>
+      <p class="view__intro" style="margin-top:-0.3rem">
+        A team can lose games and still run a positive differential — that's the
+        <strong>Luck</strong> column, expressed as points instead of wins.
+      </p>
+      ${diffChart}
+    </div>` : ''}
     <div class="table-scroll">
       <table>
         <caption>
