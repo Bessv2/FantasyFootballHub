@@ -545,7 +545,7 @@ function renderOverview() {
       </li>
       <li class="stat">
         <span class="stat__label">Scoring</span>
-        <span class="stat__value">${league.isPPR ? 'PPR' : 'Standard'}</span>
+        <span class="stat__value">${esc(league.scoringLabel ?? (league.isPPR ? 'PPR' : 'Standard'))}</span>
         <span class="stat__note">${esc(starterCount(league))} starters${isSuperflex(league) ? ' · superflex' : ''}</span>
       </li>
       <li class="stat">
@@ -2713,7 +2713,7 @@ async function boot() {
 
     $('#league-name').textContent = hub.league.displayName ?? hub.league.name;
     $('#league-sub').textContent =
-      `${hub.league.season} · ${hub.league.size} teams · ${hub.league.isPPR ? 'PPR' : 'Standard'}`;
+      `${hub.league.season} · ${hub.league.size} teams · ${hub.league.scoringLabel ?? (hub.league.isPPR ? 'PPR' : 'Standard')}`;
     document.title = `${hub.league.displayName ?? hub.league.name} — Fantasy Football Hub`;
 
     const timeEl = $('#generated-at');

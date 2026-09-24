@@ -436,7 +436,7 @@ export function normalizeSeason(raw) {
       season: league?.seasonId,
       size: settings.size ?? teams.length,
       scoringType: settings.scoringSettings?.scoringType ?? null,
-      isPPR: settings.scoringSettings?.playerRankType === 'PPR',
+      ...receptionScoring(settings.scoringSettings),
       regularSeasonWeeks: settings.scheduleSettings?.matchupPeriodCount ?? 14,
       playoffTeams: settings.scheduleSettings?.playoffTeamCount ?? 6,
       playoffSeedingRule: settings.scheduleSettings?.playoffSeedingRule ?? null,
@@ -474,4 +474,30 @@ export function normalizeSeason(raw) {
     freeAgents,
     playerCount: playerIndex.size,
   };
+}
+
+/**
+ * How many points a reception is worth, read from the league's actual scoring
+ * rules. `playerRankType` is only the default ranking list ESPN shows in the
+ * draft room — it does not reflect custom scoring, and for Roe League it comes
+ * back as something other than 'PPR' even though receptions score a point.
+ * Scoring item statId 53 is receptions.
+ */
+export function receptionScoring(scoringSettings) {
+  const items = scoringSettings?.scoringItems;
+  let ppr = null;
+  if (Array.isArray(items)) {
+    const rec = items.find((i) => i.statId === 53);
+    ppr = rec ? Number(rec.points) || 0 : 0;
+  } else if (scoringSettings?.playerRankType) {
+    const t = scoringSettings.playerRankType;
+    ppr = t === 'PPR' ? 1 : t === 'HALF_PPR' || t === 'HALFPPR' ? 0.5 : 0;
+  }
+  const scoringLabel =
+    ppr == null ? null
+    : ppr === 0 ? 'Standard'
+    : ppr === 1 ? 'PPR'
+    : ppr === 0.5 ? 'Half PPR'
+    : `${ppr} PPR`;
+  return { isPPR: (ppr ?? 0) > 0, pointsPerReception: ppr, scoringLabel };
 }

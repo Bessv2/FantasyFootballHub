@@ -142,7 +142,7 @@ describe('optimalLineup', () => {
     assert.equal(result.points, 69);
   });
 
-  test("Roe Leauge's actual superflex roster picks the second QB for the OP slot", () => {
+  test("Roe League's actual superflex roster picks the second QB for the OP slot", () => {
     // The real league starts 1 QB / 2 RB / 2 WR / 1 TE / 1 OP / 1 D-ST / 1 K.
     // Slot 7 (OP) accepts a QB, so a second quarterback outscoring every flex
     // option must be started there. Only one overlapping slot type exists, so

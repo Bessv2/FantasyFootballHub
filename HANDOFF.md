@@ -16,7 +16,7 @@ the way they are.
 
 | | |
 | --- | --- |
-| League | **Roe Leauge**, ESPN id `274568741` |
+| League | **Roe League**, ESPN id `274568741` |
 | Format | **10 teams**, PPR, **superflex** (ESPN OP slot), 16-round snake |
 | Lineup | 1 QB, 2 RB, 2 WR, 1 TE, **1 OP**, 1 D/ST, 1 K + 7 bench, 2 IR — **9 starters** |
 | Season | 13 regular-season weeks, 8 playoff teams |

@@ -451,7 +451,7 @@ const league = {
   members,
   teams,
   settings: {
-    name: 'Roe Leauge',
+    name: 'Roe League',
     size: TEAM_COUNT,
     draftSettings: { type: 'SNAKE', timePerSelection: 90, auctionBudget: 200, keeperCount: 0,
       draftDate: Date.UTC(2026, 8, 5, 23, 0) },
@@ -464,7 +464,8 @@ const league = {
     rosterSettings: {
       lineupSlotCounts: { 0: 1, 2: 2, 4: 2, 6: 1, 16: 1, 17: 1, 20: 7, 21: 1, 23: 1 },
     },
-    scoringSettings: { scoringType: 'H2H_POINTS', playerRankType: 'PPR' },
+    scoringSettings: { scoringType: 'H2H_POINTS', playerRankType: 'STANDARD',
+      scoringItems: [{ statId: 53, points: 1 }, { statId: 42, points: 0.1 }] },
   },
   status: {
     isActive: true,

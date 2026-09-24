@@ -1,4 +1,4 @@
-# Roe Leauge — Fantasy Football Hub
+# Roe League — Fantasy Football Hub
 
 League stats, draft analysis, trades, side prizes, and the money ledger for ESPN
 league `274568741`, as a static site your whole league can open on a phone.
@@ -396,7 +396,7 @@ These cookies expire every few months. When `npm run fetch` starts returning
 {
   "leagueId": 274568741,
   "seasons": [2026],        // add years as the league ages
-  "leagueName": "Roe Leauge",
+  "leagueName": "Roe League",
   "site": { "showMoney": true }
 }
 ```
