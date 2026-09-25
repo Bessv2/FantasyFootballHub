@@ -14,7 +14,7 @@
  * assertions stay stable.
  */
 
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { projectRoot } from './lib/espn.mjs';
 
@@ -25,6 +25,13 @@ const SEED = 20260905;
 const TEAM_COUNT = 12;
 const ROUNDS = 16;
 const REGULAR_WEEKS = 14;
+// `--played=N` stops the synthetic season after Week N: box scores exist only
+// for Weeks 1-N and the rest are on the schedule, unplayed. Mid-season is the
+// only state where the playoff-odds card has anything to show.
+const PLAYED_ARG = process.argv.find((a) => a.startsWith('--played='));
+const PLAYED_WEEKS = PLAYED_ARG
+  ? Math.max(0, Math.min(REGULAR_WEEKS, parseInt(PLAYED_ARG.split('=')[1], 10) || 0))
+  : REGULAR_WEEKS;
 
 /** Deterministic PRNG (mulberry32) so fixtures are reproducible. */
 function rng(seed) {
@@ -471,10 +478,10 @@ const league = {
     isActive: true,
     isFull: true,
     teamsJoined: TEAM_COUNT,
-    currentMatchupPeriod: REGULAR_WEEKS,
+    currentMatchupPeriod: PLAYED_WEEKS,
     firstScoringPeriod: 1,
     finalScoringPeriod: 17,
-    latestScoringPeriod: REGULAR_WEEKS,
+    latestScoringPeriod: PLAYED_WEEKS,
     previousSeasons: [],
     activatedDate: Date.UTC(2026, 7, 11),
   },
@@ -495,9 +502,23 @@ await writeJson(
 );
 await writeJson(path.join(OUT, 'transactions.json'), { transactions });
 await writeJson(path.join(OUT, 'activity.json'), { topics: tradeTopics });
+// Cleared first so a --played run after a full one leaves no stale weeks behind.
+await rm(path.join(OUT, 'weeks'), { recursive: true, force: true });
 for (const { week, data } of weekFiles) {
+  if (week > PLAYED_WEEKS) continue;
   await writeJson(path.join(OUT, 'weeks', `${week}.json`), data);
 }
+// The whole season's grid, as mMatchupScore returns it: no rosters, and the
+// unplayed weeks carry no points and an UNDECIDED winner.
+await writeJson(path.join(OUT, 'schedule.json'), {
+  schedule: weekFiles.flatMap(({ week, data }) =>
+    data.schedule.map(({ home, away, ...game }) => week <= PLAYED_WEEKS
+      ? { ...game, home: { teamId: home.teamId, totalPoints: home.totalPoints },
+          away: { teamId: away.teamId, totalPoints: away.totalPoints } }
+      : { ...game, winner: 'UNDECIDED', home: { teamId: home.teamId, totalPoints: 0 },
+          away: { teamId: away.teamId, totalPoints: 0 } })
+  ),
+});
 // ---------------------------------------------------------------------------
 // Current rosters + free agents, for the roster advisor
 // ---------------------------------------------------------------------------

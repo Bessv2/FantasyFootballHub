@@ -266,6 +266,32 @@ file **deletes the local copy** on an existing checkout: restore it with
 `git show 0229666:config/money.json > config/money.json` (the last `main`
 commit before the split).
 
+**Playoff odds are a seeded Monte Carlo, and the seeding is load-bearing.**
+`scripts/lib/odds.mjs` plays out every remaining regular-season game 10,000
+times (≈0.1 s) with each team's score drawn from a normal fitted to its decided
+games, shrunk toward the league mean with `SHRINK_K = 4` (equal weight after
+four weeks; the comment explains why). Seeds are ranked with
+`compareStandings()` — the same comparator `computeStandings()` uses, extracted
+rather than copied, and a test pins that zero remaining games reproduces the
+real standings exactly. The generator is the challenges' mulberry32, seeded on
+`roe-playoff-odds:{season}:{weeksPlayed}`, so repeated builds on the same data
+publish the same numbers instead of jittering by a tenth every three hours.
+Percentages are capped at 99.9 / 0.1 unless *every* run agreed: 9,996 of
+10,000 is not a clinch.
+
+- The remaining schedule comes from a new `schedule.json` (`mMatchupScore`,
+  whole season) — box scores only exist for played weeks. **That payload shape is
+  modelled, not observed**; if `schedule.json` is missing or incomplete,
+  `computePlayoffOdds()` returns null rather than simulating half a season.
+- The newest week counts only once ESPN names a winner. While it is UNDECIDED
+  (Thursday to Monday) it is simulated from scratch, not half-counted.
+- `playoffOdds` is null before Week 1 and after the regular season; the card
+  renders nothing then.
+- `node scripts/fixtures.mjs --played=6 && node scripts/build.mjs --fixtures`
+  builds a mid-season state so the card has something to show (not
+  `npm run fixtures -- --played=6`: npm hands the flag to the build, not the
+  generator). Restore `docs/data` afterwards.
+
 **The link-preview image is a static PNG, not generated per build.**
 `docs/assets/og.png` (1200×630) is referenced by absolute URL from the Open
 Graph tags in `docs/index.html` — chat apps will not resolve a relative one.
@@ -516,8 +542,6 @@ and the coaching report all light up on their own.
 - **Challenge cadence is weekly-or-biweekly only.** `buildChallengeSchedule`
   takes a `step`, so "every third week" is a one-line change, but the config
   vocabulary does not expose it.
-- **No playoff odds simulation.** The scaffolding is there (`computeAllPlay`,
-  schedule data) but a Monte Carlo over the remaining schedule was never built.
 - **Trade analysis is descriptive only.** It lists what moved; it does not
   attribute post-trade points to each side. `buildPlayerSeasonPoints()` plus
   trade dates would make that straightforward.

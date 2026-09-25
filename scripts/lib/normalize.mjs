@@ -262,6 +262,27 @@ function normalizeWeeks(rawWeeks, playerIndex) {
   return out;
 }
 
+/**
+ * The whole season's matchup grid, played or not — the only place the
+ * *remaining* schedule exists. Box scores are fetched per played week, so
+ * without this nothing downstream knows who plays whom in Week 12.
+ *
+ * `winner` is ESPN's own verdict: HOME / AWAY / TIE once a matchup period is
+ * final, UNDECIDED before and during it.
+ */
+export function normalizeSchedule(rawSchedule) {
+  return (Array.isArray(rawSchedule) ? rawSchedule : [])
+    .filter((game) => game?.home || game?.away)
+    .map((game) => ({
+      week: game.matchupPeriodId,
+      homeTeamId: game.home?.teamId ?? null,
+      awayTeamId: game.away?.teamId ?? null,
+      playoffTierType: game.playoffTierType ?? 'NONE',
+      winner: game.winner ?? 'UNDECIDED',
+    }))
+    .filter((game) => Number.isInteger(game.week));
+}
+
 function normalizeTransactions(rawTransactions, playerIndex, teams) {
   const teamById = new Map(teams.map((t) => [t.id, t]));
 
@@ -415,6 +436,9 @@ export function normalizeSeason(raw) {
   const weeks = normalizeWeeks(raw.weeks ?? [], playerIndex);
   const transactions = normalizeTransactions(rawTx, playerIndex, teams);
   const trades = normalizeTrades(rawActivity, playerIndex, teams);
+  // schedule.json is its own fetch; older caches only have whatever the
+  // league payload happened to carry.
+  const schedule = normalizeSchedule(raw.schedule?.schedule ?? league?.schedule);
 
   const slotCounts = settings.rosterSettings?.lineupSlotCounts ?? {};
   const startingSlots = Object.entries(slotCounts)
@@ -469,6 +493,7 @@ export function normalizeSeason(raw) {
     teams,
     draft,
     weeks,
+    schedule,
     transactions,
     trades,
     adviceWeek,

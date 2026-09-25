@@ -169,6 +169,20 @@ async function fetchSeason(client, season) {
   }
   log(`  box scores: ${fetched} fetched, ${cached} from cache`);
 
+  // ---- Full-season schedule ---------------------------------------------
+  // Box scores only exist for weeks already played. The playoff-odds
+  // simulation needs who plays whom in every remaining week, and that is only
+  // in the league's schedule. One request, no rosters, refreshed every run
+  // because ESPN fills in the playoff bracket as the season goes.
+  try {
+    const schedule = await client.getView(season, ['mMatchupScore']);
+    await writeJson(path.join(dir, 'schedule.json'), { schedule: schedule.schedule ?? [] });
+    log(`  schedule: ${schedule.schedule?.length ?? 0} matchups`);
+  } catch (error) {
+    log(`  schedule: unavailable (${error.message}) — playoff odds will be skipped`);
+  }
+  await sleep(POLITE_DELAY_MS);
+
   // ---- Current rosters + free agents (for the roster advisor) -----------
   // The week to advise on is the next one that has not been played. Fetching
   // rosters with that scoringPeriodId is what makes ESPN return projections for

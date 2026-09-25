@@ -666,6 +666,88 @@ function seasonRoadmap() {
     </div>`;
 }
 
+/** A probability as text. The build caps unproven certainties at 99.9 / 0.1. */
+const oddsPct = (p) => (p === 100 || p === 0 ? `${p}%` : `${Number(p).toFixed(1)}%`);
+
+const WORD_COUNTS = ['Zero', 'One', 'Two', 'Three', 'Four', 'Five', 'Six'];
+
+/**
+ * Playoff odds from the build-time simulation. Renders nothing when the build
+ * emitted null (before Week 1, after the regular season, or with no schedule).
+ */
+function renderPlayoffOdds(odds, teams) {
+  if (!odds?.teams?.length) return '';
+  const logoOf = new Map((teams ?? []).map((t) => [t.id, t.logo ?? null]));
+  const seeds = odds.teams.length;
+
+  const watch = (odds.bottomWatch ?? [])
+    .map((id) => odds.teams.find((t) => t.teamId === id))
+    .filter(Boolean);
+  const watchTitle = `Bottom ${WORD_COUNTS[watch.length] ?? watch.length} Watch`;
+
+  const strip = (t) => {
+    const probs = Array.from({ length: seeds }, (_, i) => t.seedPct[i + 1] ?? 0);
+    const likeliest = probs.indexOf(Math.max(...probs)) + 1;
+    const label = `Most likely seed ${likeliest} (${oddsPct(probs[likeliest - 1])}). ` +
+      probs.map((p, i) => `Seed ${i + 1}: ${oddsPct(p)}`).join(', ');
+    return `
+      <span class="seedstrip" role="img" aria-label="${esc(label)}" title="${esc(label)}"
+            style="grid-template-columns:repeat(${seeds},1fr)">
+        ${probs.map((p, i) => `<span class="${i < odds.playoffTeams ? '' : 'is-out'}"
+            style="opacity:${(0.12 + 0.88 * (p / 100)).toFixed(3)}"></span>`).join('')}
+      </span>
+      <small class="seedstrip__note">likeliest #${esc(likeliest)}</small>`;
+  };
+
+  const rows = odds.teams.map((t) => `
+      <tr class="${t.currentRank === odds.playoffTeams ? 'playoff-cut' : ''}">
+        <td class="num rank">${esc(t.currentRank)}</td>
+        <th scope="row" class="row-team">${teamCell({ teamName: t.teamName, logo: logoOf.get(t.teamId) }, t.managerName ?? '')}</th>
+        <td class="num">${esc(t.wins)}-${esc(t.losses)}${t.ties ? `-${esc(t.ties)}` : ''}</td>
+        <td class="bar-cell">${bar(t.makePlayoffsPct, 100, { digits: 1, suffix: '%' })}</td>
+        <td class="num">${esc(oddsPct(t.missPlayoffsPct))}</td>
+        <td class="num">${esc(oddsPct(t.topSeedPct))}</td>
+        <td class="num">${num(t.projectedWins, 1)}</td>
+        <td>${strip(t)}</td>
+      </tr>`).join('');
+
+  const g = odds.generatedFrom ?? {};
+  return `
+    <div class="card" style="margin-bottom:1.5rem">
+      <h3>Playoff odds</h3>
+      <p class="view__intro" style="margin-top:-0.3rem">
+        ${esc(Number(odds.simulations).toLocaleString())} simulations of the
+        ${esc(g.remainingGames)} regular-season games left, fitted to scores through
+        Week ${esc(g.throughWeek)}. Top ${esc(odds.playoffTeams)} make it. Early in the
+        season every team's scoring is pulled toward the league average, so one big
+        week doesn't read as a lock.
+      </p>
+      ${watch.length ? `
+      <div class="odds-watch">
+        <span class="pill pill--warn">${esc(watchTitle)}</span>
+        <p>${watch.map((t) => `<strong>${esc(t.teamName)}</strong> misses in ${esc(oddsPct(t.missPlayoffsPct))} of runs`).join('; ')}.</p>
+      </div>` : ''}
+      <div class="table-scroll">
+        <table>
+          <caption>Sorted by current rank. The rule below rank ${esc(odds.playoffTeams)} marks the playoff cut.</caption>
+          <thead>
+            <tr>
+              <th scope="col" class="num">#</th>
+              <th scope="col">Team</th>
+              <th scope="col" class="num">Record</th>
+              <th scope="col" class="bar-cell">Make playoffs</th>
+              <th scope="col" class="num">Miss</th>
+              <th scope="col" class="num"><abbr title="Chance of finishing as the number 1 seed">#1 seed</abbr></th>
+              <th scope="col" class="num"><abbr title="Average final win total across simulations">Proj. W</abbr></th>
+              <th scope="col"><abbr title="Chance of each final seed, 1 on the left. Blue seeds make the playoffs, red miss.">Seed spread</abbr></th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
 function renderStandings() {
   const { standings, league } = state.hub;
   if (!standings.length || standings.every((t) => t.gamesPlayed === 0)) {
@@ -700,6 +782,7 @@ function renderStandings() {
     .join('');
 
   $('#standings-body').innerHTML = `
+    ${renderPlayoffOdds(state.hub.playoffOdds, state.hub.teams)}
     ${diffChart ? `
     <div class="card" style="margin-bottom:1.5rem">
       <h3>Points for, minus points against</h3>

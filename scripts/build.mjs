@@ -31,6 +31,7 @@ import { sanitizeTeamLogo } from './lib/images.mjs';
 import { buildPlayerCards, normalizeNews } from './lib/playercard.mjs';
 import { recommendLineup, coachingReport, waiverTargets } from './lib/advisor.mjs';
 import { buildBigBoard } from './lib/bigboard.mjs';
+import { computePlayoffOdds } from './lib/odds.mjs';
 
 const ROOT = projectRoot();
 const args = process.argv.slice(2);
@@ -83,6 +84,7 @@ async function loadSeasonRaw(season) {
     freeAgents: await readJson(path.join(dir, 'freeagents.json')),
     draftPool: await readJson(path.join(dir, 'draftpool.json')),
     news: await readJson(path.join(dir, 'news.json')),
+    schedule: await readJson(path.join(dir, 'schedule.json')),
     weeks,
   };
 }
@@ -105,6 +107,10 @@ function buildSeason(raw, moneyConfig) {
   const positional = computePositionalStats(teamWeeks, teamStats);
   const draft = analyzeDraft(season);
 
+  const oddsStart = performance.now();
+  const playoffOdds = computePlayoffOdds(season);
+  const oddsMs = Math.round(performance.now() - oddsStart);
+
   const playerCards = buildPlayerCards({
     players: playerObjectsFor(raw),
     seasonId: season.league.season,
@@ -125,6 +131,7 @@ function buildSeason(raw, moneyConfig) {
   return {
     season, teamWeeks, teamStats, standings, power, prizes,
     weeklyHigh, positional, draft, ledger, teamDetail, challenges, playerCards,
+    playoffOdds, oddsMs,
   };
 }
 
@@ -455,6 +462,8 @@ async function main() {
     weeklyHigh: current.weeklyHigh,
     positional: current.positional,
     challenges: current.challenges,
+    // null before Week 1 and after the regular season; see lib/odds.mjs.
+    playoffOdds: current.playoffOdds,
     site: config.site ?? {},
   });
 
@@ -586,6 +595,11 @@ async function main() {
   console.log(
     `  player cards      ${Object.keys(current.playerCards).length}` +
       `${current.raw.news ? '' : ' (no news fetched)'}`
+  );
+  console.log(
+    `  playoff odds      ${current.playoffOdds
+      ? `${current.playoffOdds.simulations} sims, ${current.playoffOdds.generatedFrom.remainingGames} games left (${current.oddsMs} ms)`
+      : 'none (no games yet, season over, or schedule unknown)'}`
   );
   const settled = current.challenges.weeks.filter((w) => w.winner).length;
   console.log(

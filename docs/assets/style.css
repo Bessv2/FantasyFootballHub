@@ -375,6 +375,7 @@ tr.playoff-cut td, tr.playoff-cut th { border-bottom: 2px solid var(--accent); }
   border-radius: 2px; overflow: hidden;
 }
 .bar-fill {
+  display: block;
   height: 100%; background: var(--accent);
   border-radius: 0 4px 4px 0;
 }
@@ -393,6 +394,23 @@ tr.playoff-cut td, tr.playoff-cut th { border-bottom: 2px solid var(--accent); }
 .pill--warn { background: var(--warn-dim); color: var(--warn); border-color: var(--warn); }
 .pill--neutral { background: var(--bg-sunken); color: var(--text-muted); border-color: var(--border); }
 .pill--accent { background: var(--accent-wash); color: var(--accent); border-color: var(--accent); }
+
+/* --- Playoff odds ------------------------------------------------------- */
+/* One cell per seed; opacity is the probability. Playoff seeds are accent,
+   non-playoff seeds are red, and the likeliest seed is also written out, so
+   neither colour nor opacity is the only channel. */
+.seedstrip {
+  display: inline-grid; gap: 2px; width: 9rem; height: 14px; vertical-align: middle;
+}
+.seedstrip > span { background: var(--accent); border-radius: 2px; }
+.seedstrip > span.is-out { background: var(--bad); }
+.seedstrip__note { display: block; color: var(--text-dim); font-size: 0.75rem; }
+.odds-watch {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.4rem 0.7rem;
+  margin: 0 0 1rem; padding: 0.7rem 0.9rem;
+  border: 1px solid var(--warn); border-radius: var(--radius); background: var(--warn-dim);
+}
+.odds-watch p { margin: 0; }
 
 /* --- Prize cards --------------------------------------------------------- */
 .prize {
