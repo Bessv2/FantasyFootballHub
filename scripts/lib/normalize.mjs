@@ -126,7 +126,7 @@ function normalizeRosterEntries(entries, week, playerIndex) {
   });
 }
 
-function normalizeTeams(rawTeams, members) {
+export function normalizeTeams(rawTeams, members) {
   const memberById = new Map((members ?? []).map((m) => [m.id, m]));
 
   return (rawTeams ?? []).map((team) => {
@@ -136,8 +136,10 @@ function normalizeTeams(rawTeams, members) {
       .map((id) => {
         const m = memberById.get(id);
         if (!m) return null;
-        const full = `${m.firstName ?? ''} ${m.lastName ?? ''}`.trim();
-        return full || m.displayName || null;
+        // ESPN display name only. Real first/last names are on the member
+        // profile too, but the site is public and the league never agreed to
+        // publish them.
+        return m.displayName?.trim() || null;
       })
       .filter(Boolean);
 

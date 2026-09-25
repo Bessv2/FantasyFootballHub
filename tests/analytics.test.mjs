@@ -917,7 +917,7 @@ describe('phase detection', () => {
         { id: 1, name: 'Claimed', owners: ['x'] },
         { id: 2, name: 'Team 2' },
       ],
-      members: [{ id: 'x', firstName: 'A', lastName: 'B' }],
+      members: [{ id: 'x', firstName: 'A', lastName: 'B', displayName: 'abdisplay' }],
       ...overrides.league,
     },
     draft: overrides.draft ?? { draftDetail: { picks: [] } },
@@ -962,6 +962,6 @@ describe('phase detection', () => {
 
   test('owner display names come from members, not team names', () => {
     const s = normalizeSeason(shell());
-    assert.equal(s.teams[0].managerName, 'A B');
+    assert.equal(s.teams[0].managerName, 'abdisplay');
   });
 });
