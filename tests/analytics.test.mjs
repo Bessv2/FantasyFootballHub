@@ -20,7 +20,7 @@ import {
   computeStandings,
   computePrizes,
 } from '../scripts/lib/analytics.mjs';
-import { computeLedger } from '../scripts/lib/money.mjs';
+import { computeLedger, mergeMoneyConfig } from '../scripts/lib/money.mjs';
 import { recommendLineup, coachingReport, waiverTargets } from '../scripts/lib/advisor.mjs';
 import {
   buildBigBoard,
@@ -503,7 +503,7 @@ describe('money ledger', () => {
     const barelyStarted = {
       league: { size: 12 },
       teams: [
-        { id: 1, name: "Commissioner's Team", managerName: 'Geordon Roe', isPlaceholder: false },
+        { id: 1, name: "Commissioner's Team", managerName: 'Commissioner', isPlaceholder: false },
         ...Array.from({ length: 11 }, (_, i) => ({
           id: i + 2, name: `Team ${i + 2}`, managerName: 'Unclaimed', isPlaceholder: true,
         })),
@@ -514,7 +514,7 @@ describe('money ledger', () => {
       buyIn: 50,
       payouts: { structure: [{ id: 'first', label: '1st', pct: 100 }] },
       members: [
-        { name: 'Geordon Roe', teamId: 1, paid: true },
+        { name: 'Commissioner', teamId: 1, paid: true },
         ...Array.from({ length: 9 }, (_, i) => ({ name: `Manager ${i + 2}`, paid: true })),
       ],
     };
@@ -963,5 +963,41 @@ describe('phase detection', () => {
   test('owner display names come from members, not team names', () => {
     const s = normalizeSeason(shell());
     assert.equal(s.teams[0].managerName, 'abdisplay');
+  });
+});
+
+describe('mergeMoneyConfig', () => {
+  const pot = {
+    buyIn: 75,
+    weeklyChallenge: { salt: '', overrides: { 1: 'highScore' } },
+  };
+
+  test('no private file: challenge settings survive, ledger is off', () => {
+    // The GitHub Actions build has no config/money.json. The public settings
+    // must still come through untouched so the published challenge draw is the
+    // same one a local build deals.
+    const merged = mergeMoneyConfig(pot, null);
+    assert.equal(merged.ledgerEnabled, false);
+    assert.equal(merged.buyIn, 75);
+    assert.deepEqual(merged.weeklyChallenge, pot.weeklyChallenge);
+    assert.equal(merged.members, undefined);
+  });
+
+  test('private file adds members and turns the ledger on', () => {
+    const merged = mergeMoneyConfig(pot, { members: [{ name: 'Manager 1', amountPaid: 75 }] });
+    assert.equal(merged.ledgerEnabled, true);
+    assert.equal(merged.members.length, 1);
+  });
+
+  test('the public file wins a key both define', () => {
+    // An old local money.json still carries its own weeklyChallenge. If it won,
+    // a local build could publish a different schedule (salt 'x') from CI's.
+    const merged = mergeMoneyConfig(pot, { buyIn: 50, weeklyChallenge: { salt: 'x' } });
+    assert.equal(merged.buyIn, 75);
+    assert.equal(merged.weeklyChallenge.salt, '');
+  });
+
+  test('missing public file is tolerated', () => {
+    assert.deepEqual(mergeMoneyConfig(undefined, null), { ledgerEnabled: false });
   });
 });

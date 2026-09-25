@@ -53,13 +53,13 @@ const round2 = (n) => Number(n.toFixed(2));
 // ---------------------------------------------------------------------------
 
 const MANAGERS = [
-  ['Geordon', 'Roe'], ['Marcus', 'Webb'], ['Tina', 'Alvarez'], ['Dev', 'Patel'],
+  ['Jordan', 'Reyes'], ['Marcus', 'Webb'], ['Tina', 'Alvarez'], ['Dev', 'Patel'],
   ['Sam', 'Okafor'], ['Jules', 'Bianchi'], ['Casey', 'Nakamura'], ['Ray', 'Donnelly'],
   ['Priya', 'Raman'], ['Alex', 'Kowalski'], ['Nia', 'Thompson'], ['Bo', 'Lindqvist'],
 ];
 
 const TEAM_NAMES = [
-  "Geordon's Great Team", 'Gridiron Gremlins', 'Purple Reign', 'Fourth & Long',
+  "Jordan's Great Team", 'Gridiron Gremlins', 'Purple Reign', 'Fourth & Long',
   'Hurts So Good', 'The Waiver Wire Warriors', 'Sunday Scaries', 'Pylon Pirates',
   'Check Down Charlie', 'Turf Toe Titans', 'Hail Mary Hooligans', 'Blitz Brigade',
 ];

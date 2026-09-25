@@ -8,7 +8,7 @@
  * that says "nothing has happened yet" rather than failing or inventing zeros.
  */
 
-import { mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, readdir, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 
@@ -25,7 +25,7 @@ import {
   computePositionalStats,
 } from './lib/analytics.mjs';
 import { analyzeDraft } from './lib/draft.mjs';
-import { computeLedger, computePayouts, challengePayout, splitPot } from './lib/money.mjs';
+import { computeLedger, computePayouts, challengePayout, splitPot, mergeMoneyConfig } from './lib/money.mjs';
 import { buildChallengeSchedule, computeChallenges, challengeLeaderboard } from './lib/challenges.mjs';
 import { sanitizeTeamLogo } from './lib/images.mjs';
 import { buildPlayerCards, normalizeNews } from './lib/playercard.mjs';
@@ -114,9 +114,11 @@ function buildSeason(raw, moneyConfig) {
   const challenges = buildChallenges(season, teamStats, teamWeeks, moneyConfig);
   // The ledger needs the same week list the challenges were dealt for, so the
   // pot it splits and the pot the site pays out are the same pot.
-  const ledger = computeLedger(moneyConfig, season, standings, {
-    challengeWeeks: challenges.schedule.weeks.map((w) => w.week),
-  });
+  const ledger = moneyConfig.ledgerEnabled
+    ? computeLedger(moneyConfig, season, standings, {
+        challengeWeeks: challenges.schedule.weeks.map((w) => w.week),
+      })
+    : null;
 
   const teamDetail = buildTeamDetail(season, teamStats, teamWeeks, standings, draft);
 
@@ -149,8 +151,12 @@ function buildChallenges(season, teamStats, teamWeeks, moneyConfig) {
 
   const weekNumbers = schedule.weeks.map((w) => w.week);
 
+  // expectedTeams comes from the public config/pot.json. The member list is
+  // private and absent from the published build, so counting it here would
+  // make the published payout depend on whose machine ran the build.
   const expectedPot =
-    (Number(moneyConfig.buyIn) || 0) * (moneyConfig.members?.length || season.league.size);
+    (Number(moneyConfig.buyIn) || 0) *
+    (Number(moneyConfig.expectedTeams) || moneyConfig.members?.length || season.league.size);
   const { payouts } = computePayouts(moneyConfig, expectedPot);
   const pot = Math.max(0, challengePayout(payouts, moneyConfig));
   const perWeek = new Map(splitPot(pot, weekNumbers).map((w) => [w.week, w.amount]));
@@ -390,7 +396,16 @@ async function main() {
   console.log(`\nBuilding from ${path.relative(ROOT, RAW)}\n`);
 
   const config = await readJson(path.join(ROOT, 'config', 'league.json'), {});
-  const moneyConfig = await readJson(path.join(ROOT, 'config', 'money.json'), {});
+  // config/money.json holds real names and amounts, so it is gitignored and
+  // the automated build never has it. That is a supported state: the public
+  // settings in config/pot.json still deal the challenges; only the ledger goes.
+  const moneyConfig = mergeMoneyConfig(
+    await readJson(path.join(ROOT, 'config', 'pot.json'), {}),
+    await readJson(path.join(ROOT, 'config', 'money.json'), null),
+  );
+  if (!moneyConfig.ledgerEnabled) {
+    console.log('  config/money.json not found — Money tab disabled (copy config/money.example.json to enable).');
+  }
   const seasons = config.seasons ?? [];
 
   if (!seasons.length) {
@@ -522,9 +537,16 @@ async function main() {
   // Always written so `npm run serve` shows the full ledger locally. When
   // site.showMoney is false it is gitignored, so it never reaches the public
   // site — local visibility without publishing who owes what.
-  await writeJson(path.join(DERIVED, 'money.json'), current.ledger);
-  if (config.site?.showMoney === false) {
-    console.log('       (money.json is gitignored — local only, not published)');
+  // With no ledger, a leftover file from an earlier local build would show a
+  // stale Money tab, so it goes too — it is generated output, never a source.
+  const ledgerFile = path.join(DERIVED, 'money.json');
+  if (current.ledger) {
+    await writeJson(ledgerFile, current.ledger);
+    if (config.site?.showMoney === false) {
+      console.log('       (money.json is gitignored — local only, not published)');
+    }
+  } else if (existsSync(ledgerFile)) {
+    await rm(ledgerFile);
   }
 
   // ---- Publish-boundary safety net --------------------------------------
@@ -568,9 +590,9 @@ async function main() {
   const settled = current.challenges.weeks.filter((w) => w.winner).length;
   console.log(
     `  challenges        ${settled}/${current.challenges.totalWeeks} settled ` +
-      `(${current.challenges.cadence}, ${current.ledger.currency} ${current.challenges.pot} pot)`
+      `(${current.challenges.cadence}, ${current.challenges.currency} ${current.challenges.pot} pot)`
   );
-  if (current.ledger.warnings.length) {
+  if (current.ledger?.warnings.length) {
     console.log('\nMoney ledger notes:');
     for (const w of current.ledger.warnings) console.log(`  - ${w}`);
   }

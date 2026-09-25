@@ -2297,7 +2297,7 @@ function renderChallenges() {
     body.innerHTML = emptyState(
       '🎲',
       'No weekly challenge configured',
-      'Set weeklyChallenge.enabled in config/money.json to turn this on.'
+      'Set weeklyChallenge.enabled in config/pot.json to turn this on.'
     );
     return;
   }

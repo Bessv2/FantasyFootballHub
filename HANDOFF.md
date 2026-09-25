@@ -248,6 +248,24 @@ tab is absent entirely rather than showing a "kept private" placeholder — the
 owner asked for that explicitly. To publish it: delete that line from
 `.gitignore` and set `site.showMoney: true`.
 
+**The money config is split, and the private half is not in the repo.**
+`config/pot.json` (committed) holds the buy-in, `expectedTeams`, the payout
+structure and the weekly challenge settings; `config/money.json` (gitignored,
+template in `config/money.example.json`) holds members, payments and payouts
+paid. The split is load-bearing: the challenge draw and the published payout
+amounts are computed from these settings on every build, and the GitHub Actions
+build never has `money.json` — so anything the public payload depends on has to
+be in `pot.json`, and `mergeMoneyConfig()` lets the public file win any key both
+define. Without `money.json` the build logs one line and skips the ledger.
+
+**Git history still contains the old `config/money.json`**, real names and
+amounts included — it was committed before the split. It was deliberately not
+rewritten; purging it (`git filter-repo`) is the owner's call, and would force
+every clone to re-clone. Note also that pulling the commit that untracked the
+file **deletes the local copy** on an existing checkout: restore it with
+`git show 0229666:config/money.json > config/money.json` (the last `main`
+commit before the split).
+
 **SWIDs are stripped at the publish boundary.** `build.mjs` drops
 `teams[].ownerIds` (each manager's permanent ESPN account ID) before writing
 `docs/`, and **fails the build** if a SWID or `espn_s2` string appears in the

@@ -89,6 +89,26 @@ export function computePayouts(moneyConfig, expectedPot) {
   return { payouts, structure, fixedTotal, pctAmount, remainderSlots, leftOver };
 }
 
+/**
+ * The money settings come from two files.
+ *
+ *   config/pot.json    committed: buy-in, payout structure, weekly challenge
+ *   config/money.json  gitignored: members, payments, what has been paid out
+ *
+ * The public half wins any key both files define. The weekly challenge draw is
+ * dealt from these settings on every build, and the published build (GitHub
+ * Actions) never sees money.json, so letting the private file override them
+ * would let a local build publish a different schedule from the automated one.
+ *
+ * Returns `ledgerEnabled: false` when there is no private file, so the build
+ * can skip the ledger rather than render one that says everybody owes.
+ */
+export function mergeMoneyConfig(publicConfig, privateConfig) {
+  const pub = publicConfig ?? {};
+  const priv = privateConfig ?? null;
+  return { ...(priv ?? {}), ...pub, ledgerEnabled: priv !== null };
+}
+
 /** Which payout slot funds the weekly challenges, by id. */
 export const CHALLENGE_SLOT_ID = 'challenges';
 
@@ -206,6 +226,13 @@ export function computeLedger(moneyConfig, season, standings, { challengeWeeks =
     warnings.push(
       `Fixed payouts total ${round2(fixedTotal + pctAmount)}, which is more than the ` +
         `${expectedPot} pot. Something has to give.`
+    );
+  }
+  const declaredTeams = Number(moneyConfig.expectedTeams) || 0;
+  if (declaredTeams && declaredTeams !== expectedTeams) {
+    warnings.push(
+      `config/pot.json says ${declaredTeams} teams but the ledger lists ${expectedTeams} members. ` +
+        'The published challenge payouts use the pot.json number — make the two agree.'
     );
   }
   if (collected > expectedPot) {
