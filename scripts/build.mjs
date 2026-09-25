@@ -127,6 +127,7 @@ function buildSeason(raw, moneyConfig) {
   const ledger = moneyConfig.ledgerEnabled
     ? computeLedger(moneyConfig, season, standings, {
         challengeWeeks: challenges.schedule.weeks.map((w) => w.week),
+        challenges: challenges.weeks,
       })
     : null;
 
@@ -159,6 +160,7 @@ function buildChallenges(season, teamStats, teamWeeks, moneyConfig) {
     weeks: season.league.regularSeasonWeeks,
     salt: config.salt ?? '',
     cadence: config.cadence ?? 'weekly',
+    every: config.every ?? null,
     startWeek: config.startWeek ?? 1,
     overrides: config.overrides ?? {},
   });
@@ -187,6 +189,7 @@ function buildChallenges(season, teamStats, teamWeeks, moneyConfig) {
     enabled: config.enabled !== false,
     seed: schedule.seed,
     cadence: schedule.cadence,
+    every: schedule.every,
     currency: moneyConfig.currency ?? 'USD',
     pot: Number(pot.toFixed(2)),
     totalWeeks: weekNumbers.length,

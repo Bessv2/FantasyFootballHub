@@ -20,7 +20,7 @@ import {
   computeStandings,
   computePrizes,
 } from '../scripts/lib/analytics.mjs';
-import { computeLedger, mergeMoneyConfig } from '../scripts/lib/money.mjs';
+import { computeLedger, mergeMoneyConfig, challengePayoutStatus } from '../scripts/lib/money.mjs';
 import { recommendLineup, coachingReport, waiverTargets } from '../scripts/lib/advisor.mjs';
 import {
   buildBigBoard,
@@ -999,5 +999,40 @@ describe('mergeMoneyConfig', () => {
 
   test('missing public file is tolerated', () => {
     assert.deepEqual(mergeMoneyConfig(undefined, null), { ledgerEnabled: false });
+  });
+});
+
+describe('challengePayoutStatus', () => {
+  // Week 1: one winner, $15. Week 2: a tie, $7.50 each. Week 3: nobody qualified.
+  const weeks = [
+    { week: 1, challengeId: 'highScore', label: 'High Score', winner: { teamId: 1, teamName: 'One', amount: 15 }, tiedWith: [] },
+    {
+      week: 2, challengeId: 'bestKicker', label: 'Best Kicker',
+      winner: { teamId: 2, teamName: 'Two', amount: 7.5 },
+      tiedWith: [{ teamId: 3, teamName: 'Three', amount: 7.5 }],
+    },
+    { week: 3, challengeId: 'benchWarmer', label: 'Bench Warmer', winner: null, noWinner: true },
+  ];
+
+  test('unpaid until a payoutsPaid entry names the challenge', () => {
+    const status = challengePayoutStatus(weeks, []);
+    assert.equal(status.length, 2, 'a week with no winner owes nothing');
+    assert.ok(status.every((c) => c.winners.every((w) => !w.paid)));
+  });
+
+  test('challengeId alone settles every winner; with teamId, just that one', () => {
+    const status = challengePayoutStatus(weeks, [
+      { challengeId: 'highScore', amount: 15, paidDate: '2026-09-15' },
+      { challengeId: 'bestKicker', teamId: 3, amount: 7.5 },
+      // A season prize entry must not settle any challenge.
+      { teamId: 2, amount: 350, note: 'Champion' },
+    ]);
+    assert.deepEqual(status[0].winners.map((w) => [w.teamId, w.paid, w.paidDate]), [[1, true, '2026-09-15']]);
+    assert.deepEqual(status[1].winners.map((w) => [w.teamId, w.paid]), [[2, false], [3, true]]);
+  });
+
+  test('a hand-written week number works too', () => {
+    const status = challengePayoutStatus(weeks, [{ week: 2, amount: 15 }]);
+    assert.deepEqual(status[1].winners.map((w) => w.paid), [true, true]);
   });
 });

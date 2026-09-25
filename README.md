@@ -243,10 +243,21 @@ Everything lives in `config/pot.json` under `weeklyChallenge`:
 "weeklyChallenge": {
   "enabled": true,
   "cadence": "weekly",   // or "biweekly" — one challenge every other week
+  "every": 3,            // optional: every Nth week; wins over cadence
   "startWeek": 1,
   "salt": "",            // change to reshuffle the whole season
   "payoutId": "challenges"
 }
+```
+
+When you pay a challenge winner, record it in your local `config/money.json`
+so the Money tab shows it as paid:
+
+```jsonc
+"payoutsPaid": [
+  { "challengeId": "highScore", "amount": 15, "paidDate": "2026-09-15" },
+  { "challengeId": "bestKicker", "teamId": 3, "amount": 7.5 }  // one half of a split pot
+]
 ```
 
 > **Only ever change `salt` before Week 1.** Mid-season it re-draws weeks that

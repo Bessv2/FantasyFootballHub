@@ -12,6 +12,7 @@
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { partitionByFreshness, pruneCache, oldestFetch, NEWS_TTL_HOURS } from './lib/newscache.mjs';
 
 import {
   createClient,
@@ -54,6 +55,10 @@ async function readJsonIfExists(file) {
 // most likely to get rate limited. Capped and paced accordingly.
 const NEWS_PLAYER_LIMIT = 300;
 const NEWS_DELAY_MS = 120;
+// Per-player news is reused for this long before it is asked for again.
+// NEWS_TTL_HOURS=0 in the environment (or --force) refetches everyone.
+const NEWS_TTL_MS = Number(process.env.NEWS_TTL_HOURS ?? NEWS_TTL_HOURS) * 3600e3;
+const NEWS_CACHE = path.join(RAW, 'news-cache.json');
 
 async function fetchSeason(client, season) {
   const dir = path.join(RAW, String(season));
@@ -244,18 +249,28 @@ async function fetchSeason(client, season) {
       }
     }
 
-    const feeds = [];
-    let withNews = 0;
-    for (const id of newsIds) {
+    // Fresh entries in the TTL cache are reused instead of re-requested. An
+    // entry stores null for "no news" too, so quiet players are not re-asked.
+    const ids = [...newsIds];
+    let cache = (await readJsonIfExists(NEWS_CACHE)) ?? {};
+    const { fresh, stale } = FORCE
+      ? { fresh: [], stale: ids }
+      : partitionByFreshness(ids, cache, { ttlMs: NEWS_TTL_MS });
+
+    for (const id of stale) {
       const feed = await client.getPlayerNews(id);
-      if (feed) {
-        feeds.push(feed);
-        withNews += 1;
-      }
+      cache[id] = { fetchedAt: new Date().toISOString(), feed: feed ?? null };
       await sleep(NEWS_DELAY_MS);
     }
-    await writeJson(path.join(dir, 'news.json'), { fetchedAt: new Date().toISOString(), feeds });
-    log(`  player news: ${withNews} of ${newsIds.size} players have items`);
+    cache = pruneCache(cache, ids);
+    await writeJson(NEWS_CACHE, cache);
+
+    const feeds = ids.map((id) => cache[id]?.feed).filter(Boolean);
+    // The oldest entry used, so the site never presents cached news as newer
+    // than it is.
+    await writeJson(path.join(dir, 'news.json'), { fetchedAt: oldestFetch(cache, ids), feeds });
+    log(`  player news: ${feeds.length} of ${ids.length} players have items ` +
+      `(${stale.length} fetched, ${fresh.length} from the ${NEWS_TTL_MS / 3600e3}h cache)`);
   } catch (error) {
     log(`  player news: skipped (${error.message}) — cards will show stats only`);
   }

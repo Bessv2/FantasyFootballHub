@@ -367,13 +367,20 @@ export function buildChallengeSchedule({
   weeks,
   salt = '',
   cadence = 'weekly',
+  every = null,
   startWeek = 1,
   deck = CHALLENGE_DECK,
   overrides = {},
 }) {
   const seed = challengeSeed({ leagueId, season, salt });
   const rand = mulberry32(hashSeed(seed));
-  const step = cadence === 'biweekly' ? 2 : 1;
+  // `every: 3` means a challenge every third week and wins over `cadence`;
+  // without it, 'biweekly' is every 2nd week and anything else every week.
+  if (every !== null && every !== undefined && !(Number.isInteger(every) && every >= 1)) {
+    throw new Error(`weekly challenge "every" must be a whole number of weeks, got ${JSON.stringify(every)}`);
+  }
+  const step = every ?? (cadence === 'biweekly' ? 2 : 1);
+  if (every) cadence = every === 1 ? 'weekly' : every === 2 ? 'biweekly' : `every-${every}`;
 
   const playWeeks = [];
   for (let week = startWeek; week <= weeks; week += step) playWeeks.push(week);
@@ -405,7 +412,7 @@ export function buildChallengeSchedule({
     });
   }
 
-  return { seed, cadence, startWeek, weeks: dealt };
+  return { seed, cadence, every: step, startWeek, weeks: dealt };
 }
 
 // ---------------------------------------------------------------------------

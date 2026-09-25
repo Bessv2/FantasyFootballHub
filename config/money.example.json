@@ -33,6 +33,12 @@
   ],
   "_paymentsNote": "Only needed for per-team overrides once teams are claimed; `members` above covers the common case.",
   "payments": [],
-  "_payoutsPaidNote": "Season prizes as you pay them out: { teamId, amount, note }. Weekly challenge winners are marked paid under challengePayoutsPaid instead.",
+  "_payoutsPaidNote": [
+    "Everything paid out, as you pay it. A season prize: { teamId, amount, note }.",
+    "A weekly challenge: add its challengeId (e.g. 'highScore', shown on the",
+    "Challenges tab) and the Money tab marks that winner paid. With a teamId it",
+    "settles only that winner of a split pot; without one, every winner.",
+    "  { \"challengeId\": \"highScore\", \"teamId\": 3, \"amount\": 15, \"paidDate\": \"2026-09-15\" }"
+  ],
   "payoutsPaid": []
 }

@@ -2452,6 +2452,33 @@ function renderMoney() {
       </div>`);
   }
 
+  if (m.challengePayouts?.length) {
+    parts.push(`
+      <div class="table-scroll" style="margin-top:1.5rem">
+        <table>
+          <caption>
+            Weekly challenge payouts — ${esc(money(m.challengeUnpaid ?? 0, m.currency))} still to pay.
+            Mark one paid with a <code>payoutsPaid</code> entry naming its challengeId in config/money.json.
+          </caption>
+          <thead><tr><th scope="col" class="num">Week</th><th scope="col">Challenge</th>
+            <th scope="col">Winner</th><th scope="col" class="num">Amount</th><th scope="col">Status</th></tr></thead>
+          <tbody>
+            ${m.challengePayouts
+              .flatMap((c) => c.winners.map((w) => `<tr>
+                <td class="num">${esc(c.week)}</td>
+                <td>${esc(c.label)} <small class="stat__note">${esc(c.challengeId)}</small></td>
+                <th scope="row">${esc(w.teamName)}</th>
+                <td class="num">${esc(money(w.amount, m.currency))}</td>
+                <td>${w.paid
+                  ? `<span class="pill pill--good">Paid</span>${w.paidDate ? ` <small class="stat__note">${esc(w.paidDate)}</small>` : ''}`
+                  : '<span class="pill pill--bad">Unpaid</span>'}</td>
+              </tr>`))
+              .join('')}
+          </tbody>
+        </table>
+      </div>`);
+  }
+
   $('#money-body').innerHTML = parts.join('');
 }
 
@@ -2472,6 +2499,15 @@ function renderMoney() {
  * that string, run the same shuffle, and confirm the deck was never restacked
  * after the games were played.
  */
+/** "Every week", "Every other week", "Every 3rd week". */
+function cadenceLabel(c) {
+  const every = c.every ?? (c.cadence === 'biweekly' ? 2 : 1);
+  if (every === 1) return 'Every week';
+  if (every === 2) return 'Every other week';
+  const suffix = every % 10 === 3 && every % 100 !== 13 ? 'rd' : 'th';
+  return `Every ${every}${suffix} week`;
+}
+
 function renderChallenges() {
   const c = state.hub?.challenges;
   const body = $('#challenges-body');
@@ -2493,7 +2529,7 @@ function renderChallenges() {
   // --- What is on right now ---------------------------------------------
   parts.push(`
     <section class="hero">
-      <p class="hero__eyebrow">${esc(c.cadence === 'biweekly' ? 'Every other week' : 'Every week')} · ${esc(money(c.pot, currency))} in play</p>
+      <p class="hero__eyebrow">${esc(cadenceLabel(c))} · ${esc(money(c.pot, currency))} in play</p>
       <h2>${live ? `Week ${esc(live.week)}: ${esc(live.label)}` : 'Weekly challenge'}</h2>
       <p class="hero__sub">${
         live

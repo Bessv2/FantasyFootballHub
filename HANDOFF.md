@@ -327,6 +327,23 @@ while UNDECIDED. The "Rivalry" callout needs two meetings and prefers the
 most-played matchup, then the closest. Co-owned teams count for the first
 listed owner only.
 
+**Player news is cached per player for 6 hours.** `data/raw/news-cache.json`
+holds each player's last response (including "no news") with its fetch time;
+`fetch.mjs` only re-requests entries older than the TTL (`NEWS_TTL_HOURS` env
+var, `--force` ignores it), and `news.json`'s `fetchedAt` is the *oldest* entry
+used so the site never overstates freshness. The Actions runner starts clean, so
+`update.yml` restores the file with `actions/cache` — keyed per run with a
+`news-cache-` restore prefix rather than by date, because a cache key is
+immutable and a date key would freeze on the day's first run.
+
+**Challenge payouts are marked paid by challengeId.** A `payoutsPaid` entry in
+the local `config/money.json` with a `challengeId` (plus an optional `teamId`
+for one half of a split pot) settles that challenge; the local Money tab lists
+every winner as Paid/Unpaid. Challenge ids are unique within a season because
+the deck is dealt without replacement. `weeklyChallenge.every: N` (in
+`config/pot.json`) deals every Nth week and wins over `cadence`; like `salt`,
+only change it before Week 1.
+
 **The link-preview image is a static PNG, not generated per build.**
 `docs/assets/og.png` (1200×630) is referenced by absolute URL from the Open
 Graph tags in `docs/index.html` — chat apps will not resolve a relative one.
@@ -564,19 +581,10 @@ and the coaching report all light up on their own.
   outstanding. If everyone has since settled up, change those to
   `"paid": true` and the ledger balances. **Do not mark them paid to make the
   warning go away**; the whole point of the ledger is that it says what is true.
-- **Challenge payouts are not tracked as paid.** Winners are computed, but
-  settling one means adding a row to `payoutsPaid` in `config/money.json` by
-  hand. A `payoutsPaid` entry keyed to a challenge week would close the loop.
-- **The news fetch is one request per player** and runs every build, capped at
-  300. It is the slowest step in `npm run fetch` by a wide margin. Caching by
-  player with a short TTL would cut it down; nothing does that yet.
 - **Nothing verifies an ESPN headshot exists** before rendering it. The fallback
   handles it, but a player ESPN has no photo of shows initials with no
   indication of why. That is the right behaviour; it is only worth noting so a
   future session does not treat it as a bug.
-- **Challenge cadence is weekly-or-biweekly only.** `buildChallengeSchedule`
-  takes a `step`, so "every third week" is a one-line change, but the config
-  vocabulary does not expose it.
 - **The advisor uses ESPN projections uncritically.** No opponent adjustment, no
   matchup weighting, no injury-probability discount.
 - **Historical seasons are unsupported in practice.** The code handles the
