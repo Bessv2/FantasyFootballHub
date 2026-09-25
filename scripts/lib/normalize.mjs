@@ -126,7 +126,7 @@ function normalizeRosterEntries(entries, week, playerIndex) {
   });
 }
 
-function normalizeTeams(rawTeams, members) {
+export function normalizeTeams(rawTeams, members) {
   const memberById = new Map((members ?? []).map((m) => [m.id, m]));
 
   return (rawTeams ?? []).map((team) => {
@@ -136,8 +136,10 @@ function normalizeTeams(rawTeams, members) {
       .map((id) => {
         const m = memberById.get(id);
         if (!m) return null;
-        const full = `${m.firstName ?? ''} ${m.lastName ?? ''}`.trim();
-        return full || m.displayName || null;
+        // ESPN display name only. Real first/last names are on the member
+        // profile too, but the site is public and the league never agreed to
+        // publish them.
+        return m.displayName?.trim() || null;
       })
       .filter(Boolean);
 
@@ -258,6 +260,27 @@ function normalizeWeeks(rawWeeks, playerIndex) {
   }
 
   return out;
+}
+
+/**
+ * The whole season's matchup grid, played or not — the only place the
+ * *remaining* schedule exists. Box scores are fetched per played week, so
+ * without this nothing downstream knows who plays whom in Week 12.
+ *
+ * `winner` is ESPN's own verdict: HOME / AWAY / TIE once a matchup period is
+ * final, UNDECIDED before and during it.
+ */
+export function normalizeSchedule(rawSchedule) {
+  return (Array.isArray(rawSchedule) ? rawSchedule : [])
+    .filter((game) => game?.home || game?.away)
+    .map((game) => ({
+      week: game.matchupPeriodId,
+      homeTeamId: game.home?.teamId ?? null,
+      awayTeamId: game.away?.teamId ?? null,
+      playoffTierType: game.playoffTierType ?? 'NONE',
+      winner: game.winner ?? 'UNDECIDED',
+    }))
+    .filter((game) => Number.isInteger(game.week));
 }
 
 function normalizeTransactions(rawTransactions, playerIndex, teams) {
@@ -413,6 +436,9 @@ export function normalizeSeason(raw) {
   const weeks = normalizeWeeks(raw.weeks ?? [], playerIndex);
   const transactions = normalizeTransactions(rawTx, playerIndex, teams);
   const trades = normalizeTrades(rawActivity, playerIndex, teams);
+  // schedule.json is its own fetch; older caches only have whatever the
+  // league payload happened to carry.
+  const schedule = normalizeSchedule(raw.schedule?.schedule ?? league?.schedule);
 
   const slotCounts = settings.rosterSettings?.lineupSlotCounts ?? {};
   const startingSlots = Object.entries(slotCounts)
@@ -436,7 +462,7 @@ export function normalizeSeason(raw) {
       season: league?.seasonId,
       size: settings.size ?? teams.length,
       scoringType: settings.scoringSettings?.scoringType ?? null,
-      isPPR: settings.scoringSettings?.playerRankType === 'PPR',
+      ...receptionScoring(settings.scoringSettings),
       regularSeasonWeeks: settings.scheduleSettings?.matchupPeriodCount ?? 14,
       playoffTeams: settings.scheduleSettings?.playoffTeamCount ?? 6,
       playoffSeedingRule: settings.scheduleSettings?.playoffSeedingRule ?? null,
@@ -467,6 +493,7 @@ export function normalizeSeason(raw) {
     teams,
     draft,
     weeks,
+    schedule,
     transactions,
     trades,
     adviceWeek,
@@ -474,4 +501,30 @@ export function normalizeSeason(raw) {
     freeAgents,
     playerCount: playerIndex.size,
   };
+}
+
+/**
+ * How many points a reception is worth, read from the league's actual scoring
+ * rules. `playerRankType` is only the default ranking list ESPN shows in the
+ * draft room — it does not reflect custom scoring, and for Roe League it comes
+ * back as something other than 'PPR' even though receptions score a point.
+ * Scoring item statId 53 is receptions.
+ */
+export function receptionScoring(scoringSettings) {
+  const items = scoringSettings?.scoringItems;
+  let ppr = null;
+  if (Array.isArray(items)) {
+    const rec = items.find((i) => i.statId === 53);
+    ppr = rec ? Number(rec.points) || 0 : 0;
+  } else if (scoringSettings?.playerRankType) {
+    const t = scoringSettings.playerRankType;
+    ppr = t === 'PPR' ? 1 : t === 'HALF_PPR' || t === 'HALFPPR' ? 0.5 : 0;
+  }
+  const scoringLabel =
+    ppr == null ? null
+    : ppr === 0 ? 'Standard'
+    : ppr === 1 ? 'PPR'
+    : ppr === 0.5 ? 'Half PPR'
+    : `${ppr} PPR`;
+  return { isPPR: (ppr ?? 0) > 0, pointsPerReception: ppr, scoringLabel };
 }

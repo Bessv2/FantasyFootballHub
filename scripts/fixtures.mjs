@@ -14,7 +14,7 @@
  * assertions stay stable.
  */
 
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { projectRoot } from './lib/espn.mjs';
 
@@ -25,6 +25,13 @@ const SEED = 20260905;
 const TEAM_COUNT = 12;
 const ROUNDS = 16;
 const REGULAR_WEEKS = 14;
+// `--played=N` stops the synthetic season after Week N: box scores exist only
+// for Weeks 1-N and the rest are on the schedule, unplayed. Mid-season is the
+// only state where the playoff-odds card has anything to show.
+const PLAYED_ARG = process.argv.find((a) => a.startsWith('--played='));
+const PLAYED_WEEKS = PLAYED_ARG
+  ? Math.max(0, Math.min(REGULAR_WEEKS, parseInt(PLAYED_ARG.split('=')[1], 10) || 0))
+  : REGULAR_WEEKS;
 
 /** Deterministic PRNG (mulberry32) so fixtures are reproducible. */
 function rng(seed) {
@@ -53,13 +60,13 @@ const round2 = (n) => Number(n.toFixed(2));
 // ---------------------------------------------------------------------------
 
 const MANAGERS = [
-  ['Geordon', 'Roe'], ['Marcus', 'Webb'], ['Tina', 'Alvarez'], ['Dev', 'Patel'],
+  ['Jordan', 'Reyes'], ['Marcus', 'Webb'], ['Tina', 'Alvarez'], ['Dev', 'Patel'],
   ['Sam', 'Okafor'], ['Jules', 'Bianchi'], ['Casey', 'Nakamura'], ['Ray', 'Donnelly'],
   ['Priya', 'Raman'], ['Alex', 'Kowalski'], ['Nia', 'Thompson'], ['Bo', 'Lindqvist'],
 ];
 
 const TEAM_NAMES = [
-  "Geordon's Great Team", 'Gridiron Gremlins', 'Purple Reign', 'Fourth & Long',
+  "Jordan's Great Team", 'Gridiron Gremlins', 'Purple Reign', 'Fourth & Long',
   'Hurts So Good', 'The Waiver Wire Warriors', 'Sunday Scaries', 'Pylon Pirates',
   'Check Down Charlie', 'Turf Toe Titans', 'Hail Mary Hooligans', 'Blitz Brigade',
 ];
@@ -323,8 +330,44 @@ for (let t = 1; t <= TEAM_COUNT; t += 1) {
   records.set(t, { wins: 0, losses: 0, ties: 0, pointsFor: 0, pointsAgainst: 0 });
 }
 
+// A handful of trades, emitted in activity-feed shape. Dealt before the season
+// is played, from their own generator, and applied to the rosters in their
+// week — so the box scores after a trade really do show each player on his
+// new team, which is what the trade attribution reads.
+const tradeRand = rng(SEED + 1);
+const tradePick = (arr) => arr[Math.floor(tradeRand() * arr.length)];
+const trades = [];
+for (let i = 0; i < 6; i += 1) {
+  const a = 1 + Math.floor(tradeRand() * TEAM_COUNT);
+  let b = 1 + Math.floor(tradeRand() * TEAM_COUNT);
+  if (b === a) b = (a % TEAM_COUNT) + 1;
+  trades.push({ i, a, b, week: 2 + i * 2, aPlayer: tradePick(rosters.get(a)), bPlayer: tradePick(rosters.get(b)) });
+}
+const tradeTopics = trades.map(({ i, a, b, week, aPlayer, bPlayer }) => ({
+  id: `trade-${i + 1}`,
+  // Tuesday of the trade's week; Week 1 kicks off Thursday 10 Sept 2026.
+  date: Date.UTC(2026, 8, 8 + (week - 1) * 7),
+  messages: [
+    { messageTypeId: 244, targetId: aPlayer.id, from: a, to: b },
+    { messageTypeId: 244, targetId: bPlayer.id, from: b, to: a },
+  ],
+}));
+
+function applyTrades(week) {
+  for (const t of trades) {
+    if (t.week !== week) continue;
+    const from = rosters.get(t.a);
+    const to = rosters.get(t.b);
+    // A player can be picked twice across trades; only move who is still there.
+    if (!from.includes(t.aPlayer) || !to.includes(t.bPlayer)) continue;
+    from.splice(from.indexOf(t.aPlayer), 1, t.bPlayer);
+    to.splice(to.indexOf(t.bPlayer), 1, t.aPlayer);
+  }
+}
+
 const weekFiles = [];
 for (let week = 1; week <= REGULAR_WEEKS; week += 1) {
+  applyTrades(week);
   const schedule = [];
   let matchupId = 0;
 
@@ -406,24 +449,6 @@ for (let t = 1; t <= TEAM_COUNT; t += 1) {
   });
 }
 
-// A handful of trades, emitted in activity-feed shape.
-const tradeTopics = [];
-for (let i = 0; i < 6; i += 1) {
-  const a = 1 + Math.floor(rand() * TEAM_COUNT);
-  let b = 1 + Math.floor(rand() * TEAM_COUNT);
-  if (b === a) b = (a % TEAM_COUNT) + 1;
-  const aPlayer = pick(rosters.get(a));
-  const bPlayer = pick(rosters.get(b));
-  tradeTopics.push({
-    id: `trade-${i + 1}`,
-    date: Date.UTC(2026, 8, 20 + i * 7),
-    messages: [
-      { messageTypeId: 244, targetId: aPlayer.id, from: a, to: b },
-      { messageTypeId: 244, targetId: bPlayer.id, from: b, to: a },
-    ],
-  });
-}
-
 // Waiver / free-agent moves.
 const transactions = [];
 for (let i = 0; i < 40; i += 1) {
@@ -451,7 +476,7 @@ const league = {
   members,
   teams,
   settings: {
-    name: 'Roe Leauge',
+    name: 'Roe League',
     size: TEAM_COUNT,
     draftSettings: { type: 'SNAKE', timePerSelection: 90, auctionBudget: 200, keeperCount: 0,
       draftDate: Date.UTC(2026, 8, 5, 23, 0) },
@@ -464,16 +489,17 @@ const league = {
     rosterSettings: {
       lineupSlotCounts: { 0: 1, 2: 2, 4: 2, 6: 1, 16: 1, 17: 1, 20: 7, 21: 1, 23: 1 },
     },
-    scoringSettings: { scoringType: 'H2H_POINTS', playerRankType: 'PPR' },
+    scoringSettings: { scoringType: 'H2H_POINTS', playerRankType: 'STANDARD',
+      scoringItems: [{ statId: 53, points: 1 }, { statId: 42, points: 0.1 }] },
   },
   status: {
     isActive: true,
     isFull: true,
     teamsJoined: TEAM_COUNT,
-    currentMatchupPeriod: REGULAR_WEEKS,
+    currentMatchupPeriod: PLAYED_WEEKS,
     firstScoringPeriod: 1,
     finalScoringPeriod: 17,
-    latestScoringPeriod: REGULAR_WEEKS,
+    latestScoringPeriod: PLAYED_WEEKS,
     previousSeasons: [],
     activatedDate: Date.UTC(2026, 7, 11),
   },
@@ -494,9 +520,23 @@ await writeJson(
 );
 await writeJson(path.join(OUT, 'transactions.json'), { transactions });
 await writeJson(path.join(OUT, 'activity.json'), { topics: tradeTopics });
+// Cleared first so a --played run after a full one leaves no stale weeks behind.
+await rm(path.join(OUT, 'weeks'), { recursive: true, force: true });
 for (const { week, data } of weekFiles) {
+  if (week > PLAYED_WEEKS) continue;
   await writeJson(path.join(OUT, 'weeks', `${week}.json`), data);
 }
+// The whole season's grid, as mMatchupScore returns it: no rosters, and the
+// unplayed weeks carry no points and an UNDECIDED winner.
+await writeJson(path.join(OUT, 'schedule.json'), {
+  schedule: weekFiles.flatMap(({ week, data }) =>
+    data.schedule.map(({ home, away, ...game }) => week <= PLAYED_WEEKS
+      ? { ...game, home: { teamId: home.teamId, totalPoints: home.totalPoints },
+          away: { teamId: away.teamId, totalPoints: away.totalPoints } }
+      : { ...game, winner: 'UNDECIDED', home: { teamId: home.teamId, totalPoints: 0 },
+          away: { teamId: away.teamId, totalPoints: 0 } })
+  ),
+});
 // ---------------------------------------------------------------------------
 // Current rosters + free agents, for the roster advisor
 // ---------------------------------------------------------------------------

@@ -16,7 +16,7 @@ the way they are.
 
 | | |
 | --- | --- |
-| League | **Roe Leauge**, ESPN id `274568741` |
+| League | **Roe League**, ESPN id `274568741` |
 | Format | **10 teams**, PPR, **superflex** (ESPN OP slot), 16-round snake |
 | Lineup | 1 QB, 2 RB, 2 WR, 1 TE, **1 OP**, 1 D/ST, 1 K + 7 bench, 2 IR — **9 starters** |
 | Season | 13 regular-season weeks, 8 playoff teams |
@@ -25,7 +25,7 @@ the way they are.
 | Managers | **10 committed.** ESPN size changed 12 -> 10. Most have not claimed their ESPN team yet. |
 | Buy-in | **$75** (was $50). Payouts **350 / 130 / 75** + **$195** funding weekly challenges at $15/wk. |
 | Money owed | Everyone paid **$50** under the old buy-in. The ledger shows each of them **$25 short** until somebody confirms otherwise — see below. |
-| Tests | 141, all passing |
+| Tests | 194, all passing |
 | Automation | GitHub Actions, every 3 hours — **verified working**, it has pushed real commits |
 
 The league had no rosters, no picks and no games at time of writing. Every
@@ -147,6 +147,22 @@ Reversing this pair does not throw. It returns real numbers of the wrong kind �
 a single week presented as a season — so every downstream figure is quietly
 wrong and nothing announces it.
 
+### `playerRankType` is not the scoring format
+
+`scoringSettings.playerRankType` is only the default ranking list ESPN shows in
+the draft room. It does not reflect custom scoring, and for this league it does
+not say `PPR` even though receptions score a point. `receptionScoring()` in
+`normalize.mjs` reads `scoringItems` instead — **statId 53 is receptions** — and
+emits `isPPR`, `pointsPerReception` and `scoringLabel`. statId 53 is modelled on
+the documented API; confirm it against `data/raw/` after the next real fetch
+(the site header should say PPR).
+
+### Manager names are ESPN display names only
+
+`normalizeTeams()` uses the member's ESPN `displayName` and never
+`firstName`/`lastName`: the site is public and the league never agreed to
+publish real names. With no display name it falls back to the team name.
+
 ### Superflex rankings exist and matter enormously
 
 `draftRanksByRankType` has `STANDARD`, `PPR`, `ELIMINATION` **and `SUPERFLEX`**.
@@ -231,6 +247,109 @@ gitignored. It renders locally via `npm run serve`; on the public site the Money
 tab is absent entirely rather than showing a "kept private" placeholder — the
 owner asked for that explicitly. To publish it: delete that line from
 `.gitignore` and set `site.showMoney: true`.
+
+**The money config is split, and the private half is not in the repo.**
+`config/pot.json` (committed) holds the buy-in, `expectedTeams`, the payout
+structure and the weekly challenge settings; `config/money.json` (gitignored,
+template in `config/money.example.json`) holds members, payments and payouts
+paid. The split is load-bearing: the challenge draw and the published payout
+amounts are computed from these settings on every build, and the GitHub Actions
+build never has `money.json` — so anything the public payload depends on has to
+be in `pot.json`, and `mergeMoneyConfig()` lets the public file win any key both
+define. Without `money.json` the build logs one line and skips the ledger.
+
+**Git history still contains the old `config/money.json`**, real names and
+amounts included — it was committed before the split. It was deliberately not
+rewritten; purging it (`git filter-repo`) is the owner's call, and would force
+every clone to re-clone. Note also that pulling the commit that untracked the
+file **deletes the local copy** on an existing checkout: restore it with
+`git show 0229666:config/money.json > config/money.json` (the last `main`
+commit before the split).
+
+**Playoff odds are a seeded Monte Carlo, and the seeding is load-bearing.**
+`scripts/lib/odds.mjs` plays out every remaining regular-season game 10,000
+times (≈0.1 s) with each team's score drawn from a normal fitted to its decided
+games, shrunk toward the league mean with `SHRINK_K = 4` (equal weight after
+four weeks; the comment explains why). Seeds are ranked with
+`compareStandings()` — the same comparator `computeStandings()` uses, extracted
+rather than copied, and a test pins that zero remaining games reproduces the
+real standings exactly. The generator is the challenges' mulberry32, seeded on
+`roe-playoff-odds:{season}:{weeksPlayed}`, so repeated builds on the same data
+publish the same numbers instead of jittering by a tenth every three hours.
+Percentages are capped at 99.9 / 0.1 unless *every* run agreed: 9,996 of
+10,000 is not a clinch.
+
+- The remaining schedule comes from a new `schedule.json` (`mMatchupScore`,
+  whole season) — box scores only exist for played weeks. **That payload shape is
+  modelled, not observed**; if `schedule.json` is missing or incomplete,
+  `computePlayoffOdds()` returns null rather than simulating half a season.
+- The newest week counts only once ESPN names a winner. While it is UNDECIDED
+  (Thursday to Monday) it is simulated from scratch, not half-counted.
+- `playoffOdds` is null before Week 1 and after the regular season; the card
+  renders nothing then.
+- `node scripts/fixtures.mjs --played=6 && node scripts/build.mjs --fixtures`
+  builds a mid-season state so the card has something to show (not
+  `npm run fixtures -- --played=6`: npm hands the flag to the build, not the
+  generator). Restore `docs/data` afterwards.
+
+**A trade's week is read off the box scores, not its date.** The activity
+feed dates a trade but carries no scoring period, and there is no calendar in
+the payload to map a date to a fantasy week. `tradeEffectiveWeek()` in
+`scripts/lib/trades.mjs` uses the first week any received player appears on his
+new team's roster instead — and a trade with no such week yet is "too early",
+which is the honest answer (never 0–0). Each side's `pointsStarted` (the
+headline) and `pointsTotal` count only weeks the player was on *that* team, so a
+player flipped on again stops counting for the original trade. One known blind
+spot: a player traded back to a team he was on earlier in the season would
+date the trade to his first stint. If ESPN is ever seen to put
+`scoringPeriodId` on a topic, map it in `normalizeTrades()` and it is used as-is.
+
+**The weekly recap is templated text, deliberately.** `scripts/lib/recap.mjs`
+builds "Week N in review" from analytics that already exist — top score,
+blowout, closest game, unluckiest loss, bench regret, challenge winner, biggest
+power-ranking move — with 2–3 phrasings per line chosen by an FNV hash of
+`week:type`. No model and no network: the build runs unattended every three
+hours, and a recap that could reword last week's news on every run (or fail
+when an API is down) would be worse than a plain one. A line whose data is
+missing is dropped, not zero-filled. The newest week is left out while any of
+its matchups is UNDECIDED. Adding a line type means adding to `PHRASES` and one
+block in `buildWeeklyRecap()`; `tests/recap.test.mjs` pins exact text, so a
+reworded phrase fails exactly one expectation.
+
+**Head-to-head is keyed by manager, and the key is published hashed.**
+`scripts/lib/h2h.mjs` matches games across every season in `config.seasons`
+on each team's primary ESPN owner id, so a renamed team — or one ESPN gives a
+new id — keeps its owner's record, and adding 2027 to the config needs no code.
+Owner ids are SWIDs, so `build.mjs` swaps each for `publicManagerKey()` (a
+league-salted SHA-256 prefix) before anything reaches `teams-{year}.json`.
+Regular season and playoffs are separate buckets; the newest week is skipped
+while UNDECIDED. The "Rivalry" callout needs two meetings and prefers the
+most-played matchup, then the closest. Co-owned teams count for the first
+listed owner only.
+
+**Player news is cached per player for 6 hours.** `data/raw/news-cache.json`
+holds each player's last response (including "no news") with its fetch time;
+`fetch.mjs` only re-requests entries older than the TTL (`NEWS_TTL_HOURS` env
+var, `--force` ignores it), and `news.json`'s `fetchedAt` is the *oldest* entry
+used so the site never overstates freshness. The Actions runner starts clean, so
+`update.yml` restores the file with `actions/cache` — keyed per run with a
+`news-cache-` restore prefix rather than by date, because a cache key is
+immutable and a date key would freeze on the day's first run.
+
+**Challenge payouts are marked paid by challengeId.** A `payoutsPaid` entry in
+the local `config/money.json` with a `challengeId` (plus an optional `teamId`
+for one half of a split pot) settles that challenge; the local Money tab lists
+every winner as Paid/Unpaid. Challenge ids are unique within a season because
+the deck is dealt without replacement. `weeklyChallenge.every: N` (in
+`config/pot.json`) deals every Nth week and wins over `cadence`; like `salt`,
+only change it before Week 1.
+
+**The link-preview image is a static PNG, not generated per build.**
+`docs/assets/og.png` (1200×630) is referenced by absolute URL from the Open
+Graph tags in `docs/index.html` — chat apps will not resolve a relative one.
+Its source is `scripts/og-card.html`, screenshotted once by hand; rendering it
+in the build would need a headless browser or image library, and the project
+has no dependencies. If the league name or format changes, regenerate it.
 
 **SWIDs are stripped at the publish boundary.** `build.mjs` drops
 `teams[].ownerIds` (each manager's permanent ESPN account ID) before writing
@@ -462,29 +581,20 @@ and the coaching report all light up on their own.
   outstanding. If everyone has since settled up, change those to
   `"paid": true` and the ledger balances. **Do not mark them paid to make the
   warning go away**; the whole point of the ledger is that it says what is true.
-- **Manager real names are public** on the site (pulled from ESPN member
-  profiles). Never resolved with the owner. If it matters, render team names and
-  ESPN display names only — the change is confined to `normalizeTeams()`.
-- **Challenge payouts are not tracked as paid.** Winners are computed, but
-  settling one means adding a row to `payoutsPaid` in `config/money.json` by
-  hand. A `payoutsPaid` entry keyed to a challenge week would close the loop.
-- **The news fetch is one request per player** and runs every build, capped at
-  300. It is the slowest step in `npm run fetch` by a wide margin. Caching by
-  player with a short TTL would cut it down; nothing does that yet.
 - **Nothing verifies an ESPN headshot exists** before rendering it. The fallback
   handles it, but a player ESPN has no photo of shows initials with no
   indication of why. That is the right behaviour; it is only worth noting so a
   future session does not treat it as a bug.
-- **Challenge cadence is weekly-or-biweekly only.** `buildChallengeSchedule`
-  takes a `step`, so "every third week" is a one-line change, but the config
-  vocabulary does not expose it.
-- **No playoff odds simulation.** The scaffolding is there (`computeAllPlay`,
-  schedule data) but a Monte Carlo over the remaining schedule was never built.
-- **Trade analysis is descriptive only.** It lists what moved; it does not
-  attribute post-trade points to each side. `buildPlayerSeasonPoints()` plus
-  trade dates would make that straightforward.
 - **The advisor uses ESPN projections uncritically.** No opponent adjustment, no
-  matchup weighting, no injury-probability discount.
+  matchup weighting, no injury-probability discount. Planned as "Phase 8" and
+  deliberately not built yet: points-allowed-by-defense needs each player's NFL
+  opponent for every past week, and the adjustment needs next week's — the
+  normalized model only carries a player's `proTeam`, and nothing fetches the
+  NFL schedule. Start with a pro-schedule fetch (ESPN's `proTeamSchedules`
+  view, unverified here), normalize it to `{ week, proTeam -> opponent }`, then
+  the rest is pure: shrink positional points-allowed toward the average as
+  `odds.mjs` does, clamp the multiplier (±15%), apply a fixed documented
+  Questionable/Doubtful discount, and show "ESPN proj → adj" side by side.
 - **Historical seasons are unsupported in practice.** The code handles the
   pre-2018 `leagueHistory` endpoint, but this league has no history so that path
   has never executed.

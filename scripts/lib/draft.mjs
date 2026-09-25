@@ -43,6 +43,32 @@ export function buildPlayerSeasonPoints(season) {
   return totals;
 }
 
+/**
+ * Every player's week-by-week line: points, whose roster he was on, and
+ * whether he started. The season total above cannot say *when* points were
+ * scored or for whom, which is what trade attribution needs.
+ *
+ * playerId -> Map(week -> { points, teamId, started })
+ */
+export function buildPlayerWeekPoints(season) {
+  const byPlayer = new Map();
+
+  for (const week of season.weeks) {
+    if (!week.played) continue;
+    for (const matchup of week.matchups) {
+      for (const side of [matchup.home, matchup.away]) {
+        if (!side) continue;
+        for (const p of side.roster) {
+          if (!byPlayer.has(p.playerId)) byPlayer.set(p.playerId, new Map());
+          byPlayer.get(p.playerId).set(week.week, { points: p.points, teamId: side.teamId, started: p.started });
+        }
+      }
+    }
+  }
+
+  return byPlayer;
+}
+
 export function analyzeDraft(season) {
   const { draft, teams } = season;
 

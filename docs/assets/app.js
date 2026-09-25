@@ -496,6 +496,39 @@ function startCountdown() {
 
 // --- Views -----------------------------------------------------------------
 
+const RECAP_LABELS = {
+  topScore: 'Top score',
+  blowout: 'Blowout',
+  closest: 'Nail-biter',
+  unluckiest: 'Tough luck',
+  lineup: 'Bench regret',
+  challenge: 'Challenge',
+  powerMover: 'Mover',
+};
+
+const recapList = (recap) => `
+  <ul class="recap__items">
+    ${recap.items.map((item) => `
+      <li><span class="recap__type">${esc(RECAP_LABELS[item.type] ?? item.type)}</span>
+      <span>${esc(item.text)}</span></li>`).join('')}
+  </ul>`;
+
+/** "Week N in review", built at build time from templated lines. */
+function renderRecaps(recaps) {
+  if (!recaps?.length) return '';
+  const [latest, ...earlier] = recaps;
+  return `
+    <section class="card recap" aria-labelledby="recap-h">
+      <h3 id="recap-h">Week ${esc(latest.week)} in review</h3>
+      ${recapList(latest)}
+      ${earlier.length ? `
+      <details class="recap__earlier">
+        <summary>Earlier weeks (${esc(earlier.length)})</summary>
+        ${earlier.map((r) => `<h4>Week ${esc(r.week)}</h4>${recapList(r)}`).join('')}
+      </details>` : ''}
+    </section>`;
+}
+
 function renderOverview() {
   const { hub } = state;
   const { phase, status, league, power } = hub;
@@ -535,6 +568,8 @@ function renderOverview() {
       </section>`);
   }
 
+  parts.push(renderRecaps(hub.recaps));
+
   // --- Stat tiles -------------------------------------------------------
   parts.push(`
     <ul class="stats">
@@ -545,7 +580,7 @@ function renderOverview() {
       </li>
       <li class="stat">
         <span class="stat__label">Scoring</span>
-        <span class="stat__value">${league.isPPR ? 'PPR' : 'Standard'}</span>
+        <span class="stat__value">${esc(league.scoringLabel ?? (league.isPPR ? 'PPR' : 'Standard'))}</span>
         <span class="stat__note">${esc(starterCount(league))} starters${isSuperflex(league) ? ' · superflex' : ''}</span>
       </li>
       <li class="stat">
@@ -666,6 +701,88 @@ function seasonRoadmap() {
     </div>`;
 }
 
+/** A probability as text. The build caps unproven certainties at 99.9 / 0.1. */
+const oddsPct = (p) => (p === 100 || p === 0 ? `${p}%` : `${Number(p).toFixed(1)}%`);
+
+const WORD_COUNTS = ['Zero', 'One', 'Two', 'Three', 'Four', 'Five', 'Six'];
+
+/**
+ * Playoff odds from the build-time simulation. Renders nothing when the build
+ * emitted null (before Week 1, after the regular season, or with no schedule).
+ */
+function renderPlayoffOdds(odds, teams) {
+  if (!odds?.teams?.length) return '';
+  const logoOf = new Map((teams ?? []).map((t) => [t.id, t.logo ?? null]));
+  const seeds = odds.teams.length;
+
+  const watch = (odds.bottomWatch ?? [])
+    .map((id) => odds.teams.find((t) => t.teamId === id))
+    .filter(Boolean);
+  const watchTitle = `Bottom ${WORD_COUNTS[watch.length] ?? watch.length} Watch`;
+
+  const strip = (t) => {
+    const probs = Array.from({ length: seeds }, (_, i) => t.seedPct[i + 1] ?? 0);
+    const likeliest = probs.indexOf(Math.max(...probs)) + 1;
+    const label = `Most likely seed ${likeliest} (${oddsPct(probs[likeliest - 1])}). ` +
+      probs.map((p, i) => `Seed ${i + 1}: ${oddsPct(p)}`).join(', ');
+    return `
+      <span class="seedstrip" role="img" aria-label="${esc(label)}" title="${esc(label)}"
+            style="grid-template-columns:repeat(${seeds},1fr)">
+        ${probs.map((p, i) => `<span class="${i < odds.playoffTeams ? '' : 'is-out'}"
+            style="opacity:${(0.12 + 0.88 * (p / 100)).toFixed(3)}"></span>`).join('')}
+      </span>
+      <small class="seedstrip__note">likeliest #${esc(likeliest)}</small>`;
+  };
+
+  const rows = odds.teams.map((t) => `
+      <tr class="${t.currentRank === odds.playoffTeams ? 'playoff-cut' : ''}">
+        <td class="num rank">${esc(t.currentRank)}</td>
+        <th scope="row" class="row-team">${teamCell({ teamName: t.teamName, logo: logoOf.get(t.teamId) }, t.managerName ?? '')}</th>
+        <td class="num">${esc(t.wins)}-${esc(t.losses)}${t.ties ? `-${esc(t.ties)}` : ''}</td>
+        <td class="bar-cell">${bar(t.makePlayoffsPct, 100, { digits: 1, suffix: '%' })}</td>
+        <td class="num">${esc(oddsPct(t.missPlayoffsPct))}</td>
+        <td class="num">${esc(oddsPct(t.topSeedPct))}</td>
+        <td class="num">${num(t.projectedWins, 1)}</td>
+        <td>${strip(t)}</td>
+      </tr>`).join('');
+
+  const g = odds.generatedFrom ?? {};
+  return `
+    <div class="card" style="margin-bottom:1.5rem">
+      <h3>Playoff odds</h3>
+      <p class="view__intro" style="margin-top:-0.3rem">
+        ${esc(Number(odds.simulations).toLocaleString())} simulations of the
+        ${esc(g.remainingGames)} regular-season games left, fitted to scores through
+        Week ${esc(g.throughWeek)}. Top ${esc(odds.playoffTeams)} make it. Early in the
+        season every team's scoring is pulled toward the league average, so one big
+        week doesn't read as a lock.
+      </p>
+      ${watch.length ? `
+      <div class="odds-watch">
+        <span class="pill pill--warn">${esc(watchTitle)}</span>
+        <p>${watch.map((t) => `<strong>${esc(t.teamName)}</strong> misses in ${esc(oddsPct(t.missPlayoffsPct))} of runs`).join('; ')}.</p>
+      </div>` : ''}
+      <div class="table-scroll">
+        <table>
+          <caption>Sorted by current rank. The rule below rank ${esc(odds.playoffTeams)} marks the playoff cut.</caption>
+          <thead>
+            <tr>
+              <th scope="col" class="num">#</th>
+              <th scope="col">Team</th>
+              <th scope="col" class="num">Record</th>
+              <th scope="col" class="bar-cell">Make playoffs</th>
+              <th scope="col" class="num">Miss</th>
+              <th scope="col" class="num"><abbr title="Chance of finishing as the number 1 seed">#1 seed</abbr></th>
+              <th scope="col" class="num"><abbr title="Average final win total across simulations">Proj. W</abbr></th>
+              <th scope="col"><abbr title="Chance of each final seed, 1 on the left. Blue seeds make the playoffs, red miss.">Seed spread</abbr></th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
 function renderStandings() {
   const { standings, league } = state.hub;
   if (!standings.length || standings.every((t) => t.gamesPlayed === 0)) {
@@ -700,6 +817,7 @@ function renderStandings() {
     .join('');
 
   $('#standings-body').innerHTML = `
+    ${renderPlayoffOdds(state.hub.playoffOdds, state.hub.teams)}
     ${diffChart ? `
     <div class="card" style="margin-bottom:1.5rem">
       <h3>Points for, minus points against</h3>
@@ -1058,23 +1176,51 @@ function renderTeam(teamId) {
   }
 
   // --- Head to head -----------------------------------------------------
-  if (team.headToHead.length) {
+  if (team.headToHead?.length) {
+    const rec = (r) => (r.games ? `${r.wins}-${r.losses}${r.ties ? `-${r.ties}` : ''}` : '—');
+    const last = (m) => (m
+      ? `${m.result === 'WIN' ? 'W' : m.result === 'LOSS' ? 'L' : 'T'} ${num(m.pointsFor, 1)}–${num(m.pointsAgainst, 1)}` +
+        ` · ${m.season} Wk ${m.week}${m.isPlayoff ? ' (playoffs)' : ''}`
+      : '—');
+    const r = team.rivalry;
+    const rivalryRec = r ? {
+      wins: r.regular.wins + r.playoffs.wins,
+      losses: r.regular.losses + r.playoffs.losses,
+      ties: r.regular.ties + r.playoffs.ties,
+    } : null;
+
     parts.push(`
+      ${r ? `
+      <div class="card rivalry" style="margin-top:1.5rem">
+        <span class="pill pill--accent">Rivalry</span>
+        <p>
+          <strong>${esc(r.opponentTeamName ?? 'Unknown')}</strong>${r.opponentName ? ` (${esc(r.opponentName)})` : ''}:
+          ${esc(r.games)} meetings, ${esc(rivalryRec.wins)}-${esc(rivalryRec.losses)}${rivalryRec.ties ? `-${esc(rivalryRec.ties)}` : ''}
+          all-time, ${esc(signed(r.avgMargin, 1))} a game on average.
+        </p>
+      </div>` : ''}
       <div class="table-scroll" style="margin-top:1.5rem">
         <table>
-          <caption>Head to head</caption>
+          <caption>Head to head, all-time — by manager, so records follow people across team renames and seasons</caption>
           <thead><tr>
-            <th scope="col">Opponent</th><th scope="col" class="num">Record</th>
-            <th scope="col" class="num">Points for</th><th scope="col" class="num">Points against</th>
+            <th scope="col">Opponent</th>
+            <th scope="col" class="num">Regular</th>
+            <th scope="col" class="num">Playoffs</th>
+            <th scope="col" class="num"><abbr title="Points for, regular season and playoffs">PF</abbr></th>
+            <th scope="col" class="num"><abbr title="Points against, regular season and playoffs">PA</abbr></th>
+            <th scope="col">Last meeting</th>
           </tr></thead>
           <tbody>
             ${team.headToHead
               .map(
                 (h) => `<tr>
-                  <th scope="row" class="row-team">${esc(h.opponentName)}</th>
-                  <td class="num">${esc(h.wins)}-${esc(h.losses)}${h.ties ? `-${esc(h.ties)}` : ''}</td>
-                  <td class="num">${num(h.pointsFor, 1)}</td>
-                  <td class="num">${num(h.pointsAgainst, 1)}</td>
+                  <th scope="row" class="row-team">${esc(h.opponentTeamName ?? 'Unknown')}${
+                    h.opponentName ? `<small>${esc(h.opponentName)}</small>` : ''}</th>
+                  <td class="num">${esc(rec(h.regular))}</td>
+                  <td class="num">${esc(rec(h.playoffs))}</td>
+                  <td class="num">${num(h.regular.pointsFor + h.playoffs.pointsFor, 1)}</td>
+                  <td class="num">${num(h.regular.pointsAgainst + h.playoffs.pointsAgainst, 1)}</td>
+                  <td>${esc(last(h.lastMeeting))}</td>
                 </tr>`
               )
               .join('')}
@@ -2036,6 +2182,51 @@ function renderDraft() {
   $('#draft-body').innerHTML = parts.join('');
 }
 
+/** Who is ahead on a trade, stated in words so colour is never the only cue. */
+function tradeVerdict(t) {
+  if (t.tooEarly) return '<span class="pill pill--neutral">Too early</span>';
+  if (t.leaderTeamId === null || t.leaderTeamId === undefined) {
+    return '<span class="pill pill--neutral">Even so far</span>';
+  }
+  const leader = t.sides.find((s) => s.teamId === t.leaderTeamId);
+  const margin = t.netStarted === null ? null : Math.abs(t.netStarted);
+  return `<span class="pill pill--good">${esc(leader?.teamName ?? 'Leader')} ahead${
+    margin === null ? '' : ` by ${esc(num(margin, 1))}`}</span>`;
+}
+
+function renderTradeCard(t) {
+  const when = [
+    t.date ? new Date(t.date).toLocaleDateString() : null,
+    t.effectiveWeek ? `from Week ${t.effectiveWeek}` : null,
+  ].filter(Boolean).join(' · ');
+
+  const sides = t.sides.map((s) => {
+    const isLeader = !t.tooEarly && s.teamId === t.leaderTeamId;
+    const players = (s.players ?? s.received.map((p) => ({ name: p.name, position: p.position })))
+      .map((p) => `<li>${esc(p.name)} <small>(${esc(p.position)})</small>${
+        t.tooEarly || p.pointsStarted === undefined ? ''
+          : ` <small class="trade__pts">${esc(num(p.pointsStarted, 1))} started · ${esc(num(p.pointsTotal, 1))} total</small>`
+      }</li>`).join('');
+    return `
+      <div class="trade__side${isLeader ? ' is-leader' : ''}">
+        <p class="trade__team"><strong>${esc(s.teamName)}</strong> received${isLeader ? ' <span class="visually-hidden">(leading)</span>' : ''}</p>
+        <ul class="trade__players">${players || '<li><em>nothing recorded</em></li>'}</ul>
+        ${t.tooEarly ? '' : `
+        <p class="trade__score">
+          <span class="trade__started">${esc(num(s.pointsStarted, 1))}</span>
+          <small>started pts · ${esc(num(s.pointsTotal, 1))} total over ${esc(s.weeksSince)} wk${s.weeksSince === 1 ? '' : 's'}</small>
+        </p>`}
+      </div>`;
+  }).join('');
+
+  return `<div class="card trade">
+    <h3>${when ? esc(when) : 'Trade'}</h3>
+    <p>${tradeVerdict(t)}</p>
+    ${sides}
+    ${t.tooEarly ? '<p class="trade__note">No box score since this trade yet — check back after the next week is played.</p>' : ''}
+  </div>`;
+}
+
 function renderTrades() {
   const trades = state.season?.trades ?? [];
   const transactions = state.season?.transactions ?? [];
@@ -2050,21 +2241,13 @@ function renderTrades() {
       )
     );
   } else {
-    parts.push(`<div class="grid">${trades
-      .map(
-        (t) => `<div class="card">
-          <h3>${t.date ? esc(new Date(t.date).toLocaleDateString()) : 'Trade'}</h3>
-          ${t.sides
-            .map(
-              (s) => `<p><strong>${esc(s.teamName)}</strong> received:<br>
-                ${s.received.length
-                  ? s.received.map((p) => `${esc(p.name)} <small>(${esc(p.position)})</small>`).join('<br>')
-                  : '<em>nothing recorded</em>'}</p>`
-            )
-            .join('')}
-        </div>`
-      )
-      .join('')}</div>`);
+    parts.push(`
+      <p class="view__intro">
+        Each side's number is what the players it received have scored <em>for it</em>
+        since the trade. The big figure counts only weeks they were in the starting
+        lineup — the points that decided matchups. The smaller one includes the bench.
+      </p>
+      <div class="grid">${trades.map(renderTradeCard).join('')}</div>`);
   }
 
   if (transactions.length) {
@@ -2269,6 +2452,33 @@ function renderMoney() {
       </div>`);
   }
 
+  if (m.challengePayouts?.length) {
+    parts.push(`
+      <div class="table-scroll" style="margin-top:1.5rem">
+        <table>
+          <caption>
+            Weekly challenge payouts — ${esc(money(m.challengeUnpaid ?? 0, m.currency))} still to pay.
+            Mark one paid with a <code>payoutsPaid</code> entry naming its challengeId in config/money.json.
+          </caption>
+          <thead><tr><th scope="col" class="num">Week</th><th scope="col">Challenge</th>
+            <th scope="col">Winner</th><th scope="col" class="num">Amount</th><th scope="col">Status</th></tr></thead>
+          <tbody>
+            ${m.challengePayouts
+              .flatMap((c) => c.winners.map((w) => `<tr>
+                <td class="num">${esc(c.week)}</td>
+                <td>${esc(c.label)} <small class="stat__note">${esc(c.challengeId)}</small></td>
+                <th scope="row">${esc(w.teamName)}</th>
+                <td class="num">${esc(money(w.amount, m.currency))}</td>
+                <td>${w.paid
+                  ? `<span class="pill pill--good">Paid</span>${w.paidDate ? ` <small class="stat__note">${esc(w.paidDate)}</small>` : ''}`
+                  : '<span class="pill pill--bad">Unpaid</span>'}</td>
+              </tr>`))
+              .join('')}
+          </tbody>
+        </table>
+      </div>`);
+  }
+
   $('#money-body').innerHTML = parts.join('');
 }
 
@@ -2289,6 +2499,15 @@ function renderMoney() {
  * that string, run the same shuffle, and confirm the deck was never restacked
  * after the games were played.
  */
+/** "Every week", "Every other week", "Every 3rd week". */
+function cadenceLabel(c) {
+  const every = c.every ?? (c.cadence === 'biweekly' ? 2 : 1);
+  if (every === 1) return 'Every week';
+  if (every === 2) return 'Every other week';
+  const suffix = every % 10 === 3 && every % 100 !== 13 ? 'rd' : 'th';
+  return `Every ${every}${suffix} week`;
+}
+
 function renderChallenges() {
   const c = state.hub?.challenges;
   const body = $('#challenges-body');
@@ -2297,7 +2516,7 @@ function renderChallenges() {
     body.innerHTML = emptyState(
       '🎲',
       'No weekly challenge configured',
-      'Set weeklyChallenge.enabled in config/money.json to turn this on.'
+      'Set weeklyChallenge.enabled in config/pot.json to turn this on.'
     );
     return;
   }
@@ -2310,7 +2529,7 @@ function renderChallenges() {
   // --- What is on right now ---------------------------------------------
   parts.push(`
     <section class="hero">
-      <p class="hero__eyebrow">${esc(c.cadence === 'biweekly' ? 'Every other week' : 'Every week')} · ${esc(money(c.pot, currency))} in play</p>
+      <p class="hero__eyebrow">${esc(cadenceLabel(c))} · ${esc(money(c.pot, currency))} in play</p>
       <h2>${live ? `Week ${esc(live.week)}: ${esc(live.label)}` : 'Weekly challenge'}</h2>
       <p class="hero__sub">${
         live
@@ -2713,7 +2932,7 @@ async function boot() {
 
     $('#league-name').textContent = hub.league.displayName ?? hub.league.name;
     $('#league-sub').textContent =
-      `${hub.league.season} · ${hub.league.size} teams · ${hub.league.isPPR ? 'PPR' : 'Standard'}`;
+      `${hub.league.season} · ${hub.league.size} teams · ${hub.league.scoringLabel ?? (hub.league.isPPR ? 'PPR' : 'Standard')}`;
     document.title = `${hub.league.displayName ?? hub.league.name} — Fantasy Football Hub`;
 
     const timeEl = $('#generated-at');

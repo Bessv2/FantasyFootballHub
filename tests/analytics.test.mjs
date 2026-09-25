@@ -20,7 +20,7 @@ import {
   computeStandings,
   computePrizes,
 } from '../scripts/lib/analytics.mjs';
-import { computeLedger } from '../scripts/lib/money.mjs';
+import { computeLedger, mergeMoneyConfig, challengePayoutStatus } from '../scripts/lib/money.mjs';
 import { recommendLineup, coachingReport, waiverTargets } from '../scripts/lib/advisor.mjs';
 import {
   buildBigBoard,
@@ -142,7 +142,7 @@ describe('optimalLineup', () => {
     assert.equal(result.points, 69);
   });
 
-  test("Roe Leauge's actual superflex roster picks the second QB for the OP slot", () => {
+  test("Roe League's actual superflex roster picks the second QB for the OP slot", () => {
     // The real league starts 1 QB / 2 RB / 2 WR / 1 TE / 1 OP / 1 D-ST / 1 K.
     // Slot 7 (OP) accepts a QB, so a second quarterback outscoring every flex
     // option must be started there. Only one overlapping slot type exists, so
@@ -503,7 +503,7 @@ describe('money ledger', () => {
     const barelyStarted = {
       league: { size: 12 },
       teams: [
-        { id: 1, name: "Commissioner's Team", managerName: 'Geordon Roe', isPlaceholder: false },
+        { id: 1, name: "Commissioner's Team", managerName: 'Commissioner', isPlaceholder: false },
         ...Array.from({ length: 11 }, (_, i) => ({
           id: i + 2, name: `Team ${i + 2}`, managerName: 'Unclaimed', isPlaceholder: true,
         })),
@@ -514,7 +514,7 @@ describe('money ledger', () => {
       buyIn: 50,
       payouts: { structure: [{ id: 'first', label: '1st', pct: 100 }] },
       members: [
-        { name: 'Geordon Roe', teamId: 1, paid: true },
+        { name: 'Commissioner', teamId: 1, paid: true },
         ...Array.from({ length: 9 }, (_, i) => ({ name: `Manager ${i + 2}`, paid: true })),
       ],
     };
@@ -917,7 +917,7 @@ describe('phase detection', () => {
         { id: 1, name: 'Claimed', owners: ['x'] },
         { id: 2, name: 'Team 2' },
       ],
-      members: [{ id: 'x', firstName: 'A', lastName: 'B' }],
+      members: [{ id: 'x', firstName: 'A', lastName: 'B', displayName: 'abdisplay' }],
       ...overrides.league,
     },
     draft: overrides.draft ?? { draftDetail: { picks: [] } },
@@ -962,6 +962,77 @@ describe('phase detection', () => {
 
   test('owner display names come from members, not team names', () => {
     const s = normalizeSeason(shell());
-    assert.equal(s.teams[0].managerName, 'A B');
+    assert.equal(s.teams[0].managerName, 'abdisplay');
+  });
+});
+
+describe('mergeMoneyConfig', () => {
+  const pot = {
+    buyIn: 75,
+    weeklyChallenge: { salt: '', overrides: { 1: 'highScore' } },
+  };
+
+  test('no private file: challenge settings survive, ledger is off', () => {
+    // The GitHub Actions build has no config/money.json. The public settings
+    // must still come through untouched so the published challenge draw is the
+    // same one a local build deals.
+    const merged = mergeMoneyConfig(pot, null);
+    assert.equal(merged.ledgerEnabled, false);
+    assert.equal(merged.buyIn, 75);
+    assert.deepEqual(merged.weeklyChallenge, pot.weeklyChallenge);
+    assert.equal(merged.members, undefined);
+  });
+
+  test('private file adds members and turns the ledger on', () => {
+    const merged = mergeMoneyConfig(pot, { members: [{ name: 'Manager 1', amountPaid: 75 }] });
+    assert.equal(merged.ledgerEnabled, true);
+    assert.equal(merged.members.length, 1);
+  });
+
+  test('the public file wins a key both define', () => {
+    // An old local money.json still carries its own weeklyChallenge. If it won,
+    // a local build could publish a different schedule (salt 'x') from CI's.
+    const merged = mergeMoneyConfig(pot, { buyIn: 50, weeklyChallenge: { salt: 'x' } });
+    assert.equal(merged.buyIn, 75);
+    assert.equal(merged.weeklyChallenge.salt, '');
+  });
+
+  test('missing public file is tolerated', () => {
+    assert.deepEqual(mergeMoneyConfig(undefined, null), { ledgerEnabled: false });
+  });
+});
+
+describe('challengePayoutStatus', () => {
+  // Week 1: one winner, $15. Week 2: a tie, $7.50 each. Week 3: nobody qualified.
+  const weeks = [
+    { week: 1, challengeId: 'highScore', label: 'High Score', winner: { teamId: 1, teamName: 'One', amount: 15 }, tiedWith: [] },
+    {
+      week: 2, challengeId: 'bestKicker', label: 'Best Kicker',
+      winner: { teamId: 2, teamName: 'Two', amount: 7.5 },
+      tiedWith: [{ teamId: 3, teamName: 'Three', amount: 7.5 }],
+    },
+    { week: 3, challengeId: 'benchWarmer', label: 'Bench Warmer', winner: null, noWinner: true },
+  ];
+
+  test('unpaid until a payoutsPaid entry names the challenge', () => {
+    const status = challengePayoutStatus(weeks, []);
+    assert.equal(status.length, 2, 'a week with no winner owes nothing');
+    assert.ok(status.every((c) => c.winners.every((w) => !w.paid)));
+  });
+
+  test('challengeId alone settles every winner; with teamId, just that one', () => {
+    const status = challengePayoutStatus(weeks, [
+      { challengeId: 'highScore', amount: 15, paidDate: '2026-09-15' },
+      { challengeId: 'bestKicker', teamId: 3, amount: 7.5 },
+      // A season prize entry must not settle any challenge.
+      { teamId: 2, amount: 350, note: 'Champion' },
+    ]);
+    assert.deepEqual(status[0].winners.map((w) => [w.teamId, w.paid, w.paidDate]), [[1, true, '2026-09-15']]);
+    assert.deepEqual(status[1].winners.map((w) => [w.teamId, w.paid]), [[2, false], [3, true]]);
+  });
+
+  test('a hand-written week number works too', () => {
+    const status = challengePayoutStatus(weeks, [{ week: 2, amount: 15 }]);
+    assert.deepEqual(status[1].winners.map((w) => w.paid), [true, true]);
   });
 });

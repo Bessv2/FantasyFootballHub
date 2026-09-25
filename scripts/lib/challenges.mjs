@@ -36,8 +36,11 @@ const round2 = (n) => Number((n ?? 0).toFixed(2));
 // Deterministic randomness
 // ---------------------------------------------------------------------------
 
-/** FNV-1a. Turns the seed string into the 32 bits the generator needs. */
-function hashSeed(text) {
+/**
+ * FNV-1a. Turns the seed string into the 32 bits the generator needs.
+ * Exported so the playoff-odds simulation draws from the same generator.
+ */
+export function hashSeed(text) {
   let h = 0x811c9dc5;
   for (let i = 0; i < text.length; i += 1) {
     h ^= text.charCodeAt(i);
@@ -47,7 +50,7 @@ function hashSeed(text) {
 }
 
 /** mulberry32 — small, fast, and identical on every machine and Node version. */
-function mulberry32(seed) {
+export function mulberry32(seed) {
   let a = seed >>> 0;
   return function next() {
     a = (a + 0x6d2b79f5) >>> 0;
@@ -364,13 +367,20 @@ export function buildChallengeSchedule({
   weeks,
   salt = '',
   cadence = 'weekly',
+  every = null,
   startWeek = 1,
   deck = CHALLENGE_DECK,
   overrides = {},
 }) {
   const seed = challengeSeed({ leagueId, season, salt });
   const rand = mulberry32(hashSeed(seed));
-  const step = cadence === 'biweekly' ? 2 : 1;
+  // `every: 3` means a challenge every third week and wins over `cadence`;
+  // without it, 'biweekly' is every 2nd week and anything else every week.
+  if (every !== null && every !== undefined && !(Number.isInteger(every) && every >= 1)) {
+    throw new Error(`weekly challenge "every" must be a whole number of weeks, got ${JSON.stringify(every)}`);
+  }
+  const step = every ?? (cadence === 'biweekly' ? 2 : 1);
+  if (every) cadence = every === 1 ? 'weekly' : every === 2 ? 'biweekly' : `every-${every}`;
 
   const playWeeks = [];
   for (let week = startWeek; week <= weeks; week += step) playWeeks.push(week);
@@ -402,7 +412,7 @@ export function buildChallengeSchedule({
     });
   }
 
-  return { seed, cadence, startWeek, weeks: dealt };
+  return { seed, cadence, every: step, startWeek, weeks: dealt };
 }
 
 // ---------------------------------------------------------------------------

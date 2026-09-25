@@ -36,3 +36,9 @@
 # League data is regenerated on every push; never let a stale week be cached.
 /data/*
   Cache-Control: no-cache, must-revalidate
+
+# The link-preview card. Chat apps fetch it once and cache it themselves; a day
+# here keeps repeat scrapes cheap while a replaced image still shows up
+# tomorrow. The URL carries no hash, so do not make this immutable.
+/assets/og.png
+  Cache-Control: public, max-age=86400
