@@ -431,6 +431,10 @@ tr.playoff-cut td, tr.playoff-cut th { border-bottom: 2px solid var(--accent); }
 .recap__earlier summary { cursor: pointer; color: var(--accent); font-weight: 600; }
 .recap__earlier h4 { margin: 1rem 0 0.2rem; }
 
+/* --- Rivalry ------------------------------------------------------------ */
+.rivalry { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.4rem 0.7rem; }
+.rivalry p { margin: 0; }
+
 /* --- Trades ------------------------------------------------------------- */
 .trade__side {
   border-top: 1px solid var(--border); padding-top: 0.6rem; margin-top: 0.6rem;

@@ -1176,23 +1176,51 @@ function renderTeam(teamId) {
   }
 
   // --- Head to head -----------------------------------------------------
-  if (team.headToHead.length) {
+  if (team.headToHead?.length) {
+    const rec = (r) => (r.games ? `${r.wins}-${r.losses}${r.ties ? `-${r.ties}` : ''}` : '—');
+    const last = (m) => (m
+      ? `${m.result === 'WIN' ? 'W' : m.result === 'LOSS' ? 'L' : 'T'} ${num(m.pointsFor, 1)}–${num(m.pointsAgainst, 1)}` +
+        ` · ${m.season} Wk ${m.week}${m.isPlayoff ? ' (playoffs)' : ''}`
+      : '—');
+    const r = team.rivalry;
+    const rivalryRec = r ? {
+      wins: r.regular.wins + r.playoffs.wins,
+      losses: r.regular.losses + r.playoffs.losses,
+      ties: r.regular.ties + r.playoffs.ties,
+    } : null;
+
     parts.push(`
+      ${r ? `
+      <div class="card rivalry" style="margin-top:1.5rem">
+        <span class="pill pill--accent">Rivalry</span>
+        <p>
+          <strong>${esc(r.opponentTeamName ?? 'Unknown')}</strong>${r.opponentName ? ` (${esc(r.opponentName)})` : ''}:
+          ${esc(r.games)} meetings, ${esc(rivalryRec.wins)}-${esc(rivalryRec.losses)}${rivalryRec.ties ? `-${esc(rivalryRec.ties)}` : ''}
+          all-time, ${esc(signed(r.avgMargin, 1))} a game on average.
+        </p>
+      </div>` : ''}
       <div class="table-scroll" style="margin-top:1.5rem">
         <table>
-          <caption>Head to head</caption>
+          <caption>Head to head, all-time — by manager, so records follow people across team renames and seasons</caption>
           <thead><tr>
-            <th scope="col">Opponent</th><th scope="col" class="num">Record</th>
-            <th scope="col" class="num">Points for</th><th scope="col" class="num">Points against</th>
+            <th scope="col">Opponent</th>
+            <th scope="col" class="num">Regular</th>
+            <th scope="col" class="num">Playoffs</th>
+            <th scope="col" class="num"><abbr title="Points for, regular season and playoffs">PF</abbr></th>
+            <th scope="col" class="num"><abbr title="Points against, regular season and playoffs">PA</abbr></th>
+            <th scope="col">Last meeting</th>
           </tr></thead>
           <tbody>
             ${team.headToHead
               .map(
                 (h) => `<tr>
-                  <th scope="row" class="row-team">${esc(h.opponentName)}</th>
-                  <td class="num">${esc(h.wins)}-${esc(h.losses)}${h.ties ? `-${esc(h.ties)}` : ''}</td>
-                  <td class="num">${num(h.pointsFor, 1)}</td>
-                  <td class="num">${num(h.pointsAgainst, 1)}</td>
+                  <th scope="row" class="row-team">${esc(h.opponentTeamName ?? 'Unknown')}${
+                    h.opponentName ? `<small>${esc(h.opponentName)}</small>` : ''}</th>
+                  <td class="num">${esc(rec(h.regular))}</td>
+                  <td class="num">${esc(rec(h.playoffs))}</td>
+                  <td class="num">${num(h.regular.pointsFor + h.playoffs.pointsFor, 1)}</td>
+                  <td class="num">${num(h.regular.pointsAgainst + h.playoffs.pointsAgainst, 1)}</td>
+                  <td>${esc(last(h.lastMeeting))}</td>
                 </tr>`
               )
               .join('')}

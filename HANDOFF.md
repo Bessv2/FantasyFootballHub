@@ -316,6 +316,17 @@ its matchups is UNDECIDED. Adding a line type means adding to `PHRASES` and one
 block in `buildWeeklyRecap()`; `tests/recap.test.mjs` pins exact text, so a
 reworded phrase fails exactly one expectation.
 
+**Head-to-head is keyed by manager, and the key is published hashed.**
+`scripts/lib/h2h.mjs` matches games across every season in `config.seasons`
+on each team's primary ESPN owner id, so a renamed team — or one ESPN gives a
+new id — keeps its owner's record, and adding 2027 to the config needs no code.
+Owner ids are SWIDs, so `build.mjs` swaps each for `publicManagerKey()` (a
+league-salted SHA-256 prefix) before anything reaches `teams-{year}.json`.
+Regular season and playoffs are separate buckets; the newest week is skipped
+while UNDECIDED. The "Rivalry" callout needs two meetings and prefers the
+most-played matchup, then the closest. Co-owned teams count for the first
+listed owner only.
+
 **The link-preview image is a static PNG, not generated per build.**
 `docs/assets/og.png` (1200×630) is referenced by absolute URL from the Open
 Graph tags in `docs/index.html` — chat apps will not resolve a relative one.
