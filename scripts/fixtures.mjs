@@ -330,8 +330,44 @@ for (let t = 1; t <= TEAM_COUNT; t += 1) {
   records.set(t, { wins: 0, losses: 0, ties: 0, pointsFor: 0, pointsAgainst: 0 });
 }
 
+// A handful of trades, emitted in activity-feed shape. Dealt before the season
+// is played, from their own generator, and applied to the rosters in their
+// week — so the box scores after a trade really do show each player on his
+// new team, which is what the trade attribution reads.
+const tradeRand = rng(SEED + 1);
+const tradePick = (arr) => arr[Math.floor(tradeRand() * arr.length)];
+const trades = [];
+for (let i = 0; i < 6; i += 1) {
+  const a = 1 + Math.floor(tradeRand() * TEAM_COUNT);
+  let b = 1 + Math.floor(tradeRand() * TEAM_COUNT);
+  if (b === a) b = (a % TEAM_COUNT) + 1;
+  trades.push({ i, a, b, week: 2 + i * 2, aPlayer: tradePick(rosters.get(a)), bPlayer: tradePick(rosters.get(b)) });
+}
+const tradeTopics = trades.map(({ i, a, b, week, aPlayer, bPlayer }) => ({
+  id: `trade-${i + 1}`,
+  // Tuesday of the trade's week; Week 1 kicks off Thursday 10 Sept 2026.
+  date: Date.UTC(2026, 8, 8 + (week - 1) * 7),
+  messages: [
+    { messageTypeId: 244, targetId: aPlayer.id, from: a, to: b },
+    { messageTypeId: 244, targetId: bPlayer.id, from: b, to: a },
+  ],
+}));
+
+function applyTrades(week) {
+  for (const t of trades) {
+    if (t.week !== week) continue;
+    const from = rosters.get(t.a);
+    const to = rosters.get(t.b);
+    // A player can be picked twice across trades; only move who is still there.
+    if (!from.includes(t.aPlayer) || !to.includes(t.bPlayer)) continue;
+    from.splice(from.indexOf(t.aPlayer), 1, t.bPlayer);
+    to.splice(to.indexOf(t.bPlayer), 1, t.aPlayer);
+  }
+}
+
 const weekFiles = [];
 for (let week = 1; week <= REGULAR_WEEKS; week += 1) {
+  applyTrades(week);
   const schedule = [];
   let matchupId = 0;
 
@@ -410,24 +446,6 @@ for (let t = 1; t <= TEAM_COUNT; t += 1) {
       trades: Math.floor(rand() * 4),
     },
     roster: { entries: [] },
-  });
-}
-
-// A handful of trades, emitted in activity-feed shape.
-const tradeTopics = [];
-for (let i = 0; i < 6; i += 1) {
-  const a = 1 + Math.floor(rand() * TEAM_COUNT);
-  let b = 1 + Math.floor(rand() * TEAM_COUNT);
-  if (b === a) b = (a % TEAM_COUNT) + 1;
-  const aPlayer = pick(rosters.get(a));
-  const bPlayer = pick(rosters.get(b));
-  tradeTopics.push({
-    id: `trade-${i + 1}`,
-    date: Date.UTC(2026, 8, 20 + i * 7),
-    messages: [
-      { messageTypeId: 244, targetId: aPlayer.id, from: a, to: b },
-      { messageTypeId: 244, targetId: bPlayer.id, from: b, to: a },
-    ],
   });
 }
 

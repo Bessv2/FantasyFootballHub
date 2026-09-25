@@ -292,6 +292,18 @@ Percentages are capped at 99.9 / 0.1 unless *every* run agreed: 9,996 of
   `npm run fixtures -- --played=6`: npm hands the flag to the build, not the
   generator). Restore `docs/data` afterwards.
 
+**A trade's week is read off the box scores, not its date.** The activity
+feed dates a trade but carries no scoring period, and there is no calendar in
+the payload to map a date to a fantasy week. `tradeEffectiveWeek()` in
+`scripts/lib/trades.mjs` uses the first week any received player appears on his
+new team's roster instead — and a trade with no such week yet is "too early",
+which is the honest answer (never 0–0). Each side's `pointsStarted` (the
+headline) and `pointsTotal` count only weeks the player was on *that* team, so a
+player flipped on again stops counting for the original trade. One known blind
+spot: a player traded back to a team he was on earlier in the season would
+date the trade to his first stint. If ESPN is ever seen to put
+`scoringPeriodId` on a topic, map it in `normalizeTrades()` and it is used as-is.
+
 **The link-preview image is a static PNG, not generated per build.**
 `docs/assets/og.png` (1200×630) is referenced by absolute URL from the Open
 Graph tags in `docs/index.html` — chat apps will not resolve a relative one.
@@ -542,9 +554,6 @@ and the coaching report all light up on their own.
 - **Challenge cadence is weekly-or-biweekly only.** `buildChallengeSchedule`
   takes a `step`, so "every third week" is a one-line change, but the config
   vocabulary does not expose it.
-- **Trade analysis is descriptive only.** It lists what moved; it does not
-  attribute post-trade points to each side. `buildPlayerSeasonPoints()` plus
-  trade dates would make that straightforward.
 - **The advisor uses ESPN projections uncritically.** No opponent adjustment, no
   matchup weighting, no injury-probability discount.
 - **Historical seasons are unsupported in practice.** The code handles the

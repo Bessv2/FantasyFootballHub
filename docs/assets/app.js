@@ -2119,6 +2119,51 @@ function renderDraft() {
   $('#draft-body').innerHTML = parts.join('');
 }
 
+/** Who is ahead on a trade, stated in words so colour is never the only cue. */
+function tradeVerdict(t) {
+  if (t.tooEarly) return '<span class="pill pill--neutral">Too early</span>';
+  if (t.leaderTeamId === null || t.leaderTeamId === undefined) {
+    return '<span class="pill pill--neutral">Even so far</span>';
+  }
+  const leader = t.sides.find((s) => s.teamId === t.leaderTeamId);
+  const margin = t.netStarted === null ? null : Math.abs(t.netStarted);
+  return `<span class="pill pill--good">${esc(leader?.teamName ?? 'Leader')} ahead${
+    margin === null ? '' : ` by ${esc(num(margin, 1))}`}</span>`;
+}
+
+function renderTradeCard(t) {
+  const when = [
+    t.date ? new Date(t.date).toLocaleDateString() : null,
+    t.effectiveWeek ? `from Week ${t.effectiveWeek}` : null,
+  ].filter(Boolean).join(' · ');
+
+  const sides = t.sides.map((s) => {
+    const isLeader = !t.tooEarly && s.teamId === t.leaderTeamId;
+    const players = (s.players ?? s.received.map((p) => ({ name: p.name, position: p.position })))
+      .map((p) => `<li>${esc(p.name)} <small>(${esc(p.position)})</small>${
+        t.tooEarly || p.pointsStarted === undefined ? ''
+          : ` <small class="trade__pts">${esc(num(p.pointsStarted, 1))} started · ${esc(num(p.pointsTotal, 1))} total</small>`
+      }</li>`).join('');
+    return `
+      <div class="trade__side${isLeader ? ' is-leader' : ''}">
+        <p class="trade__team"><strong>${esc(s.teamName)}</strong> received${isLeader ? ' <span class="visually-hidden">(leading)</span>' : ''}</p>
+        <ul class="trade__players">${players || '<li><em>nothing recorded</em></li>'}</ul>
+        ${t.tooEarly ? '' : `
+        <p class="trade__score">
+          <span class="trade__started">${esc(num(s.pointsStarted, 1))}</span>
+          <small>started pts · ${esc(num(s.pointsTotal, 1))} total over ${esc(s.weeksSince)} wk${s.weeksSince === 1 ? '' : 's'}</small>
+        </p>`}
+      </div>`;
+  }).join('');
+
+  return `<div class="card trade">
+    <h3>${when ? esc(when) : 'Trade'}</h3>
+    <p>${tradeVerdict(t)}</p>
+    ${sides}
+    ${t.tooEarly ? '<p class="trade__note">No box score since this trade yet — check back after the next week is played.</p>' : ''}
+  </div>`;
+}
+
 function renderTrades() {
   const trades = state.season?.trades ?? [];
   const transactions = state.season?.transactions ?? [];
@@ -2133,21 +2178,13 @@ function renderTrades() {
       )
     );
   } else {
-    parts.push(`<div class="grid">${trades
-      .map(
-        (t) => `<div class="card">
-          <h3>${t.date ? esc(new Date(t.date).toLocaleDateString()) : 'Trade'}</h3>
-          ${t.sides
-            .map(
-              (s) => `<p><strong>${esc(s.teamName)}</strong> received:<br>
-                ${s.received.length
-                  ? s.received.map((p) => `${esc(p.name)} <small>(${esc(p.position)})</small>`).join('<br>')
-                  : '<em>nothing recorded</em>'}</p>`
-            )
-            .join('')}
-        </div>`
-      )
-      .join('')}</div>`);
+    parts.push(`
+      <p class="view__intro">
+        Each side's number is what the players it received have scored <em>for it</em>
+        since the trade. The big figure counts only weeks they were in the starting
+        lineup — the points that decided matchups. The smaller one includes the bench.
+      </p>
+      <div class="grid">${trades.map(renderTradeCard).join('')}</div>`);
   }
 
   if (transactions.length) {

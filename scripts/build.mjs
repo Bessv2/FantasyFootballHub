@@ -32,6 +32,7 @@ import { buildPlayerCards, normalizeNews } from './lib/playercard.mjs';
 import { recommendLineup, coachingReport, waiverTargets } from './lib/advisor.mjs';
 import { buildBigBoard } from './lib/bigboard.mjs';
 import { computePlayoffOdds } from './lib/odds.mjs';
+import { attributeTrades } from './lib/trades.mjs';
 
 const ROOT = projectRoot();
 const args = process.argv.slice(2);
@@ -110,6 +111,7 @@ function buildSeason(raw, moneyConfig) {
   const oddsStart = performance.now();
   const playoffOdds = computePlayoffOdds(season);
   const oddsMs = Math.round(performance.now() - oddsStart);
+  const trades = attributeTrades(season);
 
   const playerCards = buildPlayerCards({
     players: playerObjectsFor(raw),
@@ -131,7 +133,7 @@ function buildSeason(raw, moneyConfig) {
   return {
     season, teamWeeks, teamStats, standings, power, prizes,
     weeklyHigh, positional, draft, ledger, teamDetail, challenges, playerCards,
-    playoffOdds, oddsMs,
+    playoffOdds, oddsMs, trades,
   };
 }
 
@@ -483,7 +485,7 @@ async function main() {
       prizes: b.prizes,
       challenges: b.challenges,
       transactions: b.season.transactions,
-      trades: b.season.trades,
+      trades: b.trades,
     });
 
     await writeJson(path.join(DERIVED, `draft-${b.year}.json`), b.draft);
