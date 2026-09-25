@@ -24,8 +24,9 @@ const OUT = path.join(ROOT, 'SOURCE-BUNDLE.md');
 const SECTIONS = [
   {
     title: 'Configuration',
-    blurb: 'League identity, money rules, and the credentials template. Real credentials live in config/secrets.json, which is gitignored and never appears here.',
-    files: ['config/league.json', 'config/money.json', 'config/secrets.example.json'],
+    blurb: 'League identity, the public money rules, and templates. Real credentials (config/secrets.json) and the private ledger (config/money.json: names and who has paid) are gitignored and never appear here.',
+    // Never add config/money.json: this file is committed to a public repo.
+    files: ['config/league.json', 'config/pot.json', 'config/money.example.json', 'config/secrets.example.json'],
   },
   {
     title: 'Data layer — talking to ESPN',
@@ -45,6 +46,11 @@ const SECTIONS = [
       'scripts/lib/images.mjs',
       'scripts/lib/playercard.mjs',
       'scripts/lib/money.mjs',
+      'scripts/lib/odds.mjs',
+      'scripts/lib/trades.mjs',
+      'scripts/lib/recap.mjs',
+      'scripts/lib/h2h.mjs',
+      'scripts/lib/newscache.mjs',
     ],
   },
   {
@@ -73,6 +79,12 @@ const SECTIONS = [
       'tests/challenges.test.mjs',
       'tests/images.test.mjs',
       'tests/playercard.test.mjs',
+      'tests/normalize.test.mjs',
+      'tests/odds.test.mjs',
+      'tests/trades.test.mjs',
+      'tests/recap.test.mjs',
+      'tests/h2h.test.mjs',
+      'tests/newscache.test.mjs',
     ],
   },
   {
@@ -122,7 +134,7 @@ async function main() {
   out.push('> Check the commit above against the repo before trusting this file. A');
   out.push('> stale bundle that looks current is worse than no bundle at all.');
   out.push('');
-  out.push('Excluded: `config/secrets.json` (credentials), `data/` (raw API cache and');
+  out.push('Excluded: `config/secrets.json` (credentials), `config/money.json` (private ledger), `data/` (raw API cache and');
   out.push('fixtures, both regenerable), `docs/data/` (build output).');
   out.push('');
   out.push('---');

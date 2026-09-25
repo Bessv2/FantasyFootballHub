@@ -25,7 +25,7 @@ the way they are.
 | Managers | **10 committed.** ESPN size changed 12 -> 10. Most have not claimed their ESPN team yet. |
 | Buy-in | **$75** (was $50). Payouts **350 / 130 / 75** + **$195** funding weekly challenges at $15/wk. |
 | Money owed | Everyone paid **$50** under the old buy-in. The ledger shows each of them **$25 short** until somebody confirms otherwise — see below. |
-| Tests | 141, all passing |
+| Tests | 194, all passing |
 | Automation | GitHub Actions, every 3 hours — **verified working**, it has pushed real commits |
 
 The league had no rosters, no picks and no games at time of writing. Every
@@ -586,7 +586,15 @@ and the coaching report all light up on their own.
   indication of why. That is the right behaviour; it is only worth noting so a
   future session does not treat it as a bug.
 - **The advisor uses ESPN projections uncritically.** No opponent adjustment, no
-  matchup weighting, no injury-probability discount.
+  matchup weighting, no injury-probability discount. Planned as "Phase 8" and
+  deliberately not built yet: points-allowed-by-defense needs each player's NFL
+  opponent for every past week, and the adjustment needs next week's — the
+  normalized model only carries a player's `proTeam`, and nothing fetches the
+  NFL schedule. Start with a pro-schedule fetch (ESPN's `proTeamSchedules`
+  view, unverified here), normalize it to `{ week, proTeam -> opponent }`, then
+  the rest is pure: shrink positional points-allowed toward the average as
+  `odds.mjs` does, clamp the multiplier (±15%), apply a fixed documented
+  Questionable/Doubtful discount, and show "ESPN proj → adj" side by side.
 - **Historical seasons are unsupported in practice.** The code handles the
   pre-2018 `leagueHistory` endpoint, but this league has no history so that path
   has never executed.
