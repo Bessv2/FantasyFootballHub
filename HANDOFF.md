@@ -266,6 +266,13 @@ file **deletes the local copy** on an existing checkout: restore it with
 `git show 0229666:config/money.json > config/money.json` (the last `main`
 commit before the split).
 
+**The link-preview image is a static PNG, not generated per build.**
+`docs/assets/og.png` (1200×630) is referenced by absolute URL from the Open
+Graph tags in `docs/index.html` — chat apps will not resolve a relative one.
+Its source is `scripts/og-card.html`, screenshotted once by hand; rendering it
+in the build would need a headless browser or image library, and the project
+has no dependencies. If the league name or format changes, regenerate it.
+
 **SWIDs are stripped at the publish boundary.** `build.mjs` drops
 `teams[].ownerIds` (each manager's permanent ESPN account ID) before writing
 `docs/`, and **fails the build** if a SWID or `espn_s2` string appears in the
