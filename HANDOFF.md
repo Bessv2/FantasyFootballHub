@@ -147,6 +147,22 @@ Reversing this pair does not throw. It returns real numbers of the wrong kind �
 a single week presented as a season — so every downstream figure is quietly
 wrong and nothing announces it.
 
+### `playerRankType` is not the scoring format
+
+`scoringSettings.playerRankType` is only the default ranking list ESPN shows in
+the draft room. It does not reflect custom scoring, and for this league it does
+not say `PPR` even though receptions score a point. `receptionScoring()` in
+`normalize.mjs` reads `scoringItems` instead — **statId 53 is receptions** — and
+emits `isPPR`, `pointsPerReception` and `scoringLabel`. statId 53 is modelled on
+the documented API; confirm it against `data/raw/` after the next real fetch
+(the site header should say PPR).
+
+### Manager names are ESPN display names only
+
+`normalizeTeams()` uses the member's ESPN `displayName` and never
+`firstName`/`lastName`: the site is public and the league never agreed to
+publish real names. With no display name it falls back to the team name.
+
 ### Superflex rankings exist and matter enormously
 
 `draftRanksByRankType` has `STANDARD`, `PPR`, `ELIMINATION` **and `SUPERFLEX`**.
@@ -462,9 +478,6 @@ and the coaching report all light up on their own.
   outstanding. If everyone has since settled up, change those to
   `"paid": true` and the ledger balances. **Do not mark them paid to make the
   warning go away**; the whole point of the ledger is that it says what is true.
-- **Manager real names are public** on the site (pulled from ESPN member
-  profiles). Never resolved with the owner. If it matters, render team names and
-  ESPN display names only — the change is confined to `normalizeTeams()`.
 - **Challenge payouts are not tracked as paid.** Winners are computed, but
   settling one means adding a row to `payoutsPaid` in `config/money.json` by
   hand. A `payoutsPaid` entry keyed to a challenge week would close the loop.
