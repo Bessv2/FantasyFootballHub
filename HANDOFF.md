@@ -304,6 +304,18 @@ spot: a player traded back to a team he was on earlier in the season would
 date the trade to his first stint. If ESPN is ever seen to put
 `scoringPeriodId` on a topic, map it in `normalizeTrades()` and it is used as-is.
 
+**The weekly recap is templated text, deliberately.** `scripts/lib/recap.mjs`
+builds "Week N in review" from analytics that already exist — top score,
+blowout, closest game, unluckiest loss, bench regret, challenge winner, biggest
+power-ranking move — with 2–3 phrasings per line chosen by an FNV hash of
+`week:type`. No model and no network: the build runs unattended every three
+hours, and a recap that could reword last week's news on every run (or fail
+when an API is down) would be worse than a plain one. A line whose data is
+missing is dropped, not zero-filled. The newest week is left out while any of
+its matchups is UNDECIDED. Adding a line type means adding to `PHRASES` and one
+block in `buildWeeklyRecap()`; `tests/recap.test.mjs` pins exact text, so a
+reworded phrase fails exactly one expectation.
+
 **The link-preview image is a static PNG, not generated per build.**
 `docs/assets/og.png` (1200×630) is referenced by absolute URL from the Open
 Graph tags in `docs/index.html` — chat apps will not resolve a relative one.

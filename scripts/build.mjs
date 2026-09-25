@@ -33,6 +33,7 @@ import { recommendLineup, coachingReport, waiverTargets } from './lib/advisor.mj
 import { buildBigBoard } from './lib/bigboard.mjs';
 import { computePlayoffOdds } from './lib/odds.mjs';
 import { attributeTrades } from './lib/trades.mjs';
+import { buildRecaps } from './lib/recap.mjs';
 
 const ROOT = projectRoot();
 const args = process.argv.slice(2);
@@ -128,12 +129,15 @@ function buildSeason(raw, moneyConfig) {
       })
     : null;
 
+  // Templated "Week N in review" lines; no model, no network. See lib/recap.mjs.
+  const recaps = buildRecaps(season, { teamWeeks, challengeWeeks: challenges.weeks });
+
   const teamDetail = buildTeamDetail(season, teamStats, teamWeeks, standings, draft);
 
   return {
     season, teamWeeks, teamStats, standings, power, prizes,
     weeklyHigh, positional, draft, ledger, teamDetail, challenges, playerCards,
-    playoffOdds, oddsMs, trades,
+    playoffOdds, oddsMs, trades, recaps,
   };
 }
 
@@ -466,6 +470,8 @@ async function main() {
     challenges: current.challenges,
     // null before Week 1 and after the regular season; see lib/odds.mjs.
     playoffOdds: current.playoffOdds,
+    // Newest first, one per completed week.
+    recaps: current.recaps,
     site: config.site ?? {},
   });
 

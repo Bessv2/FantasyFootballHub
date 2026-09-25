@@ -496,6 +496,39 @@ function startCountdown() {
 
 // --- Views -----------------------------------------------------------------
 
+const RECAP_LABELS = {
+  topScore: 'Top score',
+  blowout: 'Blowout',
+  closest: 'Nail-biter',
+  unluckiest: 'Tough luck',
+  lineup: 'Bench regret',
+  challenge: 'Challenge',
+  powerMover: 'Mover',
+};
+
+const recapList = (recap) => `
+  <ul class="recap__items">
+    ${recap.items.map((item) => `
+      <li><span class="recap__type">${esc(RECAP_LABELS[item.type] ?? item.type)}</span>
+      <span>${esc(item.text)}</span></li>`).join('')}
+  </ul>`;
+
+/** "Week N in review", built at build time from templated lines. */
+function renderRecaps(recaps) {
+  if (!recaps?.length) return '';
+  const [latest, ...earlier] = recaps;
+  return `
+    <section class="card recap" aria-labelledby="recap-h">
+      <h3 id="recap-h">Week ${esc(latest.week)} in review</h3>
+      ${recapList(latest)}
+      ${earlier.length ? `
+      <details class="recap__earlier">
+        <summary>Earlier weeks (${esc(earlier.length)})</summary>
+        ${earlier.map((r) => `<h4>Week ${esc(r.week)}</h4>${recapList(r)}`).join('')}
+      </details>` : ''}
+    </section>`;
+}
+
 function renderOverview() {
   const { hub } = state;
   const { phase, status, league, power } = hub;
@@ -534,6 +567,8 @@ function renderOverview() {
         <p class="hero__sub">${esc(phase.detail)}</p>
       </section>`);
   }
+
+  parts.push(renderRecaps(hub.recaps));
 
   // --- Stat tiles -------------------------------------------------------
   parts.push(`

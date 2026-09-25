@@ -412,6 +412,25 @@ tr.playoff-cut td, tr.playoff-cut th { border-bottom: 2px solid var(--accent); }
 }
 .odds-watch p { margin: 0; }
 
+/* --- Weekly recap ------------------------------------------------------- */
+.recap { margin: 0 0 1.5rem; }
+.recap__items { list-style: none; margin: 0; padding: 0; }
+.recap__items li {
+  display: grid; grid-template-columns: 7.5rem 1fr; gap: 0.2rem 0.75rem;
+  padding: 0.4rem 0; border-top: 1px solid var(--border);
+}
+.recap__items li:first-child { border-top: none; }
+.recap__type {
+  font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-muted); padding-top: 0.2rem;
+}
+@media (max-width: 480px) {
+  .recap__items li { grid-template-columns: 1fr; }
+}
+.recap__earlier { margin-top: 0.8rem; }
+.recap__earlier summary { cursor: pointer; color: var(--accent); font-weight: 600; }
+.recap__earlier h4 { margin: 1rem 0 0.2rem; }
+
 /* --- Trades ------------------------------------------------------------- */
 .trade__side {
   border-top: 1px solid var(--border); padding-top: 0.6rem; margin-top: 0.6rem;
