@@ -915,6 +915,86 @@ function renderTeams() {
  * readable by anyone in the league. For a fantasy league that is arguably the
  * point; nothing here is more private than what ESPN already shows.
  */
+const STRATEGY_LABELS = {
+  projection: 'projected',
+  mostStarted: 'most-started',
+  upside: 'upside',
+  floor: 'safe-floor',
+};
+
+/**
+ * The 100-week lineup simulation, built at build time: how often each player
+ * made the best lineup, and which lineup wins most often against this week's
+ * opponent.
+ */
+function renderLineupSim(sim) {
+  if (!sim?.available) return '';
+  const rec = sim.recommended;
+  const proj = sim.projectionLineup;
+  const pct = (p) => `${num(p, 0)}%`;
+  const names = (list) => list.map((p) => `<strong>${esc(p.name)}</strong> <small>(${esc(p.position)})</small>`).join(', ');
+
+  const verdict = rec.strategy === 'projection'
+    ? `<p><span class="pill pill--good">Stick with it</span>
+        The lineup that is best on projections is also the one that ${
+          sim.opponent ? `wins most often — <strong>${pct(rec.winPct)}</strong> of simulations` : 'scores the most on average'}.</p>`
+    : `<p><span class="pill pill--accent">Consider the ${esc(STRATEGY_LABELS[rec.strategy] ?? rec.strategy)} lineup</span>
+        Start ${names(sim.changes.start)}; sit ${names(sim.changes.sit)}.
+        It wins <strong>${pct(rec.winPct)}</strong> of simulations against
+        ${pct(proj.winPct)} for the projected lineup${
+          rec.strategy === 'upside' ? ' — as the underdog, you need the bigger ceiling.'
+          : rec.strategy === 'floor' ? ' — as the favourite, a safer floor protects the lead.' : '.'}</p>`;
+
+  const rows = sim.players.map((p) => `
+    <tr>
+      <th scope="row" class="row-team">${esc(p.name)}<small>${esc(p.position)}${p.out ? ' · not playing' : ''}</small></th>
+      <td class="num">${num(p.projected, 1)}</td>
+      <td class="num">${p.out ? '—' : `${num(Math.max(0, p.projected - p.spread), 0)}–${num(p.projected + p.spread, 0)}`}</td>
+      <td class="bar-cell">${bar(p.startPct, 100, { digits: 0, suffix: '%' })}</td>
+      <td>${p.recommended ? '<span class="pill pill--good">Start</span>' : '<span class="pill pill--neutral">Bench</span>'}</td>
+    </tr>`).join('');
+
+  const alts = (sim.alternatives ?? []).filter((a) => a.winPct !== null && a.strategy !== rec.strategy);
+
+  return `<div class="card" style="margin-bottom:1.5rem">
+    <h3>Week ${esc(sim.week)} — ${esc(sim.simulations)} simulated outcomes</h3>
+    <p class="stat__note">
+      Every player's score is drawn ${esc(sim.simulations)} times around his projection, with a spread
+      based on how much he has actually swung this season${sim.opponent ? `, and played against
+      ${esc(sim.opponentName ?? 'your opponent')}'s best projected lineup` : ''}.
+    </p>
+    ${sim.opponent ? `
+    <ul class="stats" style="margin:0.75rem 0">
+      <li class="stat"><span class="stat__label">Win chance</span>
+        <span class="stat__value">${pct(rec.winPct)}</span>
+        <span class="stat__note">vs ${esc(sim.opponentName ?? 'opponent')}</span></li>
+      <li class="stat"><span class="stat__label">You</span>
+        <span class="stat__value">${num(rec.mean, 1)}</span>
+        <span class="stat__note">likely ${num(rec.p10, 0)}–${num(rec.p90, 0)}</span></li>
+      <li class="stat"><span class="stat__label">Them</span>
+        <span class="stat__value">${num(sim.opponent.mean, 1)}</span>
+        <span class="stat__note">likely ${num(sim.opponent.p10, 0)}–${num(sim.opponent.p90, 0)}</span></li>
+    </ul>` : ''}
+    ${verdict}
+    ${alts.length ? `<p class="stat__note">Also tried: ${alts.map((a) =>
+      `${esc(STRATEGY_LABELS[a.strategy] ?? a.strategy)} lineup ${pct(a.winPct)}`).join(' · ')}.
+      A lineup has to win at least 3 more of the ${esc(sim.simulations)} to replace the projected one — fewer is noise.</p>` : ''}
+    <div class="table-scroll" style="margin-top:0.75rem">
+      <table>
+        <caption>Start rate: how often each player was in the best possible lineup</caption>
+        <thead><tr>
+          <th scope="col">Player</th>
+          <th scope="col" class="num">Proj.</th>
+          <th scope="col" class="num"><abbr title="Projection plus or minus one standard deviation">Range</abbr></th>
+          <th scope="col" class="bar-cell">Start rate</th>
+          <th scope="col">Pick</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
 function renderTeam(teamId) {
   const body = $('#team-body');
   const all = state.teamDetail?.teams ?? [];
@@ -1013,6 +1093,8 @@ function renderTeam(teamId) {
       </div>`);
     }
   }
+
+  parts.push(renderLineupSim(team.lineupSim));
 
   // --- Waivers ----------------------------------------------------------
   const waivers = team.waivers;

@@ -25,7 +25,7 @@ the way they are.
 | Managers | **10 committed.** ESPN size changed 12 -> 10. Most have not claimed their ESPN team yet. |
 | Buy-in | **$75** (was $50). Payouts **350 / 130 / 75** + **$195** funding weekly challenges at $15/wk. |
 | Money owed | Everyone paid **$50** under the old buy-in. The ledger shows each of them **$25 short** until somebody confirms otherwise — see below. |
-| Tests | 194, all passing |
+| Tests | 202, all passing |
 | Automation | GitHub Actions, every 3 hours — **verified working**, it has pushed real commits |
 
 The league had no rosters, no picks and no games at time of writing. Every
@@ -343,6 +343,23 @@ every winner as Paid/Unpaid. Challenge ids are unique within a season because
 the deck is dealt without replacement. `weeklyChallenge.every: N` (in
 `config/pot.json`) deals every Nth week and wins over `cadence`; like `salt`,
 only change it before Week 1.
+
+**The team page runs 100 simulated weeks for lineup advice.**
+`scripts/lib/lineupsim.mjs` draws every rostered player's score 100 times from a
+normal centred on his ESPN projection, with a spread blending his own weekly
+swings this season (weight n − 1) and a positional default (`DEFAULT_CV`, an
+assumption — weight `SPREAD_K = 4`). OUT/IR/suspended players and zero
+projections (byes) score 0. Each draw is solved for the best lineup, giving
+each player's **start rate**. Then four lineups — projected, most-started,
+upside (80th percentile) and safe-floor (20th) — are scored across the same 100
+weeks against the opponent's projected-best lineup (opponent from
+`season.schedule`). The projection lineup always has the best *average*, so an
+alternative replaces it only by winning ≥3 more of the 100 — below that is
+noise. In practice that means underdogs are sometimes told to chase upside and
+favourites almost never change. Contenders are defined *before* scoring so the
+pick is not just whichever lineup got lucky in these 100 draws. Seeded on
+`season:week:team`. No opponent (bye, or no schedule.json) → no win odds, and
+the projected lineup stands.
 
 **The link-preview image is a static PNG, not generated per build.**
 `docs/assets/og.png` (1200×630) is referenced by absolute URL from the Open
