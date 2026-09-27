@@ -8,7 +8,7 @@
  * that says "nothing has happened yet" rather than failing or inventing zeros.
  */
 
-import { mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, readdir, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 
@@ -25,12 +25,16 @@ import {
   computePositionalStats,
 } from './lib/analytics.mjs';
 import { analyzeDraft } from './lib/draft.mjs';
-import { computeLedger, computePayouts, challengePayout, splitPot } from './lib/money.mjs';
+import { computeLedger, computePayouts, challengePayout, splitPot, mergeMoneyConfig } from './lib/money.mjs';
 import { buildChallengeSchedule, computeChallenges, challengeLeaderboard } from './lib/challenges.mjs';
 import { sanitizeTeamLogo } from './lib/images.mjs';
 import { buildPlayerCards, normalizeNews } from './lib/playercard.mjs';
 import { recommendLineup, coachingReport, waiverTargets } from './lib/advisor.mjs';
 import { buildBigBoard } from './lib/bigboard.mjs';
+import { computePlayoffOdds } from './lib/odds.mjs';
+import { attributeTrades } from './lib/trades.mjs';
+import { buildRecaps } from './lib/recap.mjs';
+import { buildHeadToHead, headToHeadFor, managerIdOf, publicManagerKey } from './lib/h2h.mjs';
 
 const ROOT = projectRoot();
 const args = process.argv.slice(2);
@@ -83,6 +87,7 @@ async function loadSeasonRaw(season) {
     freeAgents: await readJson(path.join(dir, 'freeagents.json')),
     draftPool: await readJson(path.join(dir, 'draftpool.json')),
     news: await readJson(path.join(dir, 'news.json')),
+    schedule: await readJson(path.join(dir, 'schedule.json')),
     weeks,
   };
 }
@@ -105,6 +110,11 @@ function buildSeason(raw, moneyConfig) {
   const positional = computePositionalStats(teamWeeks, teamStats);
   const draft = analyzeDraft(season);
 
+  const oddsStart = performance.now();
+  const playoffOdds = computePlayoffOdds(season);
+  const oddsMs = Math.round(performance.now() - oddsStart);
+  const trades = attributeTrades(season);
+
   const playerCards = buildPlayerCards({
     players: playerObjectsFor(raw),
     seasonId: season.league.season,
@@ -114,15 +124,22 @@ function buildSeason(raw, moneyConfig) {
   const challenges = buildChallenges(season, teamStats, teamWeeks, moneyConfig);
   // The ledger needs the same week list the challenges were dealt for, so the
   // pot it splits and the pot the site pays out are the same pot.
-  const ledger = computeLedger(moneyConfig, season, standings, {
-    challengeWeeks: challenges.schedule.weeks.map((w) => w.week),
-  });
+  const ledger = moneyConfig.ledgerEnabled
+    ? computeLedger(moneyConfig, season, standings, {
+        challengeWeeks: challenges.schedule.weeks.map((w) => w.week),
+        challenges: challenges.weeks,
+      })
+    : null;
+
+  // Templated "Week N in review" lines; no model, no network. See lib/recap.mjs.
+  const recaps = buildRecaps(season, { teamWeeks, challengeWeeks: challenges.weeks });
 
   const teamDetail = buildTeamDetail(season, teamStats, teamWeeks, standings, draft);
 
   return {
     season, teamWeeks, teamStats, standings, power, prizes,
     weeklyHigh, positional, draft, ledger, teamDetail, challenges, playerCards,
+    playoffOdds, oddsMs, trades, recaps,
   };
 }
 
@@ -143,14 +160,19 @@ function buildChallenges(season, teamStats, teamWeeks, moneyConfig) {
     weeks: season.league.regularSeasonWeeks,
     salt: config.salt ?? '',
     cadence: config.cadence ?? 'weekly',
+    every: config.every ?? null,
     startWeek: config.startWeek ?? 1,
     overrides: config.overrides ?? {},
   });
 
   const weekNumbers = schedule.weeks.map((w) => w.week);
 
+  // expectedTeams comes from the public config/pot.json. The member list is
+  // private and absent from the published build, so counting it here would
+  // make the published payout depend on whose machine ran the build.
   const expectedPot =
-    (Number(moneyConfig.buyIn) || 0) * (moneyConfig.members?.length || season.league.size);
+    (Number(moneyConfig.buyIn) || 0) *
+    (Number(moneyConfig.expectedTeams) || moneyConfig.members?.length || season.league.size);
   const { payouts } = computePayouts(moneyConfig, expectedPot);
   const pot = Math.max(0, challengePayout(payouts, moneyConfig));
   const perWeek = new Map(splitPot(pot, weekNumbers).map((w) => [w.week, w.amount]));
@@ -167,6 +189,7 @@ function buildChallenges(season, teamStats, teamWeeks, moneyConfig) {
     enabled: config.enabled !== false,
     seed: schedule.seed,
     cadence: schedule.cadence,
+    every: schedule.every,
     currency: moneyConfig.currency ?? 'USD',
     pot: Number(pot.toFixed(2)),
     totalWeeks: weekNumbers.length,
@@ -193,19 +216,6 @@ function buildTeamDetail(season, teamStats, teamWeeks, standings, draft) {
       const rows = teamWeeks.filter((r) => r.teamId === team.id).sort((a, b) => a.week - b.week);
       const standing = standings.find((s) => s.teamId === team.id) ?? null;
       const roster = season.currentRosters?.[team.id] ?? [];
-
-      // Head-to-head, so "I always lose to that guy" can be checked.
-      const h2h = new Map();
-      for (const row of rows) {
-        if (row.opponentId === null) continue;
-        if (!h2h.has(row.opponentId)) h2h.set(row.opponentId, { wins: 0, losses: 0, ties: 0, pointsFor: 0, pointsAgainst: 0 });
-        const rec = h2h.get(row.opponentId);
-        if (row.result === 'WIN') rec.wins += 1;
-        else if (row.result === 'LOSS') rec.losses += 1;
-        else rec.ties += 1;
-        rec.pointsFor += row.score;
-        rec.pointsAgainst += row.opponentScore;
-      }
 
       return {
         teamId: team.id,
@@ -240,13 +250,9 @@ function buildTeamDetail(season, teamStats, teamWeeks, standings, draft) {
 
         transactions: season.transactions.filter((t) => t.teamId === team.id).length,
 
-        headToHead: [...h2h.entries()].map(([opponentId, rec]) => ({
-          opponentId,
-          opponentName: season.teams.find((t) => t.id === opponentId)?.name ?? `Team ${opponentId}`,
-          ...rec,
-          pointsFor: Number(rec.pointsFor.toFixed(2)),
-          pointsAgainst: Number(rec.pointsAgainst.toFixed(2)),
-        })),
+        // All-time, by manager: filled in by main() once every season is built.
+        headToHead: [],
+        rivalry: null,
       };
     });
 }
@@ -390,7 +396,16 @@ async function main() {
   console.log(`\nBuilding from ${path.relative(ROOT, RAW)}\n`);
 
   const config = await readJson(path.join(ROOT, 'config', 'league.json'), {});
-  const moneyConfig = await readJson(path.join(ROOT, 'config', 'money.json'), {});
+  // config/money.json holds real names and amounts, so it is gitignored and
+  // the automated build never has it. That is a supported state: the public
+  // settings in config/pot.json still deal the challenges; only the ledger goes.
+  const moneyConfig = mergeMoneyConfig(
+    await readJson(path.join(ROOT, 'config', 'pot.json'), {}),
+    await readJson(path.join(ROOT, 'config', 'money.json'), null),
+  );
+  if (!moneyConfig.ledgerEnabled) {
+    console.log('  config/money.json not found — Money tab disabled (copy config/money.example.json to enable).');
+  }
   const seasons = config.seasons ?? [];
 
   if (!seasons.length) {
@@ -419,6 +434,25 @@ async function main() {
   const current = built[built.length - 1];
   const phase = describePhase(current.season);
 
+  // ---- All-time head-to-head, by manager ---------------------------------
+  // Matched on ESPN owner ids (SWIDs), which must never be published — so each
+  // id is swapped for an opaque, league-salted key right here, before anything
+  // reaches a team page. The SWID scan below would fail the build otherwise.
+  const h2h = buildHeadToHead(built.map((b) => ({ year: b.year, season: b.season, teamWeeks: b.teamWeeks })));
+  const keyOf = (managerId) => publicManagerKey(managerId, String(config.leagueId ?? current.season.league.id));
+  for (const b of built) {
+    for (const detail of b.teamDetail) {
+      const team = b.season.teams.find((t) => t.id === detail.teamId);
+      const { rows, rivalry } = headToHeadFor(h2h, managerIdOf(team, b.year));
+      const publicRow = ({ opponentId, winGap, ...row }) => ({ opponentKey: keyOf(opponentId), ...row });
+      detail.managerKey = keyOf(managerIdOf(team, b.year));
+      detail.headToHead = rows.map(publicRow);
+      detail.rivalry = rivalry
+        ? { ...publicRow(rows.find((r) => r.opponentId === rivalry.opponentId)), avgMargin: rivalry.avgMargin }
+        : null;
+    }
+  }
+
   console.log('');
 
   // ---- hub.json: everything the landing view needs -----------------------
@@ -440,6 +474,10 @@ async function main() {
     weeklyHigh: current.weeklyHigh,
     positional: current.positional,
     challenges: current.challenges,
+    // null before Week 1 and after the regular season; see lib/odds.mjs.
+    playoffOdds: current.playoffOdds,
+    // Newest first, one per completed week.
+    recaps: current.recaps,
     site: config.site ?? {},
   });
 
@@ -459,7 +497,7 @@ async function main() {
       prizes: b.prizes,
       challenges: b.challenges,
       transactions: b.season.transactions,
-      trades: b.season.trades,
+      trades: b.trades,
     });
 
     await writeJson(path.join(DERIVED, `draft-${b.year}.json`), b.draft);
@@ -522,9 +560,16 @@ async function main() {
   // Always written so `npm run serve` shows the full ledger locally. When
   // site.showMoney is false it is gitignored, so it never reaches the public
   // site — local visibility without publishing who owes what.
-  await writeJson(path.join(DERIVED, 'money.json'), current.ledger);
-  if (config.site?.showMoney === false) {
-    console.log('       (money.json is gitignored — local only, not published)');
+  // With no ledger, a leftover file from an earlier local build would show a
+  // stale Money tab, so it goes too — it is generated output, never a source.
+  const ledgerFile = path.join(DERIVED, 'money.json');
+  if (current.ledger) {
+    await writeJson(ledgerFile, current.ledger);
+    if (config.site?.showMoney === false) {
+      console.log('       (money.json is gitignored — local only, not published)');
+    }
+  } else if (existsSync(ledgerFile)) {
+    await rm(ledgerFile);
   }
 
   // ---- Publish-boundary safety net --------------------------------------
@@ -565,12 +610,17 @@ async function main() {
     `  player cards      ${Object.keys(current.playerCards).length}` +
       `${current.raw.news ? '' : ' (no news fetched)'}`
   );
+  console.log(
+    `  playoff odds      ${current.playoffOdds
+      ? `${current.playoffOdds.simulations} sims, ${current.playoffOdds.generatedFrom.remainingGames} games left (${current.oddsMs} ms)`
+      : 'none (no games yet, season over, or schedule unknown)'}`
+  );
   const settled = current.challenges.weeks.filter((w) => w.winner).length;
   console.log(
     `  challenges        ${settled}/${current.challenges.totalWeeks} settled ` +
-      `(${current.challenges.cadence}, ${current.ledger.currency} ${current.challenges.pot} pot)`
+      `(${current.challenges.cadence}, ${current.challenges.currency} ${current.challenges.pot} pot)`
   );
-  if (current.ledger.warnings.length) {
+  if (current.ledger?.warnings.length) {
     console.log('\nMoney ledger notes:');
     for (const w of current.ledger.warnings) console.log(`  - ${w}`);
   }

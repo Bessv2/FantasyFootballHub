@@ -1,40 +1,24 @@
 {
   "_readme": [
-    "The money ledger. ESPN knows nothing about this — it is entirely yours.",
+    "The PUBLIC half of the money settings. Safe to commit: no names, no amounts paid.",
     "",
-    "PRIVACY: this file is committed, but the LEDGER IT GENERATES is not.",
-    "docs/data/money.json is gitignored, so the Money tab shows locally via",
-    "`npm run serve` and never reaches the public site. Payout AMOUNTS are",
-    "published (the league has to know what a challenge is worth); who has paid",
-    "and who still owes is not.",
+    "Everything here is already published on the site — the league has to be able to",
+    "see what a challenge is worth, and the weekly challenge draw has to come out",
+    "identical on every build, including the GitHub Actions build that has no",
+    "config/money.json. So the buy-in, payout structure and challenge settings live",
+    "here, and config/money.json (gitignored, local only) holds only who has paid.",
     "",
-    "MEMBERS: list everyone who is in the pot, whether or not they have claimed",
-    "an ESPN team yet. People commit and pay long before they click the invite",
-    "link. Add `teamId` once you know which ESPN team is theirs, and the ledger",
-    "will pull their real team name through.",
+    "If config/money.json also sets one of these keys, THIS file wins, so a local",
+    "build and the published build can never deal a different challenge schedule.",
     "",
     "A payout slot can be a fixed 'amount', a 'pct' share of the pot, or",
     "'remainder': true to absorb whatever is left."
   ],
-
   "currency": "USD",
   "buyIn": 75,
+  "_expectedTeamsNote": "How many managers are in the pot. Sets the size of the pot the published payouts are computed from, so it cannot depend on the private member list.",
+  "expectedTeams": 10,
   "buyInDueDate": "2026-09-05",
-
-  "_membersNote": "10 managers. Names are placeholders until teams are claimed — edit them and add teamId as people join. NOTE: paid flags below were set at the old $50 buy-in; re-check who has settled the $25 difference.",
-  "members": [
-    { "name": "Geordon Roe", "teamId": 1, "amountPaid": 75, "method": "Cash", "note": "" },
-    { "name": "Anthony Steff", "teamId": 8, "amountPaid": 75, "method": "Cash", "note": "" },
-    { "name": "Manager 3", "amountPaid": 75, "method": "Cash" },
-    { "name": "Manager 4", "amountPaid": 75, "method": "Cash" },
-    { "name": "Manager 5", "amountPaid": 75, "method": "Cash" },
-    { "name": "Manager 6", "amountPaid": 75, "method": "Cash" },
-    { "name": "Manager 7", "amountPaid": 75, "method": "Cash" },
-    { "name": "Manager 8", "amountPaid": 75, "method": "Cash" },
-    { "name": "Manager 9", "amountPaid": 75, "method": "Cash" },
-    { "name": "Manager 10", "amountPaid": 75, "method": "Cash" }
-  ],
-
   "payouts": {
     "_note": [
       "10 x $75 = $750.",
@@ -56,7 +40,6 @@
       { "id": "challenges", "label": "Weekly Challenges", "remainder": true, "note": "A random challenge every week, paid in cash" }
     ]
   },
-
   "weeklyChallenge": {
     "_note": [
       "One challenge is drawn at random for each week from the deck in",
@@ -65,6 +48,9 @@
       "after the games are played.",
       "",
       "cadence:  'weekly' or 'biweekly'",
+      "every:    optional whole number of weeks between challenges (3 = every",
+      "          third week). Wins over cadence when set. Same rule as salt:",
+      "          only ever change it before Week 1.",
       "startWeek: the first week that draws a challenge",
       "salt:      change this to reshuffle the entire season. Doing that mid-",
       "           season re-draws weeks that have already been played, so only",
@@ -97,11 +83,5 @@
       "12": "uglyWin",
       "13": "benchWarmer"
     }
-  },
-
-  "_paymentsNote": "Only needed for per-team overrides once teams are claimed; `members` above covers the common case.",
-  "payments": [],
-
-  "_payoutsPaidNote": "Filled in at the end of the season as you pay winners out. Weekly challenge payouts go here too — { teamId, amount, note: 'Week 3 challenge' }.",
-  "payoutsPaid": []
+  }
 }

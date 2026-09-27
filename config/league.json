@@ -11,11 +11,8 @@
   "seasons": [2026],
   "currentSeason": 2026,
 
-  "leagueName": "Roe Leauge",
+  "leagueName": "Roe League",
   "tagline": "",
-
-  "regularSeasonWeeks": 14,
-  "playoffTeams": 6,
 
   "site": {
     "theme": "auto",

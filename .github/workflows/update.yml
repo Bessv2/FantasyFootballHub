@@ -55,6 +55,19 @@ jobs:
           fi
           echo "Credentials present (espn_s2 is ${#ESPN_S2} chars)."
 
+      # The runner starts clean every time and data/raw/ is gitignored, so the
+      # per-player news cache (data/raw/news-cache.json, 6-hour TTL) would be
+      # empty on every run without this. Each run saves a new entry; the
+      # restore-keys prefer today's newest, then any earlier one. Stale entries
+      # are simply refetched, so an old restore is harmless.
+      - name: Restore player news cache
+        uses: actions/cache@v4
+        with:
+          path: data/raw/news-cache.json
+          key: news-cache-${{ github.run_id }}
+          restore-keys: |
+            news-cache-
+
       - name: Fetch from ESPN
         env:
           ESPN_S2: ${{ secrets.ESPN_S2 }}

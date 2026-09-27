@@ -10,6 +10,11 @@ config/secrets.*.json
 .env
 .env.*
 
+# The money ledger's source: real names and who has paid. This repo is public.
+# Copy config/money.example.json to config/money.json to use it locally; the
+# build runs fine without it (the Money tab is simply disabled).
+config/money.json
+
 # --- Regenerable data --------------------------------------------------
 # Raw API cache: large, regenerable with `npm run fetch`, and contains more
 # of your league than needs publishing. The site reads docs/data/.

@@ -89,6 +89,26 @@ export function computePayouts(moneyConfig, expectedPot) {
   return { payouts, structure, fixedTotal, pctAmount, remainderSlots, leftOver };
 }
 
+/**
+ * The money settings come from two files.
+ *
+ *   config/pot.json    committed: buy-in, payout structure, weekly challenge
+ *   config/money.json  gitignored: members, payments, what has been paid out
+ *
+ * The public half wins any key both files define. The weekly challenge draw is
+ * dealt from these settings on every build, and the published build (GitHub
+ * Actions) never sees money.json, so letting the private file override them
+ * would let a local build publish a different schedule from the automated one.
+ *
+ * Returns `ledgerEnabled: false` when there is no private file, so the build
+ * can skip the ledger rather than render one that says everybody owes.
+ */
+export function mergeMoneyConfig(publicConfig, privateConfig) {
+  const pub = publicConfig ?? {};
+  const priv = privateConfig ?? null;
+  return { ...(priv ?? {}), ...pub, ledgerEnabled: priv !== null };
+}
+
 /** Which payout slot funds the weekly challenges, by id. */
 export const CHALLENGE_SLOT_ID = 'challenges';
 
@@ -96,7 +116,42 @@ export const CHALLENGE_SLOT_ID = 'challenges';
 export const challengePayout = (payouts, moneyConfig = {}) =>
   payouts.find((p) => p.id === (moneyConfig.weeklyChallenge?.payoutId ?? CHALLENGE_SLOT_ID))?.amount ?? 0;
 
-export function computeLedger(moneyConfig, season, standings, { challengeWeeks = [] } = {}) {
+/**
+ * Each settled weekly challenge, with every winner marked paid or unpaid.
+ *
+ * A `payoutsPaid` entry with a `challengeId` settles that challenge. With a
+ * `teamId` too it settles only that winner — the way to record one half of a
+ * split pot — and without one it settles every winner of that challenge.
+ * Challenge ids are unique within a season (the deck is dealt without
+ * replacement), which is what makes them a safe key; `week` is accepted as
+ * well for a hand-written entry.
+ */
+export function challengePayoutStatus(resolvedWeeks = [], payoutsPaid = []) {
+  const settles = (entry, week, teamId) =>
+    (entry.challengeId ? entry.challengeId === week.challengeId : Number(entry.week) === week.week) &&
+    (entry.challengeId || entry.week) &&
+    (entry.teamId === undefined || entry.teamId === null || entry.teamId === teamId);
+
+  return resolvedWeeks
+    .filter((w) => w.winner)
+    .map((w) => ({
+      week: w.week,
+      challengeId: w.challengeId,
+      label: w.label,
+      winners: [w.winner, ...(w.tiedWith ?? [])].map((winner) => {
+        const entry = payoutsPaid.find((p) => settles(p, w, winner.teamId)) ?? null;
+        return {
+          teamId: winner.teamId,
+          teamName: winner.teamName,
+          amount: round2(winner.amount),
+          paid: entry !== null,
+          paidDate: entry?.paidDate ?? entry?.date ?? null,
+        };
+      }),
+    }));
+}
+
+export function computeLedger(moneyConfig, season, standings, { challengeWeeks = [], challenges = [] } = {}) {
   const buyIn = Number(moneyConfig.buyIn) || 0;
   const currency = moneyConfig.currency ?? 'USD';
 
@@ -188,6 +243,10 @@ export function computeLedger(moneyConfig, season, standings, { challengeWeeks =
   }));
   const totalPaidOut = round2(paidOut.reduce((a, p) => a + p.amount, 0));
 
+  const challengePayouts = challengePayoutStatus(challenges, moneyConfig.payoutsPaid ?? []);
+  const challengeWinners = challengePayouts.flatMap((c) => c.winners);
+  const challengeOwed = round2(challengeWinners.filter((w) => !w.paid).reduce((a, w) => a + w.amount, 0));
+
   const warnings = [];
   if (buyIn <= 0) {
     warnings.push('No buy-in amount set — edit config/money.json to enable the ledger.');
@@ -208,6 +267,13 @@ export function computeLedger(moneyConfig, season, standings, { challengeWeeks =
         `${expectedPot} pot. Something has to give.`
     );
   }
+  const declaredTeams = Number(moneyConfig.expectedTeams) || 0;
+  if (declaredTeams && declaredTeams !== expectedTeams) {
+    warnings.push(
+      `config/pot.json says ${declaredTeams} teams but the ledger lists ${expectedTeams} members. ` +
+        'The published challenge payouts use the pot.json number — make the two agree.'
+    );
+  }
   if (collected > expectedPot) {
     warnings.push('More money collected than expected — check for a duplicate payment entry.');
   }
@@ -226,6 +292,8 @@ export function computeLedger(moneyConfig, season, standings, { challengeWeeks =
     payouts: projected,
     challengePot: round2(challengePot),
     challengePerWeek: perWeek,
+    challengePayouts,
+    challengeUnpaid: challengeOwed,
     paidOut,
     totalPaidOut,
     remainingToPay: round2(expectedPot - totalPaidOut),

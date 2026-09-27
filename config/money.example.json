@@ -1,0 +1,44 @@
+{
+  "_readme": [
+    "The PRIVATE money ledger: who is in the pot and who has paid.",
+    "",
+    "SETUP: copy this file to config/money.json and fill it in. config/money.json is",
+    "gitignored — it holds real names and amounts, and this repo is public. Without",
+    "it the build still succeeds; the Money tab is simply disabled.",
+    "",
+    "The buy-in, payout structure and weekly challenge settings are NOT here — they",
+    "are public and live in config/pot.json, so the published build (which never",
+    "sees this file) deals exactly the same challenge schedule as your local one.",
+    "",
+    "PRIVACY: the ledger generated from this file (docs/data/money.json) is",
+    "gitignored too, so the Money tab shows locally via `npm run serve` and never",
+    "reaches the public site.",
+    "",
+    "MEMBERS: list everyone who is in the pot, whether or not they have claimed",
+    "an ESPN team yet. People commit and pay long before they click the invite",
+    "link. Add `teamId` once you know which ESPN team is theirs, and the ledger",
+    "will pull their team name through."
+  ],
+  "members": [
+    { "name": "Manager 1", "amountPaid": 0, "method": "", "note": "" },
+    { "name": "Manager 2", "amountPaid": 0, "method": "", "note": "" },
+    { "name": "Manager 3", "amountPaid": 0, "method": "", "note": "" },
+    { "name": "Manager 4", "amountPaid": 0, "method": "", "note": "" },
+    { "name": "Manager 5", "amountPaid": 0, "method": "", "note": "" },
+    { "name": "Manager 6", "amountPaid": 0, "method": "", "note": "" },
+    { "name": "Manager 7", "amountPaid": 0, "method": "", "note": "" },
+    { "name": "Manager 8", "amountPaid": 0, "method": "", "note": "" },
+    { "name": "Manager 9", "amountPaid": 0, "method": "", "note": "" },
+    { "name": "Manager 10", "amountPaid": 0, "method": "", "note": "" }
+  ],
+  "_paymentsNote": "Only needed for per-team overrides once teams are claimed; `members` above covers the common case.",
+  "payments": [],
+  "_payoutsPaidNote": [
+    "Everything paid out, as you pay it. A season prize: { teamId, amount, note }.",
+    "A weekly challenge: add its challengeId (e.g. 'highScore', shown on the",
+    "Challenges tab) and the Money tab marks that winner paid. With a teamId it",
+    "settles only that winner of a split pot; without one, every winner.",
+    "  { \"challengeId\": \"highScore\", \"teamId\": 3, \"amount\": 15, \"paidDate\": \"2026-09-15\" }"
+  ],
+  "payoutsPaid": []
+}

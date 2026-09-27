@@ -110,6 +110,20 @@ describe('challenge schedule', () => {
     );
   });
 
+  test('`every: 3` deals every third week and wins over cadence', () => {
+    // From Week 1 in steps of 3 through Week 13: 1, 4, 7, 10, 13.
+    const schedule = buildChallengeSchedule({ ...LEAGUE, cadence: 'biweekly', every: 3 });
+    assert.deepEqual(schedule.weeks.map((w) => w.week), [1, 4, 7, 10, 13]);
+    assert.equal(schedule.cadence, 'every-3');
+    assert.equal(schedule.every, 3);
+    // `every` unset leaves today's schedules exactly as they were.
+    assert.deepEqual(
+      buildChallengeSchedule({ ...LEAGUE, every: null }),
+      buildChallengeSchedule(LEAGUE)
+    );
+    assert.throws(() => buildChallengeSchedule({ ...LEAGUE, every: 1.5 }), /whole number/);
+  });
+
   test('a season longer than the deck reshuffles instead of running dry', () => {
     const long = buildChallengeSchedule({ ...LEAGUE, weeks: CHALLENGE_DECK.length + 4 });
     assert.equal(long.weeks.length, CHALLENGE_DECK.length + 4);

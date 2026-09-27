@@ -1,4 +1,4 @@
-# Roe Leauge — Fantasy Football Hub
+# Roe League — Fantasy Football Hub
 
 League stats, draft analysis, trades, side prizes, and the money ledger for ESPN
 league `274568741`, as a static site your whole league can open on a phone.
@@ -237,16 +237,27 @@ winner.
 
 ### Changing it
 
-Everything lives in `config/money.json` under `weeklyChallenge`:
+Everything lives in `config/pot.json` under `weeklyChallenge`:
 
 ```jsonc
 "weeklyChallenge": {
   "enabled": true,
   "cadence": "weekly",   // or "biweekly" — one challenge every other week
+  "every": 3,            // optional: every Nth week; wins over cadence
   "startWeek": 1,
   "salt": "",            // change to reshuffle the whole season
   "payoutId": "challenges"
 }
+```
+
+When you pay a challenge winner, record it in your local `config/money.json`
+so the Money tab shows it as paid:
+
+```jsonc
+"payoutsPaid": [
+  { "challengeId": "highScore", "amount": 15, "paidDate": "2026-09-15" },
+  { "challengeId": "bestKicker", "teamId": 3, "amount": 7.5 }  // one half of a split pot
+]
 ```
 
 > **Only ever change `salt` before Week 1.** Mid-season it re-draws weeks that
@@ -396,16 +407,36 @@ These cookies expire every few months. When `npm run fetch` starts returning
 {
   "leagueId": 274568741,
   "seasons": [2026],        // add years as the league ages
-  "leagueName": "Roe Leauge",
+  "leagueName": "Roe League",
   "site": { "showMoney": true }
 }
 ```
 
-### Money — `config/money.json`
+### Money — `config/pot.json` and `config/money.json`
+
+The money settings are split in two, because this repo is public:
+
+| File | Committed | Holds |
+| --- | --- | --- |
+| `config/pot.json` | Yes | Buy-in, number of teams, payout structure, weekly challenge settings — all of which the site publishes anyway |
+| `config/money.json` | **No** (gitignored) | Who is in the pot, who has paid, what has been paid out |
+
+To set up the private ledger, copy the template and fill it in:
+
+```bash
+cp config/money.example.json config/money.json
+```
+
+Without `config/money.json` the build still succeeds and the weekly challenges
+publish exactly as before — only the Money tab is disabled. The GitHub Actions
+build never has the file, and that is fine.
+
+The public half:
 
 ```jsonc
 {
   "buyIn": 75,
+  "expectedTeams": 10,
   "payouts": {
     "structure": [
       { "id": "first",      "label": "1st Place",         "amount": 350 },
@@ -569,6 +600,7 @@ This repo is **public**, so the boundary is deliberate:
 | Rosters, scores, draft, prizes | Yes | Already public on ESPN |
 | Manager display names | Yes | It's a league hub — that's the point |
 | **Money ledger** | **No** | `site.showMoney: false`; `docs/data/money.json` is gitignored |
+| Who has paid (`config/money.json`) | **No** | Gitignored; the template is `config/money.example.json` |
 | ESPN SWIDs (account IDs) | No | Stripped at the publish boundary by `build.mjs` |
 | `espn_s2` / `SWID` cookies | No | `config/secrets.json` is gitignored |
 | Raw API cache | No | `data/raw/` is gitignored |
@@ -588,7 +620,7 @@ in `docs/` — so a future change can't quietly reintroduce one.
 ## What's in the box
 
 ```
-config/          league.json, money.json, secrets.json (gitignored)
+config/          league.json, pot.json, money.json + secrets.json (gitignored)
 scripts/
   check.mjs      pre-flight: config, cookies, connectivity, season discovery
   fetch.mjs      ESPN -> data/raw/  (caches finished weeks)

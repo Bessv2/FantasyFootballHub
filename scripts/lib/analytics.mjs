@@ -245,17 +245,24 @@ export function computePowerRankings(teamStats, teamWeeks) {
   return scored.map((t, i) => ({ ...t, rank: i + 1 }));
 }
 
+/**
+ * The standings order: win% first, then the seeding rule's tiebreak. Takes any
+ * objects with `winPct` and `pointsFor`, so the playoff-odds simulation ranks
+ * its simulated seasons with exactly this comparator rather than a copy of it.
+ */
+export function compareStandings(a, b, rule = null) {
+  if (b.winPct !== a.winPct) return b.winPct - a.winPct;
+  // ESPN's default tiebreak is total points scored.
+  if (rule === 'TOTAL_POINTS_SCORED' || !rule) return b.pointsFor - a.pointsFor;
+  return b.pointsFor - a.pointsFor;
+}
+
 /** League standings, ordered the way ESPN orders them. */
 export function computeStandings(teamStats, season) {
   const rule = season.league.playoffSeedingRule;
   const ranked = [...teamStats]
     .filter((t) => !t.isPlaceholder || t.gamesPlayed > 0)
-    .sort((a, b) => {
-      if (b.winPct !== a.winPct) return b.winPct - a.winPct;
-      // ESPN's default tiebreak is total points scored.
-      if (rule === 'TOTAL_POINTS_SCORED' || !rule) return b.pointsFor - a.pointsFor;
-      return b.pointsFor - a.pointsFor;
-    });
+    .sort((a, b) => compareStandings(a, b, rule));
 
   const playoffCut = season.league.playoffTeams;
   return ranked.map((t, i) => ({
