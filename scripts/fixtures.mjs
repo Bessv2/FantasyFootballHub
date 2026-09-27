@@ -542,7 +542,7 @@ await writeJson(path.join(OUT, 'schedule.json'), {
 // ---------------------------------------------------------------------------
 
 // The week being advised on: the first one not yet played.
-const ADVICE_WEEK = REGULAR_WEEKS + 1;
+const ADVICE_WEEK = PLAYED_WEEKS + 1;
 
 /**
  * Deliberately sets some lineups badly so the advisor has something to find.

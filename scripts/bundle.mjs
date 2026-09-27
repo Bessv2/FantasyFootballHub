@@ -51,6 +51,7 @@ const SECTIONS = [
       'scripts/lib/recap.mjs',
       'scripts/lib/h2h.mjs',
       'scripts/lib/newscache.mjs',
+      'scripts/lib/lineupsim.mjs',
     ],
   },
   {
@@ -85,6 +86,7 @@ const SECTIONS = [
       'tests/recap.test.mjs',
       'tests/h2h.test.mjs',
       'tests/newscache.test.mjs',
+      'tests/lineupsim.test.mjs',
     ],
   },
   {

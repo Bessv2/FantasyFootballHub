@@ -24,7 +24,8 @@ import {
   computeWeeklyHighScores,
   computePositionalStats,
 } from './lib/analytics.mjs';
-import { analyzeDraft } from './lib/draft.mjs';
+import { analyzeDraft, buildPlayerWeekPoints } from './lib/draft.mjs';
+import { simulateLineup } from './lib/lineupsim.mjs';
 import { computeLedger, computePayouts, challengePayout, splitPot, mergeMoneyConfig } from './lib/money.mjs';
 import { buildChallengeSchedule, computeChallenges, challengeLeaderboard } from './lib/challenges.mjs';
 import { sanitizeTeamLogo } from './lib/images.mjs';
@@ -209,6 +210,21 @@ function buildChallenges(season, teamStats, teamWeeks, moneyConfig) {
 function buildTeamDetail(season, teamStats, teamWeeks, standings, draft) {
   const slots = season.league.startingSlots;
 
+  // Each player's scored weeks this season, which set how widely the lineup
+  // simulation lets him swing. Zero-point weeks are left out: mostly byes and
+  // inactives, which would read as volatility he doesn't have.
+  const history = new Map();
+  for (const [playerId, weeks] of buildPlayerWeekPoints(season)) {
+    history.set(playerId, [...weeks.values()].map((w) => w.points).filter((pts) => pts !== 0));
+  }
+  // Who each team plays in the week being advised on, from the full schedule.
+  const opponentOf = new Map();
+  for (const g of season.schedule ?? []) {
+    if (g.week !== season.adviceWeek || g.homeTeamId == null || g.awayTeamId == null) continue;
+    opponentOf.set(g.homeTeamId, g.awayTeamId);
+    opponentOf.set(g.awayTeamId, g.homeTeamId);
+  }
+
   return season.teams
     .filter((t) => !t.isPlaceholder || teamWeeks.some((r) => r.teamId === t.id))
     .map((team) => {
@@ -237,6 +253,19 @@ function buildTeamDetail(season, teamStats, teamWeeks, standings, draft) {
         })),
 
         lineupAdvice: recommendLineup(roster, slots),
+        lineupSim: (() => {
+          const opponentId = opponentOf.get(team.id) ?? null;
+          const sim = simulateLineup({
+            roster,
+            startingSlots: slots,
+            opponentRoster: opponentId !== null ? season.currentRosters?.[opponentId] ?? null : null,
+            history,
+            seed: `roe-lineup:${season.league.season}:${season.adviceWeek}:${team.id}`,
+          });
+          if (!sim.available) return sim;
+          const opp = season.teams.find((t) => t.id === opponentId);
+          return { ...sim, week: season.adviceWeek, opponentTeamId: opponentId, opponentName: opp?.name ?? null };
+        })(),
         coaching: coachingReport(rows, slots),
         waivers: waiverTargets(season.freeAgents, roster, slots),
 
