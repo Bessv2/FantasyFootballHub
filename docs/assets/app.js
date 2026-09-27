@@ -701,24 +701,43 @@ function seasonRoadmap() {
     </div>`;
 }
 
+/** 1 -> "1st", 2 -> "2nd". */
+const ordinalText = (n) => {
+  const v = n % 100;
+  return `${n}${['th', 'st', 'nd', 'rd'][(v - 20) % 10] || ['th', 'st', 'nd', 'rd'][v] || 'th'}`;
+};
+
 /** A probability as text. The build caps unproven certainties at 99.9 / 0.1. */
 const oddsPct = (p) => (p === 100 || p === 0 ? `${p}%` : `${Number(p).toFixed(1)}%`);
 
 const WORD_COUNTS = ['Zero', 'One', 'Two', 'Three', 'Four', 'Five', 'Six'];
 
 /**
- * Playoff odds from the build-time simulation. Renders nothing when the build
- * emitted null (before Week 1, after the regular season, or with no schedule).
+ * A folded section: a plain-English title and a one-line summary are always
+ * visible; the detail opens on tap. Used on the Standings and team pages so the
+ * answer comes first and the working is there for anyone who wants it.
  */
-function renderPlayoffOdds(odds, teams) {
-  if (!odds?.teams?.length) return '';
+function fold(title, summary, body, { open = false } = {}) {
+  return `
+    <details class="fold"${open ? ' open' : ''}>
+      <summary>
+        <span class="fold__title">${esc(title)}</span>
+        ${summary ? `<span class="fold__sub">${summary}</span>` : ''}
+      </summary>
+      <div class="fold__body">${body}</div>
+    </details>`;
+}
+
+/** "What does this mean?" — term / plain-English pairs. */
+const glossary = (items) => `
+  <dl class="glossary">
+    ${items.map(([term, meaning]) => `<div><dt>${esc(term)}</dt><dd>${meaning}</dd></div>`).join('')}
+  </dl>`;
+
+/** The detailed playoff-odds table, for the fold under the main standings. */
+function renderPlayoffOddsDetail(odds, teams) {
   const logoOf = new Map((teams ?? []).map((t) => [t.id, t.logo ?? null]));
   const seeds = odds.teams.length;
-
-  const watch = (odds.bottomWatch ?? [])
-    .map((id) => odds.teams.find((t) => t.teamId === id))
-    .filter(Boolean);
-  const watchTitle = `Bottom ${WORD_COUNTS[watch.length] ?? watch.length} Watch`;
 
   const strip = (t) => {
     const probs = Array.from({ length: seeds }, (_, i) => t.seedPct[i + 1] ?? 0);
@@ -731,16 +750,14 @@ function renderPlayoffOdds(odds, teams) {
         ${probs.map((p, i) => `<span class="${i < odds.playoffTeams ? '' : 'is-out'}"
             style="opacity:${(0.12 + 0.88 * (p / 100)).toFixed(3)}"></span>`).join('')}
       </span>
-      <small class="seedstrip__note">likeliest #${esc(likeliest)}</small>`;
+      <small class="seedstrip__note">most likely #${esc(likeliest)}</small>`;
   };
 
   const rows = odds.teams.map((t) => `
       <tr class="${t.currentRank === odds.playoffTeams ? 'playoff-cut' : ''}">
         <td class="num rank">${esc(t.currentRank)}</td>
         <th scope="row" class="row-team">${teamCell({ teamName: t.teamName, logo: logoOf.get(t.teamId) }, t.managerName ?? '')}</th>
-        <td class="num">${esc(t.wins)}-${esc(t.losses)}${t.ties ? `-${esc(t.ties)}` : ''}</td>
-        <td class="bar-cell">${bar(t.makePlayoffsPct, 100, { digits: 1, suffix: '%' })}</td>
-        <td class="num">${esc(oddsPct(t.missPlayoffsPct))}</td>
+        <td class="num">${esc(oddsPct(t.makePlayoffsPct))}</td>
         <td class="num">${esc(oddsPct(t.topSeedPct))}</td>
         <td class="num">${num(t.projectedWins, 1)}</td>
         <td>${strip(t)}</td>
@@ -748,39 +765,29 @@ function renderPlayoffOdds(odds, teams) {
 
   const g = odds.generatedFrom ?? {};
   return `
-    <div class="card" style="margin-bottom:1.5rem">
-      <h3>Playoff odds</h3>
-      <p class="view__intro" style="margin-top:-0.3rem">
-        ${esc(Number(odds.simulations).toLocaleString())} simulations of the
-        ${esc(g.remainingGames)} regular-season games left, fitted to scores through
-        Week ${esc(g.throughWeek)}. Top ${esc(odds.playoffTeams)} make it. Early in the
-        season every team's scoring is pulled toward the league average, so one big
-        week doesn't read as a lock.
-      </p>
-      ${watch.length ? `
-      <div class="odds-watch">
-        <span class="pill pill--warn">${esc(watchTitle)}</span>
-        <p>${watch.map((t) => `<strong>${esc(t.teamName)}</strong> misses in ${esc(oddsPct(t.missPlayoffsPct))} of runs`).join('; ')}.</p>
-      </div>` : ''}
-      <div class="table-scroll">
-        <table>
-          <caption>Sorted by current rank. The rule below rank ${esc(odds.playoffTeams)} marks the playoff cut.</caption>
-          <thead>
-            <tr>
-              <th scope="col" class="num">#</th>
-              <th scope="col">Team</th>
-              <th scope="col" class="num">Record</th>
-              <th scope="col" class="bar-cell">Make playoffs</th>
-              <th scope="col" class="num">Miss</th>
-              <th scope="col" class="num"><abbr title="Chance of finishing as the number 1 seed">#1 seed</abbr></th>
-              <th scope="col" class="num"><abbr title="Average final win total across simulations">Proj. W</abbr></th>
-              <th scope="col"><abbr title="Chance of each final seed, 1 on the left. Blue seeds make the playoffs, red miss.">Seed spread</abbr></th>
-            </tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>
-    </div>`;
+    <div class="table-scroll">
+      <table>
+        <caption>Chances for every team, sorted by current rank</caption>
+        <thead>
+          <tr>
+            <th scope="col" class="num">#</th>
+            <th scope="col">Team</th>
+            <th scope="col" class="num">Playoffs</th>
+            <th scope="col" class="num">#1 seed</th>
+            <th scope="col" class="num">Final wins</th>
+            <th scope="col">Where they finish</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    ${glossary([
+      ['Playoffs', `How often the team finished in the top ${esc(odds.playoffTeams)} across ${esc(Number(odds.simulations).toLocaleString())} simulated versions of the rest of the season.`],
+      ['#1 seed', 'How often they finished first.'],
+      ['Final wins', 'Their average win total at the end of the regular season.'],
+      ['Where they finish', 'One box per finishing spot, 1st on the left. The darker the box, the more likely. Blue spots make the playoffs; red spots miss.'],
+      ['How it works', `Every one of the ${esc(g.remainingGames)} games left is played out using each team's scoring so far (through Week ${esc(g.throughWeek)}). Early in the season scores are pulled toward the league average, so one big week doesn't look like a lock.`],
+    ])}`;
 }
 
 function renderStandings() {
@@ -789,67 +796,125 @@ function renderStandings() {
     $('#standings-body').innerHTML = emptyState(
       '📊',
       'Standings start after Week 1',
-      'Records, points, luck and lineup efficiency all fill in once games are played.'
+      'Records, points and playoff chances all fill in once games are played.'
     );
     return;
   }
 
+  const odds = state.hub.playoffOdds;
+  const oddsById = new Map((odds?.teams ?? []).map((t) => [t.teamId, t]));
   const maxPF = Math.max(...standings.map((t) => t.pointsFor), 1);
+  const parts = [];
 
-  const diffChart = pointDiffChart(standings);
+  // --- The one callout worth reading first -------------------------------
+  const watch = (odds?.bottomWatch ?? []).map((id) => oddsById.get(id)).filter(Boolean);
+  if (watch.length) {
+    parts.push(`
+      <div class="odds-watch">
+        <span class="pill pill--warn">Bottom ${esc(WORD_COUNTS[watch.length] ?? watch.length)} Watch</span>
+        <p>Most likely to miss the playoffs: ${watch.map((t) =>
+          `<strong>${esc(t.teamName)}</strong> (${esc(oddsPct(t.missPlayoffsPct))} chance of missing)`).join(' and ')}.</p>
+      </div>`);
+  }
 
-  const rows = standings
-    .map(
-      (t) => `
+  // --- Main table: only what everyone needs ------------------------------
+  const rows = standings.map((t) => {
+    const o = oddsById.get(t.teamId);
+    return `
       <tr class="${t.rank === league.playoffTeams ? 'playoff-cut' : ''}">
         <td class="num rank">${esc(t.rank)}</td>
         <th scope="row" class="row-team">${teamCell(t, t.managerName ?? '')}</th>
         <td class="num">${esc(t.wins)}-${esc(t.losses)}${t.ties ? `-${esc(t.ties)}` : ''}</td>
-        <td class="bar-cell">${bar(t.pointsFor, maxPF, { digits: 0 })}</td>
-        <td class="num">${num(t.pointsAgainst, 1)}</td>
-        <td class="num">${esc(t.allPlayWins)}-${esc(t.allPlayLosses)}</td>
-        <td class="num">${deltaPill(t.luck)}</td>
-        <td class="num">${t.efficiency === null ? '—' : `${num(t.efficiency, 1)}%`}</td>
-        <td class="num">${t.streakType ? `${esc(t.streakType[0])}${esc(t.streakLength)}` : '—'}</td>
+        <td class="num">${num(t.pointsFor, 1)}</td>
+        ${odds ? `<td class="bar-cell">${o ? bar(o.makePlayoffsPct, 100, { digits: 0, suffix: '%' }) : '—'}</td>` : ''}
         <td>${t.inPlayoffs ? '<span class="pill pill--good">In</span>' : '<span class="pill pill--neutral">Out</span>'}</td>
-      </tr>`
-    )
-    .join('');
+      </tr>`;
+  }).join('');
 
-  $('#standings-body').innerHTML = `
-    ${renderPlayoffOdds(state.hub.playoffOdds, state.hub.teams)}
-    ${diffChart ? `
-    <div class="card" style="margin-bottom:1.5rem">
-      <h3>Points for, minus points against</h3>
-      <p class="view__intro" style="margin-top:-0.3rem">
-        A team can lose games and still run a positive differential — that's the
-        <strong>Luck</strong> column, expressed as points instead of wins.
-      </p>
-      ${diffChart}
-    </div>` : ''}
+  parts.push(`
     <div class="table-scroll">
       <table>
-        <caption>
-          The rule below rank ${league.playoffTeams} marks the playoff cut; the
-          Playoff column states it in text as well.
-        </caption>
+        <caption>Top ${esc(league.playoffTeams)} make the playoffs — the line marks the cut</caption>
         <thead>
           <tr>
             <th scope="col" class="num">#</th>
             <th scope="col">Team</th>
             <th scope="col" class="num">Record</th>
-            <th scope="col" class="bar-cell">Points for</th>
-            <th scope="col" class="num"><abbr title="Points against">PA</abbr></th>
-            <th scope="col" class="num"><abbr title="Record if everyone played everyone every week">All-play</abbr></th>
-            <th scope="col" class="num"><abbr title="Wins above or below what the scores deserved">Luck</abbr></th>
-            <th scope="col" class="num"><abbr title="Share of possible points actually started">Eff.</abbr></th>
-            <th scope="col" class="num">Streak</th>
-            <th scope="col">Playoff</th>
+            <th scope="col" class="num">Points</th>
+            ${odds ? '<th scope="col" class="bar-cell">Playoff chance</th>' : ''}
+            <th scope="col">If it ended today</th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
       </table>
-    </div>`;
+    </div>
+    <p class="stat__note table-note">
+      Ranked by record; ties go to whoever scored more points, the same as ESPN.
+      ${odds ? 'Playoff chance comes from simulating the rest of the season — open "Playoff odds in detail" below for how.' : ''}
+    </p>`);
+
+  // --- The detail, folded ------------------------------------------------
+  if (odds) {
+    parts.push(fold(
+      'Playoff odds in detail',
+      'Chances of the #1 seed, projected final wins, and where each team is likely to finish',
+      renderPlayoffOddsDetail(odds, state.hub.teams)
+    ));
+  }
+
+  const advancedRows = standings.map((t) => `
+      <tr>
+        <td class="num rank">${esc(t.rank)}</td>
+        <th scope="row" class="row-team">${esc(t.teamName)}</th>
+        <td class="bar-cell">${bar(t.pointsFor, maxPF, { digits: 0 })}</td>
+        <td class="num">${num(t.pointsAgainst, 1)}</td>
+        <td class="num">${esc(t.allPlayWins)}-${esc(t.allPlayLosses)}</td>
+        <td class="num">${deltaPill(t.luck, 1)}</td>
+        <td class="num">${t.efficiency === null ? '—' : `${num(t.efficiency, 0)}%`}</td>
+        <td class="num">${t.streakType ? `${esc(t.streakType[0])}${esc(t.streakLength)}` : '—'}</td>
+      </tr>`).join('');
+
+  parts.push(fold(
+    'Advanced stats',
+    'Who has been lucky, who sets good lineups, and who would win if everyone played everyone',
+    `<div class="table-scroll">
+      <table>
+        <caption>Season to date</caption>
+        <thead>
+          <tr>
+            <th scope="col" class="num">#</th>
+            <th scope="col">Team</th>
+            <th scope="col" class="bar-cell">Points for</th>
+            <th scope="col" class="num">Against</th>
+            <th scope="col" class="num">All-play</th>
+            <th scope="col" class="num">Luck</th>
+            <th scope="col" class="num">Lineups</th>
+            <th scope="col" class="num">Streak</th>
+          </tr>
+        </thead>
+        <tbody>${advancedRows}</tbody>
+      </table>
+    </div>
+    ${glossary([
+      ['Points for / against', 'Total points the team has scored, and total points scored against it.'],
+      ['All-play', "The record the team would have if it played every other team every week. It strips out schedule luck: a 1-1 team with a 16-2 all-play has just faced tough opponents."],
+      ['Luck', 'Actual wins minus the wins the scores deserved. <strong>+1.0</strong> means one more win than their scores earned (lucky); <strong>−1.0</strong> means one fewer (unlucky).'],
+      ['Lineups', 'Lineup efficiency: the share of the best possible points the manager actually started. 100% means they never left a better player on the bench.'],
+      ['Streak', 'Current run of wins (W) or losses (L).'],
+    ])}`
+  ));
+
+  const diffChart = pointDiffChart(standings);
+  if (diffChart) {
+    parts.push(fold(
+      'Points scored minus points allowed',
+      'Green teams outscore their opponents; red teams get outscored',
+      `${diffChart}
+      <p class="stat__note">A team can lose games and still be green — that usually means it has been unlucky rather than bad.</p>`
+    ));
+  }
+
+  $('#standings-body').innerHTML = parts.join('');
 }
 
 function renderTeams() {
@@ -922,28 +987,68 @@ const STRATEGY_LABELS = {
   floor: 'safe-floor',
 };
 
-/**
- * The 100-week lineup simulation, built at build time: how often each player
- * made the best lineup, and which lineup wins most often against this week's
- * opponent.
- */
-function renderLineupSim(sim) {
-  if (!sim?.available) return '';
-  const rec = sim.recommended;
-  const proj = sim.projectionLineup;
-  const pct = (p) => `${num(p, 0)}%`;
-  const names = (list) => list.map((p) => `<strong>${esc(p.name)}</strong> <small>(${esc(p.position)})</small>`).join(', ');
+const playerList = (list) =>
+  list.map((p) => `<li><strong>${esc(p.name)}</strong> <small>${esc(p.position)} · ${num(p.projected, 1)} proj.</small></li>`).join('');
 
-  const verdict = rec.strategy === 'projection'
-    ? `<p><span class="pill pill--good">Stick with it</span>
-        The lineup that is best on projections is also the one that ${
-          sim.opponent ? `wins most often — <strong>${pct(rec.winPct)}</strong> of simulations` : 'scores the most on average'}.</p>`
-    : `<p><span class="pill pill--accent">Consider the ${esc(STRATEGY_LABELS[rec.strategy] ?? rec.strategy)} lineup</span>
-        Start ${names(sim.changes.start)}; sit ${names(sim.changes.sit)}.
-        It wins <strong>${pct(rec.winPct)}</strong> of simulations against
-        ${pct(proj.winPct)} for the projected lineup${
-          rec.strategy === 'upside' ? ' — as the underdog, you need the bigger ceiling.'
-          : rec.strategy === 'floor' ? ' — as the favourite, a safer floor protects the lead.' : '.'}</p>`;
+/**
+ * The first thing on a team page: this week's matchup, the chance of winning,
+ * and exactly which moves to make in ESPN. Built from the 100-week simulation;
+ * falls back to the projection-only advice when there is no simulation.
+ */
+function renderThisWeek(team) {
+  const sim = team.lineupSim;
+  const week = state.teamDetail.adviceWeek;
+
+  if (!sim?.available) {
+    const advice = team.lineupAdvice;
+    if (!advice?.available) return '';
+    return `<div class="card this-week">
+      <h3>Week ${esc(week)} lineup</h3>
+      ${advice.alreadyOptimal
+        ? '<p><span class="pill pill--good">No changes needed</span> Your lineup is already the best one on projections.</p>'
+        : `<p><strong>Make these changes in ESPN</strong> (worth about ${num(advice.projectedGain, 1)} points on projections):</p>
+           <div class="moves">
+             <div><h4>Put in</h4><ul>${playerList(advice.toStart)}</ul></div>
+             <div><h4>Take out</h4><ul>${playerList(advice.toSit)}</ul></div>
+           </div>`}
+    </div>`;
+  }
+
+  const rec = sim.recommended;
+  // Older builds have no fromCurrent; the projection-only advice compares
+  // against the same ESPN lineup, so it stands in until the next rebuild.
+  const moves = sim.fromCurrent ?? {
+    start: team.lineupAdvice?.toStart ?? [],
+    sit: team.lineupAdvice?.toSit ?? [],
+  };
+  const pct = (p) => `${num(p, 0)}%`;
+  const gainWins = sim.currentLineup && rec.winPct !== null && sim.currentLineup.winPct !== null
+    ? rec.winPct - sim.currentLineup.winPct : null;
+
+  const headline = sim.opponent
+    ? `<p class="this-week__odds"><span class="this-week__big">${pct(rec.winPct)}</span>
+         chance to beat <strong>${esc(sim.opponentName ?? 'your opponent')}</strong> with the lineup below</p>
+       <p class="stat__note">Projected score: you ${num(rec.mean, 0)} (likely ${num(rec.p10, 0)}–${num(rec.p90, 0)}),
+         them ${num(sim.opponent.mean, 0)} (likely ${num(sim.opponent.p10, 0)}–${num(sim.opponent.p90, 0)}).</p>`
+    : `<p class="this-week__odds">Projected score: <strong>${num(rec.mean, 0)}</strong>
+         <small>(likely ${num(rec.p10, 0)}–${num(rec.p90, 0)})</small></p>`;
+
+  const action = moves.start.length || moves.sit.length
+    ? `<p><strong>Make these changes in ESPN</strong>${gainWins !== null && gainWins > 0
+        ? ` — they raise your chance of winning from ${pct(sim.currentLineup.winPct)} to ${pct(rec.winPct)}` : ''}:</p>
+       <div class="moves">
+         <div><h4>Put in</h4><ul>${playerList(moves.start)}</ul></div>
+         <div><h4>Take out</h4><ul>${playerList(moves.sit)}</ul></div>
+       </div>`
+    : '<p><span class="pill pill--good">No changes needed</span> Your lineup in ESPN is already the best one.</p>';
+
+  const why = rec.strategy === 'upside'
+    ? '<p class="stat__note">You are the underdog this week, so this lineup favours players with big-game upside over safe, steady ones.</p>'
+    : rec.strategy === 'floor'
+      ? '<p class="stat__note">You are the favourite this week, so this lineup favours steady players who rarely have a bad game.</p>'
+      : rec.strategy === 'mostStarted'
+        ? '<p class="stat__note">This lineup uses the players who came out as the best choice most often across the simulated weeks.</p>'
+        : '';
 
   const rows = sim.players.map((p) => `
     <tr>
@@ -956,42 +1061,34 @@ function renderLineupSim(sim) {
 
   const alts = (sim.alternatives ?? []).filter((a) => a.winPct !== null && a.strategy !== rec.strategy);
 
-  return `<div class="card" style="margin-bottom:1.5rem">
-    <h3>Week ${esc(sim.week)} — ${esc(sim.simulations)} simulated outcomes</h3>
-    <p class="stat__note">
-      Every player's score is drawn ${esc(sim.simulations)} times around his projection, with a spread
-      based on how much he has actually swung this season${sim.opponent ? `, and played against
-      ${esc(sim.opponentName ?? 'your opponent')}'s best projected lineup` : ''}.
-    </p>
-    ${sim.opponent ? `
-    <ul class="stats" style="margin:0.75rem 0">
-      <li class="stat"><span class="stat__label">Win chance</span>
-        <span class="stat__value">${pct(rec.winPct)}</span>
-        <span class="stat__note">vs ${esc(sim.opponentName ?? 'opponent')}</span></li>
-      <li class="stat"><span class="stat__label">You</span>
-        <span class="stat__value">${num(rec.mean, 1)}</span>
-        <span class="stat__note">likely ${num(rec.p10, 0)}–${num(rec.p90, 0)}</span></li>
-      <li class="stat"><span class="stat__label">Them</span>
-        <span class="stat__value">${num(sim.opponent.mean, 1)}</span>
-        <span class="stat__note">likely ${num(sim.opponent.p10, 0)}–${num(sim.opponent.p90, 0)}</span></li>
-    </ul>` : ''}
-    ${verdict}
-    ${alts.length ? `<p class="stat__note">Also tried: ${alts.map((a) =>
-      `${esc(STRATEGY_LABELS[a.strategy] ?? a.strategy)} lineup ${pct(a.winPct)}`).join(' · ')}.
-      A lineup has to win at least 3 more of the ${esc(sim.simulations)} to replace the projected one — fewer is noise.</p>` : ''}
-    <div class="table-scroll" style="margin-top:0.75rem">
+  const detail = `
+    <div class="table-scroll">
       <table>
-        <caption>Start rate: how often each player was in the best possible lineup</caption>
+        <caption>Every player on your roster</caption>
         <thead><tr>
           <th scope="col">Player</th>
-          <th scope="col" class="num">Proj.</th>
-          <th scope="col" class="num"><abbr title="Projection plus or minus one standard deviation">Range</abbr></th>
+          <th scope="col" class="num">Projected</th>
+          <th scope="col" class="num">Likely range</th>
           <th scope="col" class="bar-cell">Start rate</th>
           <th scope="col">Pick</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
+    ${glossary([
+      ['How it works', `The site played out your Week ${esc(week)} ${esc(sim.simulations)} times. Each time, every player scores a different amount around his ESPN projection — more spread for players who have been up and down this season${sim.opponent ? `, and your opponent's lineup is played out the same way` : ''}.`],
+      ['Projected', "ESPN's projection for this week."],
+      ['Likely range', 'Where his score lands in most of the simulated weeks.'],
+      ['Start rate', 'How often he was in the best possible lineup. 100% = always start him; around 50% = a coin flip; 0% = bench.'],
+      ['Which lineup', `Several lineups are tested against all ${esc(sim.simulations)} weeks and the one that wins most often is picked. A lineup has to win at least 3 more of the ${esc(sim.simulations)} to replace the one ESPN's projections suggest — fewer than that is just chance.${alts.length ? ` Also tried: ${alts.map((a) => `${esc(STRATEGY_LABELS[a.strategy] ?? a.strategy)} lineup (${pct(a.winPct)})`).join(', ')}.` : ''}`],
+    ])}`;
+
+  return `<div class="card this-week">
+    <h3>Week ${esc(week)}${sim.opponentName ? ` vs ${esc(sim.opponentName)}` : ''}</h3>
+    ${headline}
+    ${action}
+    ${why}
+    ${fold('Why this lineup?', 'Start rates for every player, and how the simulation works', detail)}
   </div>`;
 }
 
@@ -1033,282 +1130,201 @@ function renderTeam(teamId) {
   const parts = [];
 
   // --- Header -----------------------------------------------------------
+  // Compact: the page title above already names the team, so this row only
+  // adds who runs it, where they stand, and the "this is my team" switch.
   parts.push(`
-    <section class="hero hero--team" aria-labelledby="team-hero">
-      ${avatar(team.logo ?? null, team.teamName, { variant: 'team', size: 72 })}
-      <p class="hero__eyebrow">${esc(team.managerName ?? 'Unclaimed')}</p>
-      <h2 id="team-hero">${esc(team.teamName)}</h2>
-      <p class="hero__sub">
-        ${team.rank ? `Rank ${esc(team.rank)} of ${esc(state.hub.league.size)}` : 'Season has not started'}
-        ${team.stats?.gamesPlayed ? ` · ${esc(team.stats.wins)}-${esc(team.stats.losses)}` : ''}
-        ${team.inPlayoffs ? ' · <span class="pill pill--good">In playoff position</span>' : ''}
-      </p>
-      <p style="margin:0.9rem 0 0">
-        <button type="button" class="theme-toggle" id="claim-team"
-          aria-pressed="${isMine}">
-          ${isMine ? '★ This is my team' : '☆ Set as my team'}
-        </button>
-      </p>
+    <section class="team-head" aria-label="Team summary">
+      ${avatar(team.logo ?? null, team.teamName, { variant: 'team', size: 48 })}
+      <div class="team-head__text">
+        <p class="team-head__manager">${esc(team.managerName ?? 'Unclaimed')}</p>
+        <p class="team-head__rank">
+          ${team.rank ? `${esc(ordinalText(team.rank))} of ${esc(state.hub.league.size)}` : 'Season has not started'}
+          ${team.stats?.gamesPlayed ? ` · ${esc(team.stats.wins)}-${esc(team.stats.losses)}` : ''}
+          ${team.rank ? (team.inPlayoffs ? ' · <span class="pill pill--good">In playoff spot</span>' : ' · <span class="pill pill--neutral">Outside playoffs</span>') : ''}
+        </p>
+      </div>
+      <button type="button" class="theme-toggle" id="claim-team" aria-pressed="${isMine}">
+        ${isMine ? '★ My team' : '☆ Set as my team'}
+      </button>
     </section>`);
 
-  // --- Lineup advice ----------------------------------------------------
-  const advice = team.lineupAdvice;
-  if (advice?.available) {
-    if (advice.alreadyOptimal) {
-      parts.push(`<div class="card" style="margin-bottom:1.5rem">
-        <h3>Week ${esc(state.teamDetail.adviceWeek)} lineup</h3>
-        <p><span class="pill pill--good">Optimal</span>
-        Your lineup is already the best available on projections
-        (${num(advice.projectedTotal, 1)} projected).</p>
-      </div>`);
-    } else {
-      parts.push(`<div class="card" style="margin-bottom:1.5rem">
-        <h3>Week ${esc(state.teamDetail.adviceWeek)} lineup — ${esc(signed(advice.projectedGain, 1))} available</h3>
-        <p class="stat__note">
-          Based on ESPN's projections, which are wrong often enough that this is a
-          nudge rather than an instruction.
-        </p>
-        <div class="grid" style="margin-top:0.75rem">
-          <div>
-            <h4 style="margin:0 0 0.35rem">Start</h4>
-            <ul style="margin:0;padding-left:1.1rem">
-              ${advice.toStart
-                .map((p) => `<li>${esc(p.name)} <small>(${esc(p.position)})</small> — <strong>${num(p.projected, 1)}</strong></li>`)
-                .join('')}
-            </ul>
-          </div>
-          <div>
-            <h4 style="margin:0 0 0.35rem">Sit</h4>
-            <ul style="margin:0;padding-left:1.1rem">
-              ${advice.toSit
-                .map((p) => `<li>${esc(p.name)} <small>(${esc(p.position)})</small> — ${num(p.projected, 1)}</li>`)
-                .join('')}
-            </ul>
-          </div>
-        </div>
-        <p class="stat__note" style="margin:0.75rem 0 0">
-          Current lineup projects ${num(advice.currentProjected, 1)};
-          the recommended one projects ${num(advice.projectedTotal, 1)}.
-        </p>
-      </div>`);
-    }
-  }
+  // --- This week: the answer first -------------------------------------
+  const thisWeek = renderThisWeek(team);
+  if (thisWeek) parts.push(thisWeek);
 
-  parts.push(renderLineupSim(team.lineupSim));
-
-  // --- Waivers ----------------------------------------------------------
-  const waivers = team.waivers;
-  if (waivers?.available && (waivers.targets.length || waivers.injuryGaps.length)) {
-    parts.push(`<div class="card" style="margin-bottom:1.5rem">
-      <h3>Waiver wire</h3>
-      ${
-        waivers.injuryGaps.length
-          ? `<p><span class="pill pill--bad">Injured starters</span>
-             ${waivers.injuryGaps.map((g) => `${esc(g.name)} (${esc(g.position)}, ${esc(g.injuryStatus)})`).join(', ')}</p>`
-          : ''
-      }
-      ${
-        waivers.targets.length
-          ? `<div class="table-scroll" style="margin-top:0.6rem">
-              <table>
-                <caption>Available players projected above your weakest starter at that position</caption>
-                <thead><tr>
-                  <th scope="col">Player</th><th scope="col">Pos</th>
-                  <th scope="col" class="num">Projected</th><th scope="col" class="num">Upgrade</th>
-                  <th scope="col" class="num">Owned</th>
-                </tr></thead>
-                <tbody>
-                  ${waivers.targets
-                    .map(
-                      (t) => `<tr>
-                        <th scope="row" class="row-team">${esc(t.name)}<small>${esc(t.proTeam)}</small></th>
-                        <td>${esc(t.position)}</td>
-                        <td class="num">${num(t.projected, 1)}</td>
-                        <td class="num">${deltaPill(t.gain, 1)}</td>
-                        <td class="num">${t.percentOwned === null ? '—' : `${num(t.percentOwned, 0)}%`}</td>
-                      </tr>`
-                    )
-                    .join('')}
-                </tbody>
-              </table>
-            </div>`
-          : '<p class="stat__note">Nothing on the wire clearly beats what you already start.</p>'
-      }
-    </div>`);
-  }
-
-  // --- Season stats -----------------------------------------------------
+  // --- Season so far, in plain words ------------------------------------
   const s = team.stats;
   if (s && s.gamesPlayed > 0) {
+    const luck = Number(s.luck);
     parts.push(`
+      <h3 class="section-title">Season so far</h3>
       <ul class="stats">
         <li class="stat"><span class="stat__label">Record</span>
           <span class="stat__value">${esc(s.wins)}-${esc(s.losses)}</span>
-          <span class="stat__note">${num(s.allPlayWinPct, 0)}% all-play</span></li>
-        <li class="stat"><span class="stat__label">Points for</span>
-          <span class="stat__value">${num(s.pointsFor, 0)}</span>
-          <span class="stat__note">${num(s.avgScore, 1)} per week</span></li>
-        <li class="stat"><span class="stat__label">Efficiency</span>
+          <span class="stat__note">${team.rank ? `${esc(ordinalText(team.rank))} of ${esc(state.hub.league.size)}` : ''}</span></li>
+        <li class="stat"><span class="stat__label">Points per week</span>
+          <span class="stat__value">${num(s.avgScore, 1)}</span>
+          <span class="stat__note">${num(s.pointsFor, 0)} in total</span></li>
+        <li class="stat"><span class="stat__label">Lineup choices</span>
           <span class="stat__value">${s.efficiency === null ? '—' : `${num(s.efficiency, 0)}%`}</span>
-          <span class="stat__note">${num(s.benchPoints, 0)} left benched</span></li>
+          <span class="stat__note">of the best possible points started · ${num(s.benchPoints, 0)} left on the bench</span></li>
         <li class="stat"><span class="stat__label">Luck</span>
-          <span class="stat__value">${esc(signed(s.luck, 1))}</span>
-          <span class="stat__note">${num(s.expectedWins, 1)} expected wins</span></li>
+          <span class="stat__value">${esc(signed(luck, 1))}</span>
+          <span class="stat__note">${luck > 0.25 ? 'more wins than your scores deserved'
+            : luck < -0.25 ? 'fewer wins than your scores deserved' : 'wins match your scores'}</span></li>
       </ul>`);
   }
 
-  // --- Coaching report --------------------------------------------------
+  // --- Everything else, folded -------------------------------------------
+  const waivers = team.waivers;
+  if (waivers?.available && (waivers.targets.length || waivers.injuryGaps.length)) {
+    const summary = [
+      waivers.injuryGaps.length ? `${waivers.injuryGaps.length} injured starter${waivers.injuryGaps.length === 1 ? '' : 's'}` : null,
+      waivers.targets.length ? `${waivers.targets.length} free agent${waivers.targets.length === 1 ? '' : 's'} projected to beat one of your starters` : null,
+    ].filter(Boolean).join(' · ');
+    parts.push(fold('Waiver wire', esc(summary), `
+      ${waivers.injuryGaps.length
+        ? `<p><span class="pill pill--bad">Injured starters</span>
+           ${waivers.injuryGaps.map((g) => `${esc(g.name)} (${esc(g.position)}, ${esc(g.injuryStatus)})`).join(', ')}</p>`
+        : ''}
+      ${waivers.targets.length
+        ? `<div class="table-scroll">
+            <table>
+              <caption>Available now, projected above your weakest starter at the same position</caption>
+              <thead><tr>
+                <th scope="col">Player</th><th scope="col">Pos</th>
+                <th scope="col" class="num">Projected</th><th scope="col" class="num">Better by</th>
+                <th scope="col" class="num">Rostered in</th>
+              </tr></thead>
+              <tbody>
+                ${waivers.targets.map((t) => `<tr>
+                  <th scope="row" class="row-team">${esc(t.name)}<small>${esc(t.proTeam)}</small></th>
+                  <td>${esc(t.position)}</td>
+                  <td class="num">${num(t.projected, 1)}</td>
+                  <td class="num">${deltaPill(t.gain, 1)}</td>
+                  <td class="num">${t.percentOwned === null ? '—' : `${num(t.percentOwned, 0)}% of leagues`}</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>`
+        : ''}`));
+  }
+
   const coaching = team.coaching;
   if (coaching?.available && coaching.worstCalls.length) {
-    parts.push(`<div class="card" style="margin-bottom:1.5rem">
-      <h3>Where the points went</h3>
-      <p class="stat__note">
-        ${num(coaching.totalBenched, 0)} points left on your bench this season.
-        ${coaching.gamesCostByBadLineups > 0
-          ? coaching.gamesCostByBadLineups === 1
-            ? '<strong>1</strong> loss would have been a win with the optimal lineup.'
-            : `<strong>${esc(coaching.gamesCostByBadLineups)}</strong> losses would have been wins with the optimal lineup.`
-          : 'None of it changed a result.'}
-      </p>
-      <div class="table-scroll" style="margin-top:0.6rem">
+    const cost = coaching.gamesCostByBadLineups;
+    parts.push(fold(
+      'Lineup mistakes so far',
+      `${esc(num(coaching.totalBenched, 0))} points left on the bench${cost > 0 ? ` · cost you ${esc(cost)} game${cost === 1 ? '' : 's'}` : ' · none of it changed a result'}`,
+      `<div class="table-scroll">
         <table>
-          <caption>Biggest start/sit misses — these are actual results, not projections</caption>
+          <caption>The biggest start/sit calls that went wrong — actual points, not projections</caption>
           <thead><tr>
-            <th scope="col" class="num">Wk</th><th scope="col">Should have started</th>
-            <th scope="col">Started instead</th><th scope="col" class="num">Cost</th>
+            <th scope="col" class="num">Week</th><th scope="col">Should have started</th>
+            <th scope="col">Started instead</th><th scope="col" class="num">Points lost</th>
           </tr></thead>
           <tbody>
-            ${coaching.worstCalls
-              .map(
-                (c) => `<tr>
-                  <td class="num rank">${esc(c.week)}</td>
-                  <td>${esc(c.benched.name)} <small>(${esc(c.benched.position)}, ${num(c.benched.points, 1)})</small></td>
-                  <td>${esc(c.started.name)} <small>(${esc(c.started.position)}, ${num(c.started.points, 1)})</small></td>
-                  <td class="num">${num(c.cost, 1)}${c.changedResult ? ' <span class="pill pill--bad">Cost the game</span>' : ''}</td>
-                </tr>`
-              )
-              .join('')}
+            ${coaching.worstCalls.map((c) => `<tr>
+              <td class="num rank">${esc(c.week)}</td>
+              <td>${esc(c.benched.name)} <small>(${esc(c.benched.position)}, ${num(c.benched.points, 1)})</small></td>
+              <td>${esc(c.started.name)} <small>(${esc(c.started.position)}, ${num(c.started.points, 1)})</small></td>
+              <td class="num">${num(c.cost, 1)}${c.changedResult ? ' <span class="pill pill--bad">Cost the game</span>' : ''}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`
+    ));
+  }
+
+  if (team.weekLog.length) {
+    const maxScore = Math.max(...team.weekLog.map((w) => w.score), 1);
+    const wins = team.weekLog.filter((w) => w.result === 'WIN').length;
+    parts.push(fold(
+      'Week by week',
+      `${esc(team.weekLog.length)} game${team.weekLog.length === 1 ? '' : 's'} played · ${esc(wins)} won`,
+      `<div class="table-scroll">
+        <table>
+          <caption>Every game this season</caption>
+          <thead><tr>
+            <th scope="col" class="num">Week</th><th scope="col">Result</th>
+            <th scope="col" class="bar-cell">You scored</th>
+            <th scope="col" class="num">They scored</th>
+            <th scope="col" class="num">Your best possible</th>
+          </tr></thead>
+          <tbody>
+            ${team.weekLog.map((w) => `<tr>
+              <td class="num rank">${esc(w.week)}</td>
+              <td><span class="pill ${w.result === 'WIN' ? 'pill--good' : w.result === 'LOSS' ? 'pill--bad' : 'pill--neutral'}">${esc(w.result === 'WIN' ? 'Won' : w.result === 'LOSS' ? 'Lost' : w.result)}</span></td>
+              <td class="bar-cell">${bar(w.score, maxScore)}</td>
+              <td class="num">${num(w.opponentScore, 1)}</td>
+              <td class="num">${num(w.optimalScore, 1)}</td>
+            </tr>`).join('')}
           </tbody>
         </table>
       </div>
-    </div>`);
+      <p class="stat__note">"Your best possible" is what you would have scored with the perfect lineup from the same roster.</p>`
+    ));
   }
 
-  // --- Week log ---------------------------------------------------------
-  if (team.weekLog.length) {
-    const maxScore = Math.max(...team.weekLog.map((w) => w.score), 1);
-    parts.push(`
-      <div class="table-scroll" style="margin-bottom:1.5rem">
-        <table>
-          <caption>Week by week</caption>
-          <thead><tr>
-            <th scope="col" class="num">Wk</th><th scope="col">Result</th>
-            <th scope="col" class="bar-cell">Score</th>
-            <th scope="col" class="num">Opponent</th>
-            <th scope="col" class="num">Best possible</th>
-            <th scope="col" class="num">Efficiency</th>
-          </tr></thead>
-          <tbody>
-            ${team.weekLog
-              .map(
-                (w) => `<tr>
-                  <td class="num rank">${esc(w.week)}</td>
-                  <td><span class="pill ${w.result === 'WIN' ? 'pill--good' : w.result === 'LOSS' ? 'pill--bad' : 'pill--neutral'}">${esc(w.result)}</span></td>
-                  <td class="bar-cell">${bar(w.score, maxScore)}</td>
-                  <td class="num">${num(w.opponentScore, 1)}</td>
-                  <td class="num">${num(w.optimalScore, 1)}</td>
-                  <td class="num">${w.efficiency === null ? '—' : `${num(w.efficiency, 0)}%`}</td>
-                </tr>`
-              )
-              .join('')}
-          </tbody>
-        </table>
-      </div>`);
-  }
-
-  // --- Roster -----------------------------------------------------------
   if (team.roster.length) {
     const starters = team.roster.filter((p) => p.started);
     const benched = team.roster.filter((p) => !p.started);
-    const rosterRows = (list) =>
-      list
-        .map(
-          (p) => `<tr>
-            <td>${esc(p.slot)}</td>
-            <th scope="row" class="row-team">${playerCell(p, p.proTeam)}</th>
-            <td>${esc(p.position)}</td>
-            <td class="num">${num(p.projected, 1)}</td>
-            <td>${p.injuryStatus && p.injuryStatus !== 'ACTIVE' && p.injuryStatus !== 'NORMAL'
-              ? `<span class="pill pill--warn">${esc(p.injuryStatus)}</span>` : ''}</td>
-          </tr>`
-        )
-        .join('');
-
-    parts.push(`
-      <div class="table-scroll">
+    const injured = team.roster.filter((p) => p.injuryStatus && p.injuryStatus !== 'ACTIVE' && p.injuryStatus !== 'NORMAL');
+    const rosterRows = (list) => list.map((p) => `<tr>
+        <td>${esc(p.slot)}</td>
+        <th scope="row" class="row-team">${playerCell(p, p.proTeam)}</th>
+        <td>${esc(p.position)}</td>
+        <td class="num">${num(p.projected, 1)}</td>
+        <td>${p.injuryStatus && p.injuryStatus !== 'ACTIVE' && p.injuryStatus !== 'NORMAL'
+          ? `<span class="pill pill--warn">${esc(p.injuryStatus)}</span>` : ''}</td>
+      </tr>`).join('');
+    parts.push(fold(
+      'Full roster',
+      `${esc(team.roster.length)} players${injured.length ? ` · ${esc(injured.length)} injured` : ''}`,
+      `<div class="table-scroll">
         <table>
-          <caption>Roster — projections for week ${esc(state.teamDetail.adviceWeek)}</caption>
+          <caption>As set in ESPN, with Week ${esc(state.teamDetail.adviceWeek)} projections</caption>
           <thead><tr>
             <th scope="col">Slot</th><th scope="col">Player</th><th scope="col">Pos</th>
             <th scope="col" class="num">Projected</th><th scope="col">Status</th>
           </tr></thead>
           <tbody>${rosterRows(starters)}${rosterRows(benched)}</tbody>
         </table>
-      </div>`);
+      </div>`
+    ));
   }
 
-  // --- Head to head -----------------------------------------------------
   if (team.headToHead?.length) {
     const rec = (r) => (r.games ? `${r.wins}-${r.losses}${r.ties ? `-${r.ties}` : ''}` : '—');
     const last = (m) => (m
-      ? `${m.result === 'WIN' ? 'W' : m.result === 'LOSS' ? 'L' : 'T'} ${num(m.pointsFor, 1)}–${num(m.pointsAgainst, 1)}` +
-        ` · ${m.season} Wk ${m.week}${m.isPlayoff ? ' (playoffs)' : ''}`
+      ? `${m.result === 'WIN' ? 'Won' : m.result === 'LOSS' ? 'Lost' : 'Tied'} ${num(m.pointsFor, 1)}–${num(m.pointsAgainst, 1)}` +
+        ` (${m.season}, Wk ${m.week}${m.isPlayoff ? ', playoffs' : ''})`
       : '—');
     const r = team.rivalry;
-    const rivalryRec = r ? {
-      wins: r.regular.wins + r.playoffs.wins,
-      losses: r.regular.losses + r.playoffs.losses,
-      ties: r.regular.ties + r.playoffs.ties,
-    } : null;
-
-    parts.push(`
-      ${r ? `
-      <div class="card rivalry" style="margin-top:1.5rem">
-        <span class="pill pill--accent">Rivalry</span>
-        <p>
-          <strong>${esc(r.opponentTeamName ?? 'Unknown')}</strong>${r.opponentName ? ` (${esc(r.opponentName)})` : ''}:
-          ${esc(r.games)} meetings, ${esc(rivalryRec.wins)}-${esc(rivalryRec.losses)}${rivalryRec.ties ? `-${esc(rivalryRec.ties)}` : ''}
-          all-time, ${esc(signed(r.avgMargin, 1))} a game on average.
-        </p>
-      </div>` : ''}
-      <div class="table-scroll" style="margin-top:1.5rem">
+    const rivalrySummary = r
+      ? `Rivalry: ${esc(r.opponentTeamName ?? 'Unknown')}, ${esc(r.games)} meetings`
+      : `Your record against each manager you've played`;
+    parts.push(fold('Head to head', rivalrySummary, `
+      <div class="table-scroll">
         <table>
-          <caption>Head to head, all-time — by manager, so records follow people across team renames and seasons</caption>
+          <caption>All-time, by manager — records follow people even if they rename their team</caption>
           <thead><tr>
             <th scope="col">Opponent</th>
-            <th scope="col" class="num">Regular</th>
+            <th scope="col" class="num">Regular season</th>
             <th scope="col" class="num">Playoffs</th>
-            <th scope="col" class="num"><abbr title="Points for, regular season and playoffs">PF</abbr></th>
-            <th scope="col" class="num"><abbr title="Points against, regular season and playoffs">PA</abbr></th>
             <th scope="col">Last meeting</th>
           </tr></thead>
           <tbody>
-            ${team.headToHead
-              .map(
-                (h) => `<tr>
-                  <th scope="row" class="row-team">${esc(h.opponentTeamName ?? 'Unknown')}${
-                    h.opponentName ? `<small>${esc(h.opponentName)}</small>` : ''}</th>
-                  <td class="num">${esc(rec(h.regular))}</td>
-                  <td class="num">${esc(rec(h.playoffs))}</td>
-                  <td class="num">${num(h.regular.pointsFor + h.playoffs.pointsFor, 1)}</td>
-                  <td class="num">${num(h.regular.pointsAgainst + h.playoffs.pointsAgainst, 1)}</td>
-                  <td>${esc(last(h.lastMeeting))}</td>
-                </tr>`
-              )
-              .join('')}
+            ${team.headToHead.map((h) => `<tr>
+              <th scope="row" class="row-team">${esc(h.opponentTeamName ?? 'Unknown')}${h.opponentName ? `<small>${esc(h.opponentName)}</small>` : ''}</th>
+              <td class="num">${esc(rec(h.regular))}</td>
+              <td class="num">${esc(rec(h.playoffs))}</td>
+              <td>${esc(last(h.lastMeeting))}</td>
+            </tr>`).join('')}
           </tbody>
         </table>
-      </div>`);
+      </div>
+      ${r ? `<p class="stat__note">Your rivalry is the matchup you've played most (closest record breaks ties) — ${esc(r.games)} meetings with ${esc(r.opponentTeamName ?? 'them')}, averaging ${esc(signed(r.avgMargin, 1))} points a game for you.</p>` : ''}`));
   }
 
   // Nothing above had anything to say yet.

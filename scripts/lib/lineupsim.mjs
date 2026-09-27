@@ -50,6 +50,9 @@ export const SPREAD_K = 4;
 /** Wins out of 100 a contender must add over the projection lineup to replace it. */
 const MIN_WIN_EDGE = 3;
 
+/** Lineup slots that do not score: bench, IR, and ESPN's extra-reserve slot. */
+const BENCH_SLOTS = new Set([20, 21, 24]);
+
 /** Statuses that mean the player will not play this week. */
 const WILL_NOT_PLAY = new Set(['OUT', 'INJURY_RESERVE', 'SUSPENSION']);
 
@@ -200,6 +203,12 @@ export function simulateLineup({
     }
   }
 
+  // The lineup as it is set in ESPN right now, so the page can say exactly
+  // which moves to make rather than comparing two hypothetical lineups.
+  const current = mine.filter((p) => !BENCH_SLOTS.has(p.slotId));
+  const currentStats = current.length ? evaluate(current) : null;
+  const currentIds = new Set(current.map((p) => p.playerId));
+
   const pickIds = new Set(pick.lineup.map((p) => p.playerId));
   const projectionIds = new Set(projection.map((p) => p.playerId));
   const describe = (p) => ({
@@ -226,6 +235,12 @@ export function simulateLineup({
     projectionLineup: { timesOptimal: timesOptimal.get(projectionKey) ?? 0, ...projectionStats },
     // The other lineups tried, and how each did across the same 100 weeks.
     alternatives,
+    // The lineup currently set in ESPN, and the moves from it to the pick.
+    currentLineup: currentStats,
+    fromCurrent: {
+      start: pick.lineup.filter((p) => !currentIds.has(p.playerId)).map(describe),
+      sit: current.filter((p) => !pickIds.has(p.playerId)).map(describe),
+    },
     // Who the simulation would start instead of the projection lineup, and who
     // it would sit. Empty when the two agree.
     changes: {

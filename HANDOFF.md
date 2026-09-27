@@ -25,7 +25,7 @@ the way they are.
 | Managers | **10 committed.** ESPN size changed 12 -> 10. Most have not claimed their ESPN team yet. |
 | Buy-in | **$75** (was $50). Payouts **350 / 130 / 75** + **$195** funding weekly challenges at $15/wk. |
 | Money owed | Everyone paid **$50** under the old buy-in. The ledger shows each of them **$25 short** until somebody confirms otherwise — see below. |
-| Tests | 205, all passing |
+| Tests | 207, all passing |
 | Automation | GitHub Actions, every 3 hours — **verified working**, it has pushed real commits |
 
 The league had no rosters, no picks and no games at time of writing. Every
@@ -367,6 +367,16 @@ over early the following week. It used to be `latestScoringPeriod + 1`, which on
 a Sunday advised on next week. Known limit: mid-week, players whose game has
 already kicked off are still simulated from their projection, because the fetch
 carries no per-game status to tell "played and scored 0" from "not played yet".
+
+**Standings and team pages lead with the answer; detail is folded.** Each
+page shows one plain-English answer first (standings table with playoff chance;
+"Week N vs X — Y% to win, make these changes in ESPN"), then `fold()` sections
+whose always-visible summary line says what is inside, each ending in a
+`glossary()` of plain definitions. The team page's moves are computed against
+the lineup *currently set in ESPN* (`lineupSim.fromCurrent`, with the current
+lineup's own win chance in `lineupSim.currentLineup`) — comparing two
+hypothetical lineups had read as the two cards disagreeing. Keep new stats
+behind a fold with a glossary line rather than adding columns to the main table.
 
 **The link-preview image is a static PNG, not generated per build.**
 `docs/assets/og.png` (1200×630) is referenced by absolute URL from the Open
