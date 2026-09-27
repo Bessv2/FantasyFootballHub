@@ -12,6 +12,7 @@
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { adviceWeekFor } from './lib/normalize.mjs';
 import { partitionByFreshness, pruneCache, oldestFetch, NEWS_TTL_HOURS } from './lib/newscache.mjs';
 
 import {
@@ -189,10 +190,11 @@ async function fetchSeason(client, season) {
   await sleep(POLITE_DELAY_MS);
 
   // ---- Current rosters + free agents (for the roster advisor) -----------
-  // The week to advise on is the next one that has not been played. Fetching
-  // rosters with that scoringPeriodId is what makes ESPN return projections for
-  // the right week rather than whatever period it defaults to.
-  const adviceWeek = Math.min(finalPeriod, lastPlayed + 1);
+  // The week to advise on is the one ESPN is on now: the week being played,
+  // until ESPN rolls over to the next (see adviceWeekFor). Fetching rosters
+  // with that scoringPeriodId is what makes ESPN return projections for the
+  // right week rather than whatever period it defaults to.
+  const adviceWeek = adviceWeekFor(status);
   try {
     const current = await client.getRostersForWeek(season, adviceWeek);
     await writeJson(path.join(dir, "current.json"), { adviceWeek, ...current });

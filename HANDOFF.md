@@ -25,7 +25,7 @@ the way they are.
 | Managers | **10 committed.** ESPN size changed 12 -> 10. Most have not claimed their ESPN team yet. |
 | Buy-in | **$75** (was $50). Payouts **350 / 130 / 75** + **$195** funding weekly challenges at $15/wk. |
 | Money owed | Everyone paid **$50** under the old buy-in. The ledger shows each of them **$25 short** until somebody confirms otherwise — see below. |
-| Tests | 202, all passing |
+| Tests | 205, all passing |
 | Automation | GitHub Actions, every 3 hours — **verified working**, it has pushed real commits |
 
 The league had no rosters, no picks and no games at time of writing. Every
@@ -360,6 +360,13 @@ favourites almost never change. Contenders are defined *before* scoring so the
 pick is not just whichever lineup got lucky in these 100 draws. Seeded on
 `season:week:team`. No opponent (bye, or no schedule.json) → no win odds, and
 the projected lineup stands.
+
+**Advice targets the week being played.** `adviceWeekFor()` in `normalize.mjs`
+returns ESPN's `latestScoringPeriod` — the week in progress, until ESPN rolls
+over early the following week. It used to be `latestScoringPeriod + 1`, which on
+a Sunday advised on next week. Known limit: mid-week, players whose game has
+already kicked off are still simulated from their projection, because the fetch
+carries no per-game status to tell "played and scored 0" from "not played yet".
 
 **The link-preview image is a static PNG, not generated per build.**
 `docs/assets/og.png` (1200×630) is referenced by absolute URL from the Open

@@ -449,7 +449,7 @@ export function normalizeSeason(raw) {
       count,
     }));
 
-  const adviceWeek = raw.current?.adviceWeek ?? (status.latestScoringPeriod ?? 0) + 1;
+  const adviceWeek = raw.current?.adviceWeek ?? adviceWeekFor(status);
   const currentRosters = normalizeCurrentRosters(raw.current, playerIndex, adviceWeek);
   const freeAgents = normalizeFreeAgents(raw.freeAgents, adviceWeek);
 
@@ -501,6 +501,21 @@ export function normalizeSeason(raw) {
     freeAgents,
     playerCount: playerIndex.size,
   };
+}
+
+/**
+ * The week to give lineup advice for: the one ESPN is on right now.
+ *
+ * `latestScoringPeriod` is the week currently being played — it only moves on
+ * once that week is over (ESPN rolls it forward early in the following week).
+ * Advice used to target latestScoringPeriod + 1, which on a Sunday meant
+ * advising on next week while this week's games were still to be played.
+ * Before the season it is 1; after the final week it stays on the final week.
+ */
+export function adviceWeekFor(status) {
+  const final = status?.finalScoringPeriod ?? 17;
+  const latest = status?.latestScoringPeriod ?? 0;
+  return Math.min(final, Math.max(1, latest));
 }
 
 /**
