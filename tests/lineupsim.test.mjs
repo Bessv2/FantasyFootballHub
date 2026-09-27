@@ -94,3 +94,26 @@ describe('simulateLineup', () => {
     assert.deepEqual(simulateLineup({ roster: [], startingSlots: QB_ONLY }), { available: false });
   });
 });
+
+describe('simulateLineup against the lineup set in ESPN', () => {
+  test('lists the moves from the current lineup, and scores it', () => {
+    // QB2 (projected 5) is in the QB slot; QB1 (projected 25) is on the bench.
+    // The pick is QB1, so the move is start QB1, sit QB2 — and the current
+    // lineup's expected score is QB2's 5-ish, well below the pick's 25-ish.
+    const sim = simulateLineup({
+      roster: [qb(1, 25, { slotId: 20 }), qb(2, 5, { slotId: 0 })],
+      startingSlots: QB_ONLY,
+    });
+    assert.deepEqual(sim.fromCurrent.start.map((p) => p.playerId), [1]);
+    assert.deepEqual(sim.fromCurrent.sit.map((p) => p.playerId), [2]);
+    assert.ok(sim.currentLineup.mean < sim.recommended.mean);
+  });
+
+  test('no moves when the current lineup is already the pick', () => {
+    const sim = simulateLineup({
+      roster: [qb(1, 25, { slotId: 0 }), qb(2, 5, { slotId: 20 })],
+      startingSlots: QB_ONLY,
+    });
+    assert.deepEqual(sim.fromCurrent, { start: [], sit: [] });
+  });
+});
