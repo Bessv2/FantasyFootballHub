@@ -2,8 +2,8 @@
 
 Every source file in one place, for reading or for handing to a fresh session.
 
-- **Commit:** `c7ee6ec` (2026-09-27 15:15:07 +0000)
-- **Generated:** 2026-09-27T15:15:07.752Z
+- **Commit:** `a747730` (2026-09-27 15:27:38 +0000)
+- **Generated:** 2026-09-27T15:27:38.637Z
 - **Regenerate with:** `npm run bundle`
 
 **Read [HANDOFF.md](HANDOFF.md) first.** It carries the ESPN API gotchas,
@@ -829,7 +829,7 @@ export const STAT_KEYS = {
 
 ### `scripts/lib/normalize.mjs`
 
-*531 lines*
+*546 lines*
 
 ```javascript
 /**
@@ -1283,7 +1283,7 @@ export function normalizeSeason(raw) {
       count,
     }));
 
-  const adviceWeek = raw.current?.adviceWeek ?? (status.latestScoringPeriod ?? 0) + 1;
+  const adviceWeek = raw.current?.adviceWeek ?? adviceWeekFor(status);
   const currentRosters = normalizeCurrentRosters(raw.current, playerIndex, adviceWeek);
   const freeAgents = normalizeFreeAgents(raw.freeAgents, adviceWeek);
 
@@ -1335,6 +1335,21 @@ export function normalizeSeason(raw) {
     freeAgents,
     playerCount: playerIndex.size,
   };
+}
+
+/**
+ * The week to give lineup advice for: the one ESPN is on right now.
+ *
+ * `latestScoringPeriod` is the week currently being played — it only moves on
+ * once that week is over (ESPN rolls it forward early in the following week).
+ * Advice used to target latestScoringPeriod + 1, which on a Sunday meant
+ * advising on next week while this week's games were still to be played.
+ * Before the season it is 1; after the final week it stays on the final week.
+ */
+export function adviceWeekFor(status) {
+  const final = status?.finalScoringPeriod ?? 17;
+  const latest = status?.latestScoringPeriod ?? 0;
+  return Math.min(final, Math.max(1, latest));
 }
 
 /**
@@ -5513,7 +5528,7 @@ main().catch((error) => {
 
 ### `scripts/fetch.mjs`
 
-*341 lines*
+*343 lines*
 
 ```javascript
 /**
@@ -5530,6 +5545,7 @@ main().catch((error) => {
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { adviceWeekFor } from './lib/normalize.mjs';
 import { partitionByFreshness, pruneCache, oldestFetch, NEWS_TTL_HOURS } from './lib/newscache.mjs';
 
 import {
@@ -5707,10 +5723,11 @@ async function fetchSeason(client, season) {
   await sleep(POLITE_DELAY_MS);
 
   // ---- Current rosters + free agents (for the roster advisor) -----------
-  // The week to advise on is the next one that has not been played. Fetching
-  // rosters with that scoringPeriodId is what makes ESPN return projections for
-  // the right week rather than whatever period it defaults to.
-  const adviceWeek = Math.min(finalPeriod, lastPlayed + 1);
+  // The week to advise on is the one ESPN is on now: the week being played,
+  // until ESPN rolls over to the next (see adviceWeekFor). Fetching rosters
+  // with that scoringPeriodId is what makes ESPN return projections for the
+  // right week rather than whatever period it defaults to.
+  const adviceWeek = adviceWeekFor(status);
   try {
     const current = await client.getRostersForWeek(season, adviceWeek);
     await writeJson(path.join(dir, "current.json"), { adviceWeek, ...current });
@@ -13934,12 +13951,12 @@ describe('news normalization', () => {
 
 ### `tests/normalize.test.mjs`
 
-*41 lines*
+*55 lines*
 
 ```javascript
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { receptionScoring, normalizeTeams } from '../scripts/lib/normalize.mjs';
+import { receptionScoring, normalizeTeams, adviceWeekFor } from '../scripts/lib/normalize.mjs';
 
 describe('receptionScoring', () => {
   test('reads receptions from scoringItems, ignoring playerRankType', () => {
@@ -13975,6 +13992,20 @@ describe('normalizeTeams', () => {
     const [t] = normalizeTeams([{ id: 2, name: 'Humans', owners: ['B'] }], members);
     assert.equal(t.managerName, 'Humans');
     assert.ok(!JSON.stringify(t).includes('Human '));
+  });
+});
+
+describe('adviceWeekFor', () => {
+  test('advises on the week being played, not the one after', () => {
+    // Sunday of Week 3: ESPN is on scoring period 3 until the week is over.
+    assert.equal(adviceWeekFor({ latestScoringPeriod: 3, finalScoringPeriod: 17 }), 3);
+  });
+  test('before the season: Week 1', () => {
+    assert.equal(adviceWeekFor({ latestScoringPeriod: 0 }), 1);
+    assert.equal(adviceWeekFor(undefined), 1);
+  });
+  test('never past the final week', () => {
+    assert.equal(adviceWeekFor({ latestScoringPeriod: 18, finalScoringPeriod: 17 }), 17);
   });
 });
 ```
@@ -14883,4 +14914,4 @@ jobs:
 
 ---
 
-*47 files, 14,541 lines.*
+*47 files, 14,572 lines.*

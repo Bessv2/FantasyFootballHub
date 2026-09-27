@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { receptionScoring, normalizeTeams } from '../scripts/lib/normalize.mjs';
+import { receptionScoring, normalizeTeams, adviceWeekFor } from '../scripts/lib/normalize.mjs';
 
 describe('receptionScoring', () => {
   test('reads receptions from scoringItems, ignoring playerRankType', () => {
@@ -36,5 +36,19 @@ describe('normalizeTeams', () => {
     const [t] = normalizeTeams([{ id: 2, name: 'Humans', owners: ['B'] }], members);
     assert.equal(t.managerName, 'Humans');
     assert.ok(!JSON.stringify(t).includes('Human '));
+  });
+});
+
+describe('adviceWeekFor', () => {
+  test('advises on the week being played, not the one after', () => {
+    // Sunday of Week 3: ESPN is on scoring period 3 until the week is over.
+    assert.equal(adviceWeekFor({ latestScoringPeriod: 3, finalScoringPeriod: 17 }), 3);
+  });
+  test('before the season: Week 1', () => {
+    assert.equal(adviceWeekFor({ latestScoringPeriod: 0 }), 1);
+    assert.equal(adviceWeekFor(undefined), 1);
+  });
+  test('never past the final week', () => {
+    assert.equal(adviceWeekFor({ latestScoringPeriod: 18, finalScoringPeriod: 17 }), 17);
   });
 });
