@@ -2,8 +2,8 @@
 
 Every source file in one place, for reading or for handing to a fresh session.
 
-- **Commit:** `5e04414` (2026-09-25 05:35:08 +0000)
-- **Generated:** 2026-09-25T05:35:08.741Z
+- **Commit:** `c7ee6ec` (2026-09-27 15:15:07 +0000)
+- **Generated:** 2026-09-27T15:15:07.752Z
 - **Regenerate with:** `npm run bundle`
 
 **Read [HANDOFF.md](HANDOFF.md) first.** It carries the ESPN API gotchas,
@@ -22,10 +22,10 @@ fixtures, both regenerable), `docs/data/` (build output).
 
 - **Configuration** — `league.json`, `pot.json`, `money.example.json`, `secrets.example.json`
 - **Data layer — talking to ESPN** — `espn.mjs`, `constants.mjs`, `normalize.mjs`
-- **Analytics** — `lineup.mjs`, `analytics.mjs`, `challenges.mjs`, `draft.mjs`, `advisor.mjs`, `bigboard.mjs`, `images.mjs`, `playercard.mjs`, `money.mjs`, `odds.mjs`, `trades.mjs`, `recap.mjs`, `h2h.mjs`, `newscache.mjs`
+- **Analytics** — `lineup.mjs`, `analytics.mjs`, `challenges.mjs`, `draft.mjs`, `advisor.mjs`, `bigboard.mjs`, `images.mjs`, `playercard.mjs`, `money.mjs`, `odds.mjs`, `trades.mjs`, `recap.mjs`, `h2h.mjs`, `newscache.mjs`, `lineupsim.mjs`
 - **Pipeline scripts** — `check.mjs`, `fetch.mjs`, `build.mjs`, `serve.mjs`, `ship.mjs`, `myleagues.mjs`, `fixtures.mjs`
 - **Site** — `index.html`, `style.css`, `app.js`, `mock.js`, `_headers`
-- **Tests** — `analytics.test.mjs`, `challenges.test.mjs`, `images.test.mjs`, `playercard.test.mjs`, `normalize.test.mjs`, `odds.test.mjs`, `trades.test.mjs`, `recap.test.mjs`, `h2h.test.mjs`, `newscache.test.mjs`
+- **Tests** — `analytics.test.mjs`, `challenges.test.mjs`, `images.test.mjs`, `playercard.test.mjs`, `normalize.test.mjs`, `odds.test.mjs`, `trades.test.mjs`, `recap.test.mjs`, `h2h.test.mjs`, `newscache.test.mjs`, `lineupsim.test.mjs`
 - **Automation** — `update.yml`, `package.json`
 
 ---
@@ -5083,6 +5083,269 @@ export function oldestFetch(cache, ids) {
 }
 ```
 
+### `scripts/lib/lineupsim.mjs`
+
+*257 lines*
+
+```javascript
+/**
+ * Lineup simulation: 100 possible versions of the coming week, and the lineup
+ * that holds up best across them.
+ *
+ * A projection is one number, but a player's week is a range — a boom-or-bust
+ * receiver and a steady one can carry the same 12-point projection. So each
+ * simulated week draws every rostered player's score from a normal centred on
+ * his ESPN projection, with a spread fitted to how much he has actually varied
+ * this season. For each draw the solver finds the best possible lineup, which
+ * gives two things:
+ *
+ *   start rate   how often each player made the best lineup — "must start",
+ *                "coin flip" and "bench" at a glance
+ *   the pick     a few candidate lineups — the projection one, the most
+ *                often started, an upside one and a safe-floor one — are each
+ *                scored across all 100 weeks against the opponent's simulated
+ *                score. The one that wins most often is recommended.
+ *
+ * Averaged over many weeks the projection lineup always scores the most — that
+ * is what a projection is — so the simulation only departs from it when a
+ * different lineup genuinely wins more often (an underdog wants upside, a
+ * favourite wants a safe floor), and only by a clear margin: over 100 draws a
+ * one- or two-game edge is noise, not a reason to change your lineup.
+ *
+ * Seeded on season, week and team, so a rebuild shows the same advice.
+ */
+
+import { optimalLineup } from './lineup.mjs';
+import { hashSeed, mulberry32 } from './challenges.mjs';
+import { LINEUP_SLOT } from './constants.mjs';
+
+export const DEFAULT_SIMULATIONS = 100;
+
+/**
+ * How much a player's week swings when there is little history to go on, as a
+ * share of his projection. Assumptions, not measurements: kickers and
+ * quarterbacks are the steadiest, tight ends and defences the least. With a few
+ * weeks of real scores the player's own spread takes over (see SPREAD_K).
+ */
+export const DEFAULT_CV = { QB: 0.35, RB: 0.5, WR: 0.55, TE: 0.6, K: 0.45, 'D/ST': 0.65 };
+const FALLBACK_CV = 0.55;
+/** No player's week is certain: a floor on the spread, in points. */
+const MIN_SD = 1.5;
+/**
+ * Prior weight on the positional default, in games. A player's own spread
+ * from n scored weeks carries weight n - 1, so after five weeks it counts as
+ * much as the default. Same shrinkage idea as the playoff odds.
+ */
+export const SPREAD_K = 4;
+/** Wins out of 100 a contender must add over the projection lineup to replace it. */
+const MIN_WIN_EDGE = 3;
+
+/** Statuses that mean the player will not play this week. */
+const WILL_NOT_PLAY = new Set(['OUT', 'INJURY_RESERVE', 'SUSPENSION']);
+
+const round1 = (n) => Number(n.toFixed(1));
+const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
+const sampleSd = (xs) => {
+  if (xs.length < 2) return 0;
+  const m = mean(xs);
+  return Math.sqrt(xs.reduce((a, x) => a + (x - m) ** 2, 0) / (xs.length - 1));
+};
+const percentile = (sorted, p) => sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))];
+
+/**
+ * A player's simulated spread.
+ * @param {object} player        { position, projected }
+ * @param {number[]} history     his actual weekly scores this season (games played)
+ */
+export function playerSpread(player, history = [], k = SPREAD_K) {
+  const projected = Math.max(0, player.projected ?? 0);
+  const prior = Math.max(MIN_SD, (DEFAULT_CV[player.position] ?? FALLBACK_CV) * projected);
+  const n = Math.max(0, history.length - 1);
+  return Math.max(MIN_SD, (n * sampleSd(history) + k * prior) / (n + k));
+}
+
+const lineupKey = (lineup) => lineup.map((p) => p.playerId).sort((a, b) => a - b).join(',');
+
+/**
+ * @param {object}   input
+ * @param {Array}    input.roster          current roster: { playerId, name, position, projected, slotId, injuryStatus }
+ * @param {Array}    input.startingSlots   [{ slotId, count }]
+ * @param {Array}    [input.opponentRoster] the opponent's roster, same shape, if known
+ * @param {Map}      [input.history]       playerId -> weekly scores this season
+ * @param {number}   [input.simulations]
+ * @param {string}   [input.seed]
+ */
+export function simulateLineup({
+  roster,
+  startingSlots,
+  opponentRoster = null,
+  history = new Map(),
+  simulations = DEFAULT_SIMULATIONS,
+  seed = 'roe-lineup',
+}) {
+  const eligible = (roster ?? []).filter((p) => p && Number.isFinite(p.projected));
+  if (!eligible.length || !startingSlots?.length) return { available: false };
+
+  const rand = mulberry32(hashSeed(seed));
+  const normal = () => Math.sqrt(-2 * Math.log(1 - rand())) * Math.cos(2 * Math.PI * rand());
+
+  const model = (list) => list.map((p) => {
+    // A zero projection is ESPN saying he is not playing — usually a bye.
+    const out = WILL_NOT_PLAY.has(p.injuryStatus) || p.projected <= 0;
+    return {
+      ...p,
+      out,
+      mu: out ? 0 : Math.max(0, p.projected),
+      sd: out ? 0 : playerSpread(p, history.get(p.playerId) ?? []),
+    };
+  });
+  // A defence can finish below zero; nobody else realistically does.
+  const draw = (p) => (p.out ? 0 : Math.max(p.position === 'D/ST' ? -5 : 0, p.mu + p.sd * normal()));
+
+  const mine = model(eligible);
+  const theirs = opponentRoster ? model(opponentRoster.filter((p) => p && Number.isFinite(p.projected))) : null;
+
+  // The opponent is assumed to start their best lineup on projections.
+  const theirLineup = theirs?.length
+    ? optimalLineup(theirs.map((p) => ({ ...p, points: p.mu })), startingSlots).lineup.map((p) => p.playerId)
+    : null;
+  const theirIndex = theirs ? new Map(theirs.map((p) => [p.playerId, p])) : null;
+
+  // The projection lineup: best on the mean of every player.
+  const projection = optimalLineup(mine.map((p) => ({ ...p, points: p.mu })), startingSlots).lineup;
+
+  const draws = [];
+  const opponentScores = [];
+  const timesOptimal = new Map();
+  const startCount = new Map(mine.map((p) => [p.playerId, 0]));
+
+  for (let s = 0; s < simulations; s += 1) {
+    const points = new Map(mine.map((p) => [p.playerId, draw(p)]));
+    draws.push(points);
+    if (theirLineup) {
+      opponentScores.push(theirLineup.reduce((a, id) => a + draw(theirIndex.get(id)), 0));
+    }
+
+    const best = optimalLineup(mine.map((p) => ({ ...p, points: points.get(p.playerId) })), startingSlots).lineup;
+    const key = lineupKey(best);
+    timesOptimal.set(key, (timesOptimal.get(key) ?? 0) + 1);
+    for (const p of best) startCount.set(p.playerId, startCount.get(p.playerId) + 1);
+  }
+
+  /** A lineup's record across every simulated week. */
+  const evaluate = (lineup) => {
+    const totals = draws.map((points) => lineup.reduce((a, p) => a + points.get(p.playerId), 0));
+    let wins = 0;
+    if (theirLineup) {
+      totals.forEach((t, i) => {
+        if (t > opponentScores[i]) wins += 1;
+        else if (t === opponentScores[i]) wins += 0.5;
+      });
+    }
+    const sorted = [...totals].sort((a, b) => a - b);
+    return {
+      mean: round1(mean(totals)),
+      p10: round1(percentile(sorted, 0.1)),
+      p90: round1(percentile(sorted, 0.9)),
+      wins,
+      winPct: theirLineup ? round1((wins / simulations) * 100) : null,
+    };
+  };
+
+  const projectionKey = lineupKey(projection);
+  const projectionStats = evaluate(projection);
+
+  // The contenders. Each is the solver's answer to a different question, set
+  // before looking at who wins the 100 weeks — so the pick is not simply
+  // whichever lineup got lucky in these particular draws.
+  //   mostStarted  the players who made the best lineup most often
+  //   upside       judged at the 80th percentile of each player's range — what
+  //                an underdog needs, since only a big week wins it
+  //   floor        judged at the 20th percentile — what a favourite needs,
+  //                since only a bust loses it
+  const Z80 = 0.8416;
+  const solveOn = (value) =>
+    optimalLineup(mine.map((p) => ({ ...p, points: value(p) })), startingSlots).lineup;
+  const contenders = [
+    ['mostStarted', solveOn((p) => startCount.get(p.playerId) + p.mu / 1000)],
+    ['upside', solveOn((p) => (p.out ? -1 : p.mu + Z80 * p.sd))],
+    ['floor', solveOn((p) => (p.out ? -1 : p.mu - Z80 * p.sd))],
+  ];
+
+  let pick = { key: projectionKey, strategy: 'projection', lineup: projection, stats: projectionStats };
+  const alternatives = [];
+  const seen = new Set([projectionKey]);
+  for (const [strategy, lineup] of contenders) {
+    const key = lineupKey(lineup);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const stats = evaluate(lineup);
+    alternatives.push({ strategy, ...stats });
+    // Only a lineup that beats the projection by a clear margin replaces it:
+    // over 100 draws, one or two extra wins is noise. Without an opponent
+    // there is nothing to win, and on average the projection always scores
+    // the most, so it stands.
+    if (theirLineup && stats.wins - projectionStats.wins >= MIN_WIN_EDGE * (simulations / 100) && stats.wins > pick.stats.wins) {
+      pick = { key, strategy, lineup, stats };
+    }
+  }
+
+  const pickIds = new Set(pick.lineup.map((p) => p.playerId));
+  const projectionIds = new Set(projection.map((p) => p.playerId));
+  const describe = (p) => ({
+    playerId: p.playerId,
+    name: p.name,
+    position: p.position,
+    slotId: p.slotId,
+    slot: LINEUP_SLOT[p.slotId] ?? String(p.slotId),
+    projected: round1(p.mu),
+  });
+
+  const opponentSorted = [...opponentScores].sort((a, b) => a - b);
+
+  return {
+    available: true,
+    simulations,
+    seed,
+    recommended: {
+      strategy: pick.strategy,
+      starters: pick.lineup.map(describe),
+      timesOptimal: timesOptimal.get(pick.key) ?? 0,
+      ...pick.stats,
+    },
+    projectionLineup: { timesOptimal: timesOptimal.get(projectionKey) ?? 0, ...projectionStats },
+    // The other lineups tried, and how each did across the same 100 weeks.
+    alternatives,
+    // Who the simulation would start instead of the projection lineup, and who
+    // it would sit. Empty when the two agree.
+    changes: {
+      start: pick.lineup.filter((p) => !projectionIds.has(p.playerId)).map(describe),
+      sit: projection.filter((p) => !pickIds.has(p.playerId)).map(describe),
+    },
+    opponent: theirLineup
+      ? {
+          mean: round1(mean(opponentScores)),
+          p10: round1(percentile(opponentSorted, 0.1)),
+          p90: round1(percentile(opponentSorted, 0.9)),
+        }
+      : null,
+    players: mine
+      .map((p) => ({
+        playerId: p.playerId,
+        name: p.name,
+        position: p.position,
+        projected: round1(p.mu),
+        spread: round1(p.sd),
+        out: p.out,
+        startPct: Math.round((startCount.get(p.playerId) / simulations) * 100),
+        recommended: pickIds.has(p.playerId),
+      }))
+      .sort((a, b) => b.startPct - a.startPct || b.projected - a.projected),
+    distinctOptimalLineups: timesOptimal.size,
+  };
+}
+```
+
 ## Pipeline scripts
 
 The commands you actually run. fetch -> build -> serve, plus the automation and diagnostics.
@@ -5597,7 +5860,7 @@ main().catch((error) => {
 
 ### `scripts/build.mjs`
 
-*635 lines*
+*664 lines*
 
 ```javascript
 /**
@@ -5626,7 +5889,8 @@ import {
   computeWeeklyHighScores,
   computePositionalStats,
 } from './lib/analytics.mjs';
-import { analyzeDraft } from './lib/draft.mjs';
+import { analyzeDraft, buildPlayerWeekPoints } from './lib/draft.mjs';
+import { simulateLineup } from './lib/lineupsim.mjs';
 import { computeLedger, computePayouts, challengePayout, splitPot, mergeMoneyConfig } from './lib/money.mjs';
 import { buildChallengeSchedule, computeChallenges, challengeLeaderboard } from './lib/challenges.mjs';
 import { sanitizeTeamLogo } from './lib/images.mjs';
@@ -5811,6 +6075,21 @@ function buildChallenges(season, teamStats, teamWeeks, moneyConfig) {
 function buildTeamDetail(season, teamStats, teamWeeks, standings, draft) {
   const slots = season.league.startingSlots;
 
+  // Each player's scored weeks this season, which set how widely the lineup
+  // simulation lets him swing. Zero-point weeks are left out: mostly byes and
+  // inactives, which would read as volatility he doesn't have.
+  const history = new Map();
+  for (const [playerId, weeks] of buildPlayerWeekPoints(season)) {
+    history.set(playerId, [...weeks.values()].map((w) => w.points).filter((pts) => pts !== 0));
+  }
+  // Who each team plays in the week being advised on, from the full schedule.
+  const opponentOf = new Map();
+  for (const g of season.schedule ?? []) {
+    if (g.week !== season.adviceWeek || g.homeTeamId == null || g.awayTeamId == null) continue;
+    opponentOf.set(g.homeTeamId, g.awayTeamId);
+    opponentOf.set(g.awayTeamId, g.homeTeamId);
+  }
+
   return season.teams
     .filter((t) => !t.isPlaceholder || teamWeeks.some((r) => r.teamId === t.id))
     .map((team) => {
@@ -5839,6 +6118,19 @@ function buildTeamDetail(season, teamStats, teamWeeks, standings, draft) {
         })),
 
         lineupAdvice: recommendLineup(roster, slots),
+        lineupSim: (() => {
+          const opponentId = opponentOf.get(team.id) ?? null;
+          const sim = simulateLineup({
+            roster,
+            startingSlots: slots,
+            opponentRoster: opponentId !== null ? season.currentRosters?.[opponentId] ?? null : null,
+            history,
+            seed: `roe-lineup:${season.league.season}:${season.adviceWeek}:${team.id}`,
+          });
+          if (!sim.available) return sim;
+          const opp = season.teams.find((t) => t.id === opponentId);
+          return { ...sim, week: season.adviceWeek, opponentTeamId: opponentId, opponentName: opp?.name ?? null };
+        })(),
         coaching: coachingReport(rows, slots),
         waivers: waiverTargets(season.freeAgents, roster, slots),
 
@@ -7084,7 +7376,7 @@ await writeJson(path.join(OUT, 'schedule.json'), {
 // ---------------------------------------------------------------------------
 
 // The week being advised on: the first one not yet played.
-const ADVICE_WEEK = REGULAR_WEEKS + 1;
+const ADVICE_WEEK = PLAYED_WEEKS + 1;
 
 /**
  * Deliberately sets some lineups badly so the advisor has something to find.
@@ -8353,7 +8645,7 @@ body.beer-sheet-mode #beer-sheet { display: block; }
 
 ### `docs/assets/app.js`
 
-*2962 lines*
+*3044 lines*
 
 ```javascript
 import { createMockDraft, advanceToUser, makePick, gradeDraft, rosterNeeds } from './mock.js';
@@ -9273,6 +9565,86 @@ function renderTeams() {
  * readable by anyone in the league. For a fantasy league that is arguably the
  * point; nothing here is more private than what ESPN already shows.
  */
+const STRATEGY_LABELS = {
+  projection: 'projected',
+  mostStarted: 'most-started',
+  upside: 'upside',
+  floor: 'safe-floor',
+};
+
+/**
+ * The 100-week lineup simulation, built at build time: how often each player
+ * made the best lineup, and which lineup wins most often against this week's
+ * opponent.
+ */
+function renderLineupSim(sim) {
+  if (!sim?.available) return '';
+  const rec = sim.recommended;
+  const proj = sim.projectionLineup;
+  const pct = (p) => `${num(p, 0)}%`;
+  const names = (list) => list.map((p) => `<strong>${esc(p.name)}</strong> <small>(${esc(p.position)})</small>`).join(', ');
+
+  const verdict = rec.strategy === 'projection'
+    ? `<p><span class="pill pill--good">Stick with it</span>
+        The lineup that is best on projections is also the one that ${
+          sim.opponent ? `wins most often — <strong>${pct(rec.winPct)}</strong> of simulations` : 'scores the most on average'}.</p>`
+    : `<p><span class="pill pill--accent">Consider the ${esc(STRATEGY_LABELS[rec.strategy] ?? rec.strategy)} lineup</span>
+        Start ${names(sim.changes.start)}; sit ${names(sim.changes.sit)}.
+        It wins <strong>${pct(rec.winPct)}</strong> of simulations against
+        ${pct(proj.winPct)} for the projected lineup${
+          rec.strategy === 'upside' ? ' — as the underdog, you need the bigger ceiling.'
+          : rec.strategy === 'floor' ? ' — as the favourite, a safer floor protects the lead.' : '.'}</p>`;
+
+  const rows = sim.players.map((p) => `
+    <tr>
+      <th scope="row" class="row-team">${esc(p.name)}<small>${esc(p.position)}${p.out ? ' · not playing' : ''}</small></th>
+      <td class="num">${num(p.projected, 1)}</td>
+      <td class="num">${p.out ? '—' : `${num(Math.max(0, p.projected - p.spread), 0)}–${num(p.projected + p.spread, 0)}`}</td>
+      <td class="bar-cell">${bar(p.startPct, 100, { digits: 0, suffix: '%' })}</td>
+      <td>${p.recommended ? '<span class="pill pill--good">Start</span>' : '<span class="pill pill--neutral">Bench</span>'}</td>
+    </tr>`).join('');
+
+  const alts = (sim.alternatives ?? []).filter((a) => a.winPct !== null && a.strategy !== rec.strategy);
+
+  return `<div class="card" style="margin-bottom:1.5rem">
+    <h3>Week ${esc(sim.week)} — ${esc(sim.simulations)} simulated outcomes</h3>
+    <p class="stat__note">
+      Every player's score is drawn ${esc(sim.simulations)} times around his projection, with a spread
+      based on how much he has actually swung this season${sim.opponent ? `, and played against
+      ${esc(sim.opponentName ?? 'your opponent')}'s best projected lineup` : ''}.
+    </p>
+    ${sim.opponent ? `
+    <ul class="stats" style="margin:0.75rem 0">
+      <li class="stat"><span class="stat__label">Win chance</span>
+        <span class="stat__value">${pct(rec.winPct)}</span>
+        <span class="stat__note">vs ${esc(sim.opponentName ?? 'opponent')}</span></li>
+      <li class="stat"><span class="stat__label">You</span>
+        <span class="stat__value">${num(rec.mean, 1)}</span>
+        <span class="stat__note">likely ${num(rec.p10, 0)}–${num(rec.p90, 0)}</span></li>
+      <li class="stat"><span class="stat__label">Them</span>
+        <span class="stat__value">${num(sim.opponent.mean, 1)}</span>
+        <span class="stat__note">likely ${num(sim.opponent.p10, 0)}–${num(sim.opponent.p90, 0)}</span></li>
+    </ul>` : ''}
+    ${verdict}
+    ${alts.length ? `<p class="stat__note">Also tried: ${alts.map((a) =>
+      `${esc(STRATEGY_LABELS[a.strategy] ?? a.strategy)} lineup ${pct(a.winPct)}`).join(' · ')}.
+      A lineup has to win at least 3 more of the ${esc(sim.simulations)} to replace the projected one — fewer is noise.</p>` : ''}
+    <div class="table-scroll" style="margin-top:0.75rem">
+      <table>
+        <caption>Start rate: how often each player was in the best possible lineup</caption>
+        <thead><tr>
+          <th scope="col">Player</th>
+          <th scope="col" class="num">Proj.</th>
+          <th scope="col" class="num"><abbr title="Projection plus or minus one standard deviation">Range</abbr></th>
+          <th scope="col" class="bar-cell">Start rate</th>
+          <th scope="col">Pick</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
 function renderTeam(teamId) {
   const body = $('#team-body');
   const all = state.teamDetail?.teams ?? [];
@@ -9371,6 +9743,8 @@ function renderTeam(teamId) {
       </div>`);
     }
   }
+
+  parts.push(renderLineupSim(team.lineupSim));
 
   // --- Waivers ----------------------------------------------------------
   const waivers = team.waivers;
@@ -14238,6 +14612,109 @@ describe('news cache', () => {
 });
 ```
 
+### `tests/lineupsim.test.mjs`
+
+*97 lines*
+
+```javascript
+/**
+ * The 100-week lineup simulation. Rosters are one-slot (a lone QB slot) so the
+ * right answer can be reasoned out by hand.
+ */
+
+import { test, describe } from 'node:test';
+import assert from 'node:assert/strict';
+
+import { simulateLineup, playerSpread } from '../scripts/lib/lineupsim.mjs';
+
+const QB_ONLY = [{ slotId: 0, count: 1 }];
+const qb = (playerId, projected, extra = {}) => ({ playerId, name: `QB${playerId}`, position: 'QB', projected, slotId: 20, ...extra });
+
+describe('playerSpread', () => {
+  test('blends his own spread with the positional default', () => {
+    // WR projected 10: default spread 0.55 * 10 = 5.5.
+    // History [4, 16]: sample SD 8.485, weight n - 1 = 1; default weight 4.
+    //   (1 * 8.485 + 4 * 5.5) / 5 = 6.097
+    const sd = playerSpread({ position: 'WR', projected: 10 }, [4, 16]);
+    assert.ok(Math.abs(sd - (Math.sqrt(72) + 22) / 5) < 1e-9);
+  });
+
+  test('no history: the positional default, never below the floor', () => {
+    assert.equal(playerSpread({ position: 'QB', projected: 20 }), 7); // 0.35 * 20
+    assert.equal(playerSpread({ position: 'K', projected: 1 }), 1.5); // 0.45 floored to 1.5
+  });
+});
+
+describe('simulateLineup', () => {
+  test('same seed, same answer', () => {
+    const input = { roster: [qb(1, 20), qb(2, 18)], startingSlots: QB_ONLY, seed: 'x' };
+    assert.deepEqual(simulateLineup(input), simulateLineup(input));
+  });
+
+  test('start rates: a clear starter always, an out player never', () => {
+    // QB1 has nine straight 30s, so his spread is (0 + 4 * 10.5) / 12 = 3.5:
+    // 30 +/- 3.5 against the backup's 2 +/- 1.5 is some 7 SDs apart, so the
+    // backup never outscores him. (With no history, 30 +/- 10.5 would dip
+    // under 4 about once in 100 draws.)
+    // QB3 is OUT and QB4 is on a bye (projected 0): neither can ever start.
+    const sim = simulateLineup({
+      roster: [qb(1, 30), qb(2, 2), qb(3, 25, { injuryStatus: 'OUT' }), qb(4, 0)],
+      startingSlots: QB_ONLY,
+      history: new Map([[1, Array(9).fill(30)]]),
+    });
+    const rate = Object.fromEntries(sim.players.map((p) => [p.playerId, p.startPct]));
+    assert.deepEqual(rate, { 1: 100, 2: 0, 3: 0, 4: 0 });
+    assert.equal(sim.simulations, 100);
+    assert.deepEqual(sim.recommended.starters.map((p) => p.playerId), [1]);
+    assert.equal(sim.recommended.starters[0].slot, 'QB');
+  });
+
+  // Two quarterbacks a point apart on projection:
+  //   QB1 20, steady: history of 20s (own SD 0, weight 4) -> (0 + 4 * 7) / 8 = 3.5
+  //   QB2 19, boom or bust: 0/40 alternating (SD ~21.9, weight 5)
+  //       -> (5 * 21.9 + 4 * 6.65) / 9 ~= 15.1
+  const history = new Map([
+    [1, [20, 20, 20, 20, 20]],
+    [2, [0, 40, 0, 40, 0, 40]],
+    [9, Array(9).fill(30)],
+    [8, Array(9).fill(10)],
+  ]);
+  const roster = [qb(1, 20), qb(2, 19)];
+
+  test('an underdog takes the boom-or-bust option', () => {
+    // Opponent: a steady 30 (SD (0 + 4 * 10.5) / 12 = 3.5).
+    // QB1 at 20 +/- 3.5 almost never reaches 30; QB2 at 19 +/- 15 does about a
+    // quarter of the time. Projection says QB1; the upside lineup says QB2.
+    const sim = simulateLineup({ roster, startingSlots: QB_ONLY, history, opponentRoster: [qb(9, 30)], seed: 'u' });
+    assert.deepEqual(sim.recommended.starters.map((p) => p.playerId), [2]);
+    assert.equal(sim.recommended.strategy, 'upside');
+    assert.ok(sim.recommended.winPct >= sim.projectionLineup.winPct + 3);
+    assert.deepEqual(sim.changes.start.map((p) => p.playerId), [2]);
+    assert.deepEqual(sim.changes.sit.map((p) => p.playerId), [1]);
+  });
+
+  test('a favourite keeps the safe projection', () => {
+    // Opponent: a steady 10. QB1 at 20 +/- 3.5 essentially always wins; QB2
+    // busts to 0 often enough to lose. Nothing beats the projection.
+    const sim = simulateLineup({ roster, startingSlots: QB_ONLY, history, opponentRoster: [qb(8, 10)], seed: 'f' });
+    assert.equal(sim.recommended.strategy, 'projection');
+    assert.deepEqual(sim.recommended.starters.map((p) => p.playerId), [1]);
+    assert.deepEqual(sim.changes, { start: [], sit: [] });
+  });
+
+  test('with no opponent, the projection lineup stands and there are no win odds', () => {
+    const sim = simulateLineup({ roster, startingSlots: QB_ONLY, history });
+    assert.equal(sim.recommended.strategy, 'projection');
+    assert.equal(sim.recommended.winPct, null);
+    assert.equal(sim.opponent, null);
+  });
+
+  test('nothing to simulate', () => {
+    assert.deepEqual(simulateLineup({ roster: [], startingSlots: QB_ONLY }), { available: false });
+  });
+});
+```
+
 ## Automation
 
 Daily GitHub Actions run: fetch, build, test, commit only on change.
@@ -14406,4 +14883,4 @@ jobs:
 
 ---
 
-*45 files, 14,076 lines.*
+*47 files, 14,541 lines.*
