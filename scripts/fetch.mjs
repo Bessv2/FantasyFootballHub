@@ -212,7 +212,7 @@ async function fetchSeason(client, season) {
   // a board built with the wrong rankType is one nobody here would draft from.
   try {
     const rankType = core.settings?.rosterSettings?.lineupSlotCounts?.['7'] > 0 ? 'SUPERFLEX' : 'PPR';
-    const pool = await client.getDraftPool(season, { limit: 400, rankType });
+    const pool = await client.getDraftPool(season, { limit: 600, rankType });
     await writeJson(path.join(dir, 'draftpool.json'), { rankType, ...pool });
     log(`  draft pool: ${pool.players?.length ?? 0} players (${rankType} ranks)`);
   } catch (error) {

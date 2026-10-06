@@ -232,9 +232,15 @@ export function picksForSlot(slot, teams, rounds) {
 /**
  * @param {object} pool  docs/data/draftpool payload (players, startingSlots, teams)
  * @param {object} [draft] analyzed draft, so picks can be attached once held
- * @param {number} [limit] how many players to publish
+ * @param {number} [limit] how many graded players to publish
+ * @param {object} [options]
+ * @param {Map} [options.owners] playerId → { teamId, teamName, managerName } for
+ *   whoever rosters the player today, so the board doubles as a player lookup
+ * @param {boolean} [options.includeUngraded] also publish pool players with no
+ *   projection (or at a position nobody starts) after the graded ones, so a
+ *   search finds everyone ESPN returned
  */
-export function buildBigBoard(pool, draft = null, limit = 250) {
+export function buildBigBoard(pool, draft = null, limit = 250, { owners = null, includeUngraded = false } = {}) {
   const all = (pool?.players ?? []).filter((p) => Number.isFinite(p.projected));
   if (!all.length) {
     return { available: false, players: [], replacement: {}, scarcity: [], rankType: pool?.rankType ?? null };
@@ -280,6 +286,16 @@ export function buildBigBoard(pool, draft = null, limit = 250) {
 
   const published = rankable.slice(0, limit);
 
+  // Players the value model cannot grade, kept only so they can be found.
+  const ungraded = includeUngraded
+    ? [
+        ...withVorp.filter((p) => p.vorp === null),
+        ...(pool.players ?? [])
+          .filter((p) => !Number.isFinite(p.projected))
+          .map((p) => ({ ...p, replacement: null, vorp: null })),
+      ]
+    : [];
+
   /**
    * Grades are computed WITHIN each position, not across the board.
    *
@@ -324,9 +340,10 @@ export function buildBigBoard(pool, draft = null, limit = 250) {
     }
   }
 
-  const players = published
+  const players = [...published, ...ungraded]
     .map((p) => {
       const pick = pickByPlayer.get(p.playerId) ?? null;
+      const owner = owners?.get(p.playerId) ?? null;
       const delta = p.valueDelta;
       const rec = consensus.get(p.playerId) ?? null;
       // Positive = the market lets him fall past where he should go.
@@ -356,13 +373,16 @@ export function buildBigBoard(pool, draft = null, limit = 250) {
         replacement: p.replacement,
         vorp: p.vorp,
 
-        valueRank: p.valueRank,
-        positionRank: p.positionRank,
-        tier: p.tier,
+        valueRank: p.valueRank ?? null,
+        positionRank: p.positionRank ?? null,
+        tier: p.tier ?? null,
         streamable: p.position === 'K' || p.position === 'D/ST',
         // Both measured against others at the same position.
-        valueDelta: delta,
-        grade: p.grade,
+        valueDelta: delta ?? null,
+        grade: p.grade ?? null,
+
+        // Who has him right now; null means he is a free agent.
+        rosteredBy: owner,
 
         drafted: Boolean(pick),
         pick: pick
