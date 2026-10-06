@@ -1358,79 +1358,25 @@ function syncMyTeamNav() {
   if (link && id !== null) link.href = `#team/${id}`;
 }
 
-// --- Big board -------------------------------------------------------------
+// --- Player board ----------------------------------------------------------
 
-const boardState = { position: 'ALL', sort: 'valueRank', dir: 'asc', search: '', hideDrafted: false };
-
-/** Draft slot the visitor expects to pick from, remembered across visits. */
-const DRAFT_SLOT_KEY = 'ffh-draft-slot';
-const getDraftSlot = () => {
-  const raw = localStorage.getItem(DRAFT_SLOT_KEY);
-  return raw === null ? null : Number(raw);
-};
-
-/**
- * Who should still be on the board at each of your picks.
- *
- * A player is "gone" if his recommended pick lands before your turn. This is a
- * projection of a well-run draft, not a promise — one manager reaching changes
- * everything downstream — but it answers the question you actually have while
- * waiting: is it worth hoping he falls to me?
- */
-function targetsForSlot(board, slot) {
-  const picks = board.picksBySlot?.[slot] ?? [];
-  const draftable = board.players.filter((p) => p.draftable);
-
-  return picks.map((overall) => {
-    // Anyone recommended before your turn has already been taken. Comparing
-    // against the previous pick instead of this one was wrong: it listed the
-    // first overall pick as "should be there" at pick 7.
-    //
-    // Ordered by recommended pick, not by value rank. Sorting by value surfaces
-    // whoever has the best VORP among everyone still on the board — which put
-    // three defences at the top of a round-five pick, because their recommended
-    // slot is round fifteen and nothing had taken them yet. What you want at
-    // pick N is the players actually due to come off the board around then.
-    const available = draftable
-      .filter((p) => p.recommendedPick >= overall)
-      .sort((a, b) => a.recommendedPick - b.recommendedPick);
-    return {
-      overall,
-      round: Math.ceil(overall / board.teamCount),
-      best: available.slice(0, 3),
-      // The player the simulation says goes exactly here.
-      onTheClock: draftable.find((p) => p.recommendedPick === overall) ?? null,
-    };
-  });
-}
-
-const GRADE_ORDER = ['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'C-', 'D', 'F'];
-
-/** Colour reinforces the grade; the letter always carries it. */
-function gradePill(grade) {
-  if (!grade) return '<span class="pill pill--neutral">—</span>';
-  const i = GRADE_ORDER.indexOf(grade);
-  const cls = i <= 2 ? 'pill--good' : i <= 5 ? 'pill--accent' : i <= 7 ? 'pill--neutral' : 'pill--bad';
-  return `<span class="pill ${cls}">${esc(grade)}</span>`;
-}
+const boardState = { position: 'ALL', sort: 'valueRank', dir: 'asc', search: '', freeAgentsOnly: false };
 
 function sortBoard(players) {
   const { sort, dir } = boardState;
   const mult = dir === 'asc' ? 1 : -1;
   return [...players].sort((a, b) => {
-    let av;
-    let bv;
-    if (sort === 'grade') {
-      av = GRADE_ORDER.indexOf(a.grade);
-      bv = GRADE_ORDER.indexOf(b.grade);
-    } else if (sort === 'name') {
-      return mult * a.name.localeCompare(b.name);
-    } else {
-      av = a[sort];
-      bv = b[sort];
+    if (sort === 'name') return mult * a.name.localeCompare(b.name);
+    if (sort === 'rosteredBy') {
+      // Free agents sort last regardless of direction.
+      if (!a.rosteredBy) return b.rosteredBy ? 1 : 0;
+      if (!b.rosteredBy) return -1;
+      return mult * a.rosteredBy.teamName.localeCompare(b.rosteredBy.teamName);
     }
+    const av = a[sort];
+    const bv = b[sort];
     // Missing values sort last regardless of direction.
-    if (av === null || av === undefined) return 1;
+    if (av === null || av === undefined) return bv === null || bv === undefined ? 0 : 1;
     if (bv === null || bv === undefined) return -1;
     return mult * (av - bv);
   });
@@ -1451,150 +1397,6 @@ function renderBoard() {
 
   const parts = [];
 
-  // --- The headline insight ---------------------------------------------
-  const qb = board.positionValue.find((p) => p.position === 'QB');
-  if (qb && qb.avgValueDelta > 15) {
-    parts.push(`
-      <section class="hero" style="margin-bottom:1.25rem">
-        <p class="hero__eyebrow">The superflex edge</p>
-        <h2>Quarterbacks are worth ${esc(qb.avgValueDelta)} draft places more than the market thinks</h2>
-        <p class="hero__sub">
-          Average draft position is collected across mostly-standard leagues, where only one
-          QB starts. This league starts two, so all ${esc(board.startersNeeded.QB ?? 24)} startable
-          quarterbacks have real value — and ADP hasn't caught up. That gap is the biggest
-          single edge available to you on draft day.
-        </p>
-      </section>`);
-  }
-
-  // --- Positional value + scarcity --------------------------------------
-  parts.push(`
-    <div class="grid" style="margin-bottom:1.25rem">
-      <div class="card">
-        <h3>Where the value is</h3>
-        <p class="stat__note">
-          Average places of value by position. Positive means the market drafts them later
-          than they're worth.
-        </p>
-        <div class="table-scroll" style="margin-top:0.6rem">
-          <table>
-            <caption>Positional value bias</caption>
-            <thead><tr>
-              <th scope="col">Pos</th><th scope="col" class="num">Value gap</th>
-              <th scope="col" class="num">Starters</th><th scope="col"></th>
-            </tr></thead>
-            <tbody>
-              ${board.positionValue
-                .map(
-                  (p) => `<tr>
-                    <th scope="row">${esc(p.position)}</th>
-                    <td class="num">${deltaPill(p.avgValueDelta, 0)}</td>
-                    <td class="num">${esc(board.startersNeeded[p.position] ?? '—')}</td>
-                    <td>${p.streamable ? '<span class="pill pill--warn">Streamable</span>' : ''}</td>
-                  </tr>`
-                )
-                .join('')}
-            </tbody>
-          </table>
-        </div>
-        <p class="stat__note" style="margin-top:0.6rem">
-          <strong>Streamable</strong> positions overstate their case here. VORP counts 26 points
-          above replacement the same wherever it comes from, but kickers and defences are
-          replaceable off waivers most weeks — so that edge doesn't need a draft pick. The model
-          can't measure week-to-week volatility, so this is flagged rather than silently corrected.
-        </p>
-      </div>
-
-      <div class="card">
-        <h3>Positional scarcity</h3>
-        <p class="stat__note">
-          How far the best player at each position sits above the last one you'd start.
-          A big gap means paying up is worth it.
-        </p>
-        <div class="table-scroll" style="margin-top:0.6rem">
-          <table>
-            <caption>Elite advantage over the last startable player</caption>
-            <thead><tr>
-              <th scope="col">Pos</th><th scope="col" class="bar-cell">Elite advantage</th>
-              <th scope="col" class="num">Replacement</th>
-            </tr></thead>
-            <tbody>
-              ${board.scarcity
-                .map(
-                  (s) => `<tr>
-                    <th scope="row">${esc(s.position)}</th>
-                    <td class="bar-cell">${bar(s.eliteAdvantage ?? 0, board.scarcity[0].eliteAdvantage || 1, { digits: 0, suffix: ' pts' })}</td>
-                    <td class="num">${num(s.replacement, 0)}</td>
-                  </tr>`
-                )
-                .join('')}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>`);
-
-  // --- Your draft slot ---------------------------------------------------
-  const slot = getDraftSlot();
-  if (slot && board.picksBySlot?.[slot]) {
-    const targets = targetsForSlot(board, slot);
-    parts.push(`
-      <div class="card" style="margin-bottom:1.25rem">
-        <h3>Drafting from slot ${esc(slot)}</h3>
-        <p class="stat__note">
-          Your picks, and who the board says should still be there. A projection of a
-          well-run draft — one manager reaching changes everything after it.
-          <button type="button" class="theme-toggle" id="board-clear-slot"
-            style="margin-left:0.4rem">Change slot</button>
-        </p>
-        <div class="table-scroll" style="margin-top:0.6rem;max-height:22rem;overflow-y:auto">
-          <table>
-            <caption>Best available at each of your picks</caption>
-            <thead><tr>
-              <th scope="col" class="num">Rd</th><th scope="col" class="num">Pick</th>
-              <th scope="col">Should be there</th>
-            </tr></thead>
-            <tbody>
-              ${targets
-                .map(
-                  (t) => `<tr>
-                    <td class="num rank">${esc(t.round)}</td>
-                    <td class="num rank">${esc(t.overall)}</td>
-                    <td>${
-                      t.best.length
-                        ? t.best
-                            .map(
-                              (p) => `${esc(p.name)} <small>(${esc(p.position)}${esc(p.positionRank)})</small>`
-                            )
-                            .join(' · ')
-                        : '<span class="stat__note">board exhausted</span>'
-                    }</td>
-                  </tr>`
-                )
-                .join('')}
-            </tbody>
-          </table>
-        </div>
-      </div>`);
-  } else {
-    parts.push(`
-      <div class="card" style="margin-bottom:1.25rem">
-        <h3>Which slot are you drafting from?</h3>
-        <p class="stat__note">
-          Pick your slot and the board will show who should still be available at each of
-          your ${esc(board.rounds ?? 16)} picks. Remembered on this device.
-        </p>
-        <div class="draft-picks" style="margin-top:0.75rem">
-          ${Array.from({ length: board.teamCount }, (_, i) => i + 1)
-            .map(
-              (n) => `<button type="button" class="theme-toggle board-slot" data-slot="${n}"
-                style="width:100%">Slot ${n}</button>`
-            )
-            .join('')}
-        </div>
-      </div>`);
-  }
-
   // --- Controls ----------------------------------------------------------
   const positions = ['ALL', ...POSITIONS_ORDER];
   parts.push(`
@@ -1602,9 +1404,9 @@ function renderBoard() {
       <div>
         <label for="board-search" class="stat__label">Search</label>
         <input type="search" id="board-search" value="${esc(boardState.search)}"
-          placeholder="Player name…"
+          placeholder="Player, NFL team or manager…"
           style="font:inherit;padding:0.45rem 0.7rem;border-radius:var(--radius-sm);
-                 border:1px solid var(--border);background:var(--bg-sunken);color:var(--text);min-width:12rem">
+                 border:1px solid var(--border);background:var(--bg-sunken);color:var(--text);min-width:14rem">
       </div>
       <div role="group" aria-label="Filter by position" style="display:flex;flex-wrap:wrap;gap:0.25rem">
         ${positions
@@ -1614,16 +1416,9 @@ function renderBoard() {
           )
           .join('')}
       </div>
-      ${
-        board.draftHeld
-          ? `<button type="button" class="theme-toggle" id="board-hide-drafted"
-              aria-pressed="${boardState.hideDrafted}">
-              ${boardState.hideDrafted ? 'Showing available only' : 'Show available only'}
-            </button>`
-          : ''
-      }
-      <button type="button" class="theme-toggle" id="board-print" style="margin-left:auto">
-        🍺 Beer sheet (print / save PDF)
+      <button type="button" class="theme-toggle" id="board-free-agents"
+        aria-pressed="${boardState.freeAgentsOnly}">
+        ${boardState.freeAgentsOnly ? 'Showing free agents only' : 'Free agents only'}
       </button>
     </div>`);
 
@@ -1632,17 +1427,23 @@ function renderBoard() {
   if (boardState.position !== 'ALL') rows = rows.filter((p) => p.position === boardState.position);
   if (boardState.search) {
     const q = boardState.search.toLowerCase();
-    rows = rows.filter((p) => p.name.toLowerCase().includes(q) || p.proTeam.toLowerCase().includes(q));
+    rows = rows.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.proTeam.toLowerCase().includes(q) ||
+        (p.rosteredBy?.teamName ?? '').toLowerCase().includes(q) ||
+        (p.rosteredBy?.managerName ?? '').toLowerCase().includes(q)
+    );
   }
-  if (boardState.hideDrafted) rows = rows.filter((p) => !p.drafted);
+  if (boardState.freeAgentsOnly) rows = rows.filter((p) => !p.rosteredBy);
   rows = sortBoard(rows);
 
   const maxVorp = Math.max(...board.players.map((p) => p.vorp ?? 0), 1);
 
-  const sortable = (key, label, hint) => {
+  const sortable = (key, label, hint, cls = 'num') => {
     const active = boardState.sort === key;
     const arrow = active ? (boardState.dir === 'asc' ? ' ▲' : ' ▼') : '';
-    return `<th scope="col" class="num" aria-sort="${active ? (boardState.dir === 'asc' ? 'ascending' : 'descending') : 'none'}">
+    return `<th scope="col" class="${cls}" aria-sort="${active ? (boardState.dir === 'asc' ? 'ascending' : 'descending') : 'none'}">
       <button type="button" class="board-sort sort-btn" data-key="${esc(key)}"
         ${hint ? `title="${esc(hint)}"` : ''}>${esc(label)}${arrow}</button></th>`;
   };
@@ -1652,29 +1453,25 @@ function renderBoard() {
       <table>
         <caption>
           ${esc(rows.length)} of ${esc(board.players.length)} players ·
-          ranked by value over replacement, not by ESPN's published order
-          ${board.draftHeld ? '· draft results attached' : ''}
+          ranked by value over replacement · rosters as of the last data refresh
         </caption>
         <thead>
           <tr>
             ${sortable('valueRank', '#', 'Rank by value over replacement')}
-            <th scope="col">Player</th>
+            ${sortable('name', 'Player', null, '')}
             <th scope="col">Pos</th>
             <th scope="col" class="num">Tier</th>
-            ${sortable('recommendedPick', 'Take at', 'Where this player should go in a well-run draft')}
-            ${sortable('adp', 'ADP', 'Average draft position across ESPN leagues')}
             ${sortable('projected', 'Proj', 'ESPN season projection')}
+            ${sortable('lastSeason', 'Last yr', 'Fantasy points last season')}
             ${sortable('vorp', 'VORP', 'Points above the worst starter at this position')}
-            ${sortable('grade', 'Grade', 'Value compared to others at the same position')}
-            <th scope="col">${board.draftHeld ? 'Drafted by' : 'Status'}</th>
+            ${sortable('rosteredBy', 'Rostered by', null, '')}
           </tr>
         </thead>
         <tbody>
           ${rows
-            .slice(0, 250)
             .map(
               (p) => `<tr>
-                <td class="num rank">${esc(p.valueRank)}</td>
+                <td class="num rank">${p.valueRank === null ? '—' : esc(p.valueRank)}</td>
                 <th scope="row" class="row-team">
                   ${playerCell(
                     p,
@@ -1685,23 +1482,15 @@ function renderBoard() {
                     }`
                   )}
                 </th>
-                <td>${esc(p.position)}${esc(p.positionRank)}</td>
-                <td class="num">${esc(p.tier)}</td>
-                <td class="num">${
-                  p.recommendedPick === null
-                    ? '<span class="pill pill--neutral">Undraftable</span>'
-                    : `${esc(p.recommendedPick)}<small style="color:var(--text-dim)"> R${esc(p.recommendedRound)}</small>`
-                }</td>
-                <td class="num">${p.adp === null ? '—' : num(p.adp, 1)}</td>
-                <td class="num">${num(p.projected, 0)}</td>
-                <td class="bar-cell">${bar(p.vorp ?? 0, maxVorp, { digits: 0 })}</td>
-                <td>${gradePill(p.grade)}${p.streamable ? ' <span class="pill pill--warn">Str</span>' : ''}</td>
+                <td>${esc(p.position)}${p.positionRank === null ? '' : esc(p.positionRank)}</td>
+                <td class="num">${p.tier === null ? '—' : esc(p.tier)}</td>
+                <td class="num">${p.projected === null ? '—' : num(p.projected, 0)}</td>
+                <td class="num">${p.lastSeason === null ? '—' : num(p.lastSeason, 0)}</td>
+                <td class="bar-cell">${p.vorp === null ? '—' : bar(p.vorp, maxVorp, { digits: 0 })}</td>
                 <td>${
-                  p.drafted
-                    ? `<small>${esc(p.pick.teamName)}<br>pick ${esc(p.pick.overall)} (R${esc(p.pick.round)})</small>`
-                    : board.draftHeld
-                      ? '<span class="pill pill--good">Available</span>'
-                      : '<span class="pill pill--neutral">Undrafted</span>'
+                  p.rosteredBy
+                    ? `<a href="#team/${esc(p.rosteredBy.teamId)}">${esc(p.rosteredBy.teamName)}</a>`
+                    : '<span class="pill pill--good">Free agent</span>'
                 }</td>
               </tr>`
             )
@@ -1730,27 +1519,15 @@ function renderBoard() {
         boardState.dir = boardState.dir === 'asc' ? 'desc' : 'asc';
       } else {
         boardState.sort = key;
-        // Rank-like columns read best ascending (pick 1 first); magnitudes and
-        // deltas descending (biggest first).
-        const ascending = ['valueRank', 'adp', 'grade', 'recommendedPick'];
+        // Rank and text columns read best ascending; magnitudes descending.
+        const ascending = ['valueRank', 'name', 'rosteredBy'];
         boardState.dir = ascending.includes(key) ? 'asc' : 'desc';
       }
       renderBoard();
     });
   }
-  $('#board-hide-drafted')?.addEventListener('click', () => {
-    boardState.hideDrafted = !boardState.hideDrafted;
-    renderBoard();
-  });
-  $('#board-print')?.addEventListener('click', () => printBeerSheet(board));
-  for (const btn of body.querySelectorAll('.board-slot')) {
-    btn.addEventListener('click', () => {
-      localStorage.setItem(DRAFT_SLOT_KEY, btn.dataset.slot);
-      renderBoard();
-    });
-  }
-  $('#board-clear-slot')?.addEventListener('click', () => {
-    localStorage.removeItem(DRAFT_SLOT_KEY);
+  $('#board-free-agents')?.addEventListener('click', () => {
+    boardState.freeAgentsOnly = !boardState.freeAgentsOnly;
     renderBoard();
   });
 
@@ -1766,109 +1543,6 @@ function renderBoard() {
     });
   }
 }
-
-// --- Beer sheet (printable draft cheat sheet) -------------------------------
-
-const POSITION_TITLES = {
-  QB: 'Quarterbacks (superflex-eligible)',
-  RB: 'Running backs',
-  WR: 'Wide receivers',
-  TE: 'Tight ends',
-  'D/ST': 'Defense / special teams',
-  K: 'Kickers',
-};
-
-/** One row. `isNewTier` gets a heavy top rule — the cliff a beer sheet exists to mark. */
-function beerSheetRow(p, isNewTier) {
-  const note =
-    p.injuryStatus && !['ACTIVE', 'NORMAL'].includes(p.injuryStatus) ? ` · ${p.injuryStatus}` : '';
-  const takeAt = p.recommendedPick === null ? '—' : `${p.recommendedPick} (R${p.recommendedRound})`;
-  const status = p.drafted
-    ? `<span class="beer-sheet__drafted">${esc(p.pick.teamName)} · pk ${esc(p.pick.overall)}</span>`
-    : '<span class="beer-sheet__box" aria-hidden="true"></span>';
-  const classes = [isNewTier ? 'tier-start' : '', p.drafted ? 'is-drafted' : ''].filter(Boolean).join(' ');
-
-  return `<tr${classes ? ` class="${classes}"` : ''}>
-    <td class="num">${esc(p.valueRank)}</td>
-    <td>${esc(p.name)}<span class="beer-sheet__team"> · ${esc(p.proTeam)}${esc(note)}</span></td>
-    <td>${esc(p.position)}${esc(p.positionRank)}</td>
-    <td class="num">${esc(p.tier)}</td>
-    <td class="num">${p.adp === null ? '—' : num(p.adp, 1)}</td>
-    <td class="num">${esc(takeAt)}</td>
-    <td>${esc(p.grade ?? '—')}</td>
-    <td>${status}</td>
-  </tr>`;
-}
-
-/** A titled table. Tiers reset per position, so track the last-seen tier per group key. */
-function beerSheetSection(title, players, { byPosition = false } = {}) {
-  const lastTier = new Map();
-  const rows = players
-    .map((p) => {
-      const key = byPosition ? p.position : '__overall__';
-      const isNewTier = lastTier.get(key) !== p.tier;
-      lastTier.set(key, p.tier);
-      return beerSheetRow(p, isNewTier);
-    })
-    .join('');
-
-  return `
-    <section class="beer-sheet__page">
-      <h2>${esc(title)}</h2>
-      <table>
-        <thead>
-          <tr>
-            <th class="num">#</th><th>Player</th><th>Pos</th><th class="num">Tier</th>
-            <th class="num">ADP</th><th class="num">Take at</th><th>Grade</th><th>Drafted</th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </section>`;
-}
-
-function buildBeerSheetHtml(board, hub) {
-  const overall = [...board.players].sort((a, b) => a.valueRank - b.valueRank);
-  const generated = hub?.generatedAt ? new Date(hub.generatedAt).toLocaleString() : new Date().toLocaleString();
-  const leagueName = hub?.league?.displayName ?? hub?.league?.name ?? 'Fantasy Football';
-
-  const sections = [beerSheetSection(`Overall — top ${overall.length}`, overall)];
-  for (const pos of POSITIONS_ORDER) {
-    const players = board.players
-      .filter((p) => p.position === pos)
-      .sort((a, b) => a.positionRank - b.positionRank);
-    if (players.length) sections.push(beerSheetSection(POSITION_TITLES[pos] ?? pos, players, { byPosition: true }));
-  }
-
-  return `
-    <header class="beer-sheet__head">
-      <h1>${esc(leagueName)} — Superflex PPR beer sheet</h1>
-      <p>
-        ${esc(board.teamCount ?? '')} teams · PPR · Superflex (OP) · Generated ${esc(generated)}
-        ${board.draftHeld ? ' · draft in progress — refresh and reprint for the latest picks' : ''}
-      </p>
-      <p class="beer-sheet__legend">
-        Ranked by value over replacement, not raw projections — see the site for why. A heavy top
-        rule marks a tier break: a bigger drop there means less reason to reach. "Take at" is where
-        a well-run draft would take this player. Check a box as a player comes off the board;
-        anyone already drafted (as of the last data refresh) shows who took them instead.
-      </p>
-    </header>
-    ${sections.join('')}`;
-}
-
-function printBeerSheet(board) {
-  if (!board?.available) return;
-  const sheet = $('#beer-sheet');
-  if (!sheet) return;
-  sheet.innerHTML = buildBeerSheetHtml(board, state.hub);
-  document.body.classList.add('beer-sheet-mode');
-  window.print();
-}
-
-window.addEventListener('afterprint', () => {
-  document.body.classList.remove('beer-sheet-mode');
-});
 
 // --- Mock draft ------------------------------------------------------------
 

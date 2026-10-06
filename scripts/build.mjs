@@ -545,9 +545,39 @@ async function main() {
       };
       await writeJson(path.join(DERIVED, `draftpool-${b.year}.json`), poolPayload);
 
-      // The big board: same players, graded against replacement level and
-      // annotated with who drafted them once the draft has happened.
-      const board = buildBigBoard(poolPayload, b.draft, 250);
+      // The big board: every player in the pool, graded against replacement
+      // level and annotated with whoever rosters him today, so it works as a
+      // season-long player lookup rather than only a draft tool.
+      const teamById = new Map(b.season.teams.map((t) => [t.id, t]));
+      const owners = new Map();
+      // Rostered players ESPN no longer ranks (a long-term injury, say) are
+      // not in the pool at all, but someone searching a roster expects them.
+      const inPool = new Set(poolPayload.players.map((p) => p.playerId));
+      const rosteredOutsidePool = [];
+      for (const [teamId, roster] of Object.entries(b.season.currentRosters ?? {})) {
+        const team = teamById.get(Number(teamId));
+        for (const entry of roster) {
+          owners.set(entry.playerId, {
+            teamId: Number(teamId),
+            teamName: team?.name ?? `Team ${teamId}`,
+            managerName: team?.managerName ?? null,
+          });
+          if (!inPool.has(entry.playerId)) {
+            rosteredOutsidePool.push({
+              playerId: entry.playerId, name: entry.name, position: entry.position,
+              proTeam: entry.proTeam, injuryStatus: entry.injuryStatus,
+              rank: null, pprRank: null, adp: null, auctionValue: null,
+              projected: null, lastSeason: null,
+            });
+          }
+        }
+      }
+      const board = buildBigBoard(
+        { ...poolPayload, players: [...poolPayload.players, ...rosteredOutsidePool] },
+        b.draft,
+        Infinity,
+        { owners, includeUngraded: true }
+      );
       await writeJson(path.join(DERIVED, `bigboard-${b.year}.json`), {
         year: b.year,
         draftHeld: b.draft.held,

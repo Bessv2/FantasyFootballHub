@@ -797,6 +797,24 @@ describe('big board', () => {
     assert.equal(board.players.filter((p) => p.drafted).length, 1);
   });
 
+  test('current owners are attached and unprojected players are still listed', () => {
+    const pool = makePool(SUPERFLEX_SLOTS);
+    const target = pool.players[0];
+    const unprojected = { playerId: 999999, name: 'No Projection', position: 'WR', proTeam: 'FA', projected: null };
+    pool.players = [...pool.players, unprojected];
+    const owners = new Map([[target.playerId, { teamId: 4, teamName: 'Some Team', managerName: 'Sam' }]]);
+
+    const board = buildBigBoard(pool, null, Infinity, { owners, includeUngraded: true });
+    assert.equal(board.players.find((p) => p.playerId === target.playerId).rosteredBy.teamName, 'Some Team');
+    assert.equal(board.players.filter((p) => p.rosteredBy).length, 1, 'everyone else is a free agent');
+
+    const listed = board.players.find((p) => p.playerId === 999999);
+    assert.ok(listed, 'searchable even without a projection');
+    assert.equal(listed.valueRank, null);
+    assert.equal(listed.vorp, null);
+    assert.equal(board.players.at(-1).playerId, 999999, 'ungraded players come after graded ones');
+  });
+
   test('an empty pool returns unavailable rather than throwing', () => {
     const board = buildBigBoard({ players: [], startingSlots: SUPERFLEX_SLOTS, teams: 12 }, null, 250);
     assert.equal(board.available, false);
