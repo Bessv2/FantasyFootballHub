@@ -17,6 +17,7 @@ import {
   PLAYER_POS,
   PRO_TEAM,
   STAT_SOURCE,
+  TOUCHDOWN_STAT_IDS,
   resolvePosition,
 } from './constants.mjs';
 
@@ -104,6 +105,23 @@ function projectedForWeek(entry, week) {
   return null;
 }
 
+/**
+ * Touchdowns a player scored in a given week (see TOUCHDOWN_STAT_IDS), or null
+ * when ESPN did not send the stat line at all. Null is not zero: a challenge
+ * that scores touchdowns must be able to tell "scored none" from "no data".
+ */
+function touchdownsForWeek(entry, week) {
+  const stats = entry?.playerPoolEntry?.player?.stats ?? [];
+  for (const stat of stats) {
+    if (stat.scoringPeriodId === week && stat.statSourceId === STAT_SOURCE.ACTUAL) {
+      const line = stat.stats;
+      if (!line || typeof line !== 'object') return null;
+      return TOUCHDOWN_STAT_IDS.reduce((total, id) => total + (Number(line[id]) || 0), 0);
+    }
+  }
+  return null;
+}
+
 function normalizeRosterEntries(entries, week, playerIndex) {
   return (entries ?? []).map((entry) => {
     const raw = entry?.playerPoolEntry?.player;
@@ -121,6 +139,7 @@ function normalizeRosterEntries(entries, week, playerIndex) {
       started: !NON_SCORING_SLOTS.has(slotId),
       points: Number((pointsForWeek(entry, week) ?? 0).toFixed(2)),
       projected: projectedForWeek(entry, week),
+      touchdowns: touchdownsForWeek(entry, week),
       injuryStatus: raw?.injuryStatus ?? known.injuryStatus,
     };
   });

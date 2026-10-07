@@ -165,7 +165,7 @@ describe('challenge schedule', () => {
   test('fully overriding every week reproduces exactly what was pinned', () => {
     const overrides = {
       1: 'highScore', 2: 'receiverRoom', 3: 'bestDefense', 4: 'balanced',
-      5: 'supportingCast', 6: 'narrowestWin', 7: 'everybodyEats', 8: 'loneWolf',
+      5: 'supportingCast', 6: 'narrowestWin', 7: 'everybodyEats', 8: 'paydirt',
       9: 'closestTo100', 10: 'bestKicker', 11: 'soClose', 12: 'uglyWin', 13: 'benchWarmer',
     };
     const schedule = buildChallengeSchedule({ ...LEAGUE, overrides });
@@ -259,20 +259,38 @@ describe('challenge scoring', () => {
     assert.equal(out.winner.amount, 7.5);
   });
 
-  test('Lone Wolf scores the worst starter against the rest of that lineup, kickers and defences included', () => {
-    const out = resolve('loneWolf', [
-      // Team 1: a D/ST bust (0) against a 20.0 average of the others -> drop 20.
-      row(1, 1, 100, { starters: [s('A', 'QB', 20), s('B', 'WR', 20), s('C', 'RB', 20), s('Defence', 'D/ST', 0)] }),
-      // Team 2 has a lower worst starter (-1), but its others average only 6 -> drop 7.
-      row(2, 1, 100, { starters: [s('D', 'QB', 6), s('E', 'WR', 6), s('F', 'RB', 6), s('G', 'K', -1)] }),
+  test('Paydirt counts touchdowns scored by starters, kickers and defences included', () => {
+    const out = resolve('paydirt', [
+      row(1, 1, 100, { starters: [s('A', 'RB', 10, { touchdowns: 2 }), s('B', 'WR', 10, { touchdowns: 1 }), s('Defence', 'D/ST', 5, { touchdowns: 1 })] }),
+      row(2, 1, 100, { starters: [s('C', 'RB', 10, { touchdowns: 3 }), s('D', 'WR', 10, { touchdowns: 0 })] }),
     ]);
     assert.equal(out.winner.teamId, 1);
-    assert.equal(out.winner.value, 20);
-    assert.equal(out.winner.detail, 'Defence (D/ST) — 0 vs a 20 lineup average');
+    assert.equal(out.winner.value, 4);
+    assert.match(out.winner.detail, /^4 touchdowns — A 2, B 1, Defence 1$/);
   });
 
-  test('Lone Wolf needs a real lineup to compare against', () => {
-    const out = resolve('loneWolf', [row(1, 1, 100, { starters: [s('A', 'QB', 20), s('B', 'WR', 0)] })]);
+  test('Paydirt breaks a tie with the lower team score instead of splitting', () => {
+    const out = resolve('paydirt', [
+      row(1, 1, 120, { starters: [s('A', 'RB', 10, { touchdowns: 3 })] }),
+      row(2, 1, 95.5, { starters: [s('B', 'RB', 10, { touchdowns: 3 })] }),
+      row(3, 1, 140, { starters: [s('C', 'RB', 10, { touchdowns: 1 })] }),
+    ]);
+    assert.equal(out.winner.teamId, 2);
+    assert.equal(out.tiedWith.length, 0);
+    assert.equal(out.winner.amount, 15);
+  });
+
+  test('Paydirt still splits when touchdowns and score are both identical', () => {
+    const out = resolve('paydirt', [
+      row(1, 1, 100, { starters: [s('A', 'RB', 10, { touchdowns: 2 })] }),
+      row(2, 1, 100, { starters: [s('B', 'RB', 10, { touchdowns: 2 })] }),
+    ]);
+    assert.equal(out.tiedWith.length, 1);
+    assert.equal(out.winner.amount, 7.5);
+  });
+
+  test('Paydirt has no winner when ESPN sent no touchdown data, rather than inventing zeros', () => {
+    const out = resolve('paydirt', [row(1, 1, 100, { starters: [s('A', 'RB', 10, { touchdowns: null })] })]);
     assert.equal(out.winner, null);
     assert.equal(out.noWinner, true);
   });

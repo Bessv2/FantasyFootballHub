@@ -219,3 +219,14 @@ export const STAT_KEYS = {
   123: 'defensivePointsAllowed',
   127: 'defensiveYardsAllowed',
 };
+
+/**
+ * Stat ids that make up "touchdowns scored" by a player: rushing, receiving,
+ * kick/punt/interception/fumble returns, and blocked-kick returns (the last
+ * four are how a defence or special teams unit scores).
+ *
+ * Passing touchdowns (4) are deliberately NOT here. A touchdown pass is scored
+ * by the receiver, and counting it for the quarterback too would count every
+ * passing score twice.
+ */
+export const TOUCHDOWN_STAT_IDS = [25, 43, 88, 101, 102, 103, 104];

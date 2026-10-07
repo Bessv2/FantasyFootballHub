@@ -95,20 +95,6 @@ const skillStarters = (row) => row.starters.filter((s) => s.position !== 'K' && 
 /** A started player counts toward Everybody Eats at or above this many points. */
 const EATS_LINE = 15;
 
-/**
- * The week's dud: the lowest-scoring starter, and how far he fell below the
- * average of the rest of that same lineup. Measured only against that one
- * week's box score — no projections, season averages or other weeks — so a
- * trade or injury elsewhere in the season cannot change who wins.
- */
-function lineupDud(row) {
-  if (row.starters.length < 3) return null;
-  const player = row.starters.reduce((a, b) => (a.points <= b.points ? a : b));
-  const others = row.starters.filter((p) => p !== player);
-  const othersAvg = round2(sum(others, (p) => p.points) / others.length);
-  return { player, othersAvg, drop: round2(othersAvg - player.points) };
-}
-
 const positionPoints = (row, position) => round2(sum(startersAt(row, position), (s) => s.points));
 
 /**
@@ -122,7 +108,16 @@ const positionPoints = (row, position) => round2(sum(startersAt(row, position), 
  * "18.4" means nothing next to a name and "Josh Allen, 18.4 more than his
  * projection" means everything.
  */
-const challenge = (id, label, rule, score, detail) => ({ id, label, rule, score, detail });
+const challenge = (id, label, rule, score, detail, tiebreak = null) => ({
+  id,
+  label,
+  rule,
+  score,
+  detail,
+  // Optional: decides between teams that tie on `score`, so the pot is not
+  // split. Higher wins, like `score`. Exact ties on both still split.
+  tiebreak,
+});
 
 export const CHALLENGE_DECK = [
   challenge(
@@ -363,16 +358,19 @@ export const CHALLENGE_DECK = [
   ),
 
   challenge(
-    'loneWolf',
-    'Lone Wolf',
-    'Biggest drop: how far your worst starter fell below the average of your other starters. Kickers and defences count.',
-    (row) => lineupDud(row)?.drop ?? null,
+    'paydirt',
+    'Paydirt',
+    'Most touchdowns scored by your starters (rushing, receiving and return TDs). Ties go to the lower team score.',
     (row) => {
-      const dud = lineupDud(row);
-      return dud
-        ? `${dud.player.name} (${dud.player.position}) — ${dud.player.points} vs a ${dud.othersAvg} lineup average`
-        : null;
-    }
+      const counted = row.starters.filter((p) => p.touchdowns !== null && p.touchdowns !== undefined);
+      return counted.length ? sum(counted, (p) => p.touchdowns) : null;
+    },
+    (row) => {
+      const total = sum(row.starters, (p) => p.touchdowns ?? 0);
+      const scorers = row.starters.filter((p) => (p.touchdowns ?? 0) > 0).map((p) => `${p.name} ${p.touchdowns}`);
+      return `${total} touchdown${total === 1 ? '' : 's'}${scorers.length ? ` — ${scorers.join(', ')}` : ''}`;
+    },
+    (row) => -row.score
   ),
 
   challenge(
@@ -524,11 +522,19 @@ export function computeChallenges({
       return { ...base, noWinner: true };
     }
 
-    const best = scored.reduce((a, b) => (b.value > a.value ? b : a));
+    // Break ties on the card's own tiebreak first; only teams still level after
+    // that share the pot.
+    const tbOf = (entry) => (card.tiebreak ? (card.tiebreak(entry.row, ctx) ?? 0) : 0);
+    const ranked = scored.map((entry) => ({ ...entry, tb: tbOf(entry) }));
+    const best = ranked.reduce((a, b) =>
+      b.value > a.value + 0.001 || (Math.abs(b.value - a.value) < 0.001 && b.tb > a.tb + 0.001) ? b : a
+    );
 
     // Two teams can genuinely tie — same score, same margin. Splitting the pot
     // is the only answer that does not invent a tiebreak nobody agreed to.
-    const tied = scored.filter((entry) => Math.abs(entry.value - best.value) < 0.001);
+    const tied = ranked.filter(
+      (entry) => Math.abs(entry.value - best.value) < 0.001 && Math.abs(entry.tb - best.tb) < 0.001
+    );
     const share = round2(amount / tied.length);
 
     return {

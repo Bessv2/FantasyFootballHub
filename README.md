@@ -209,7 +209,7 @@ decisions a manager actually makes:
 | **No Weak Links** | Smallest gap between your best and worst starter (kickers and defences excluded) |
 | **Second Fiddle** | Highest-scoring *second*-best starter — your stud doesn't count |
 | **Everybody Eats** | Most started players scoring 15+ points |
-| **Lone Wolf** | Biggest drop from your worst starter to the rest of your lineup that week |
+| **Paydirt** | Most touchdowns scored by your starters (rushing, receiving, returns); ties go to the lower team score |
 | **So Close** | Lost by the smallest margin |
 
 Every challenge scores from that one week's final results only. Nothing looks at
