@@ -165,7 +165,7 @@ describe('challenge schedule', () => {
   test('fully overriding every week reproduces exactly what was pinned', () => {
     const overrides = {
       1: 'highScore', 2: 'receiverRoom', 3: 'bestDefense', 4: 'balanced',
-      5: 'supportingCast', 6: 'narrowestWin', 7: 'everybodyEats', 8: 'tourOfTheLeague',
+      5: 'supportingCast', 6: 'narrowestWin', 7: 'everybodyEats', 8: 'loneWolf',
       9: 'closestTo100', 10: 'bestKicker', 11: 'soClose', 12: 'uglyWin', 13: 'benchWarmer',
     };
     const schedule = buildChallengeSchedule({ ...LEAGUE, overrides });
@@ -259,14 +259,22 @@ describe('challenge scoring', () => {
     assert.equal(out.winner.amount, 7.5);
   });
 
-  test('Tour Of The League counts distinct NFL teams, defences included', () => {
-    const out = resolve('tourOfTheLeague', [
-      row(1, 1, 100, { starters: [s('A', 'QB', 1, { proTeam: 'KC' }), s('B', 'WR', 1, { proTeam: 'KC' }), s('C', 'D/ST', 1, { proTeam: 'KC' })] }),
-      row(2, 1, 100, { starters: [s('D', 'QB', 1, { proTeam: 'KC' }), s('E', 'WR', 1, { proTeam: 'BAL' }), s('F', 'K', 1, { proTeam: 'DAL' }), s('G', 'D/ST', 1, { proTeam: 'PIT' })] }),
+  test('Lone Wolf scores the worst starter against the rest of that lineup, kickers and defences included', () => {
+    const out = resolve('loneWolf', [
+      // Team 1: a D/ST bust (0) against a 20.0 average of the others -> drop 20.
+      row(1, 1, 100, { starters: [s('A', 'QB', 20), s('B', 'WR', 20), s('C', 'RB', 20), s('Defence', 'D/ST', 0)] }),
+      // Team 2 has a lower worst starter (-1), but its others average only 6 -> drop 7.
+      row(2, 1, 100, { starters: [s('D', 'QB', 6), s('E', 'WR', 6), s('F', 'RB', 6), s('G', 'K', -1)] }),
     ]);
-    assert.equal(out.winner.teamId, 2);
-    assert.equal(out.winner.value, 4);
-    assert.equal(out.winner.detail, '4 different NFL teams');
+    assert.equal(out.winner.teamId, 1);
+    assert.equal(out.winner.value, 20);
+    assert.equal(out.winner.detail, 'Defence (D/ST) — 0 vs a 20 lineup average');
+  });
+
+  test('Lone Wolf needs a real lineup to compare against', () => {
+    const out = resolve('loneWolf', [row(1, 1, 100, { starters: [s('A', 'QB', 20), s('B', 'WR', 0)] })]);
+    assert.equal(out.winner, null);
+    assert.equal(out.noWinner, true);
   });
 
   test('So Close goes to the narrowest loss and ignores winners', () => {

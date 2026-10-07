@@ -95,8 +95,19 @@ const skillStarters = (row) => row.starters.filter((s) => s.position !== 'K' && 
 /** A started player counts toward Everybody Eats at or above this many points. */
 const EATS_LINE = 15;
 
-/** Distinct NFL teams across a team's starters, defences included. */
-const nflTeamsStarted = (row) => new Set(row.starters.map((p) => p.proTeam).filter(Boolean));
+/**
+ * The week's dud: the lowest-scoring starter, and how far he fell below the
+ * average of the rest of that same lineup. Measured only against that one
+ * week's box score — no projections, season averages or other weeks — so a
+ * trade or injury elsewhere in the season cannot change who wins.
+ */
+function lineupDud(row) {
+  if (row.starters.length < 3) return null;
+  const player = row.starters.reduce((a, b) => (a.points <= b.points ? a : b));
+  const others = row.starters.filter((p) => p !== player);
+  const othersAvg = round2(sum(others, (p) => p.points) / others.length);
+  return { player, othersAvg, drop: round2(othersAvg - player.points) };
+}
 
 const positionPoints = (row, position) => round2(sum(startersAt(row, position), (s) => s.points));
 
@@ -352,11 +363,16 @@ export const CHALLENGE_DECK = [
   ),
 
   challenge(
-    'tourOfTheLeague',
-    'Tour Of The League',
-    'Most different NFL teams in your starting lineup. Kickers and defences count.',
-    (row) => nflTeamsStarted(row).size,
-    (row) => `${nflTeamsStarted(row).size} different NFL teams`
+    'loneWolf',
+    'Lone Wolf',
+    'Biggest drop: how far your worst starter fell below the average of your other starters. Kickers and defences count.',
+    (row) => lineupDud(row)?.drop ?? null,
+    (row) => {
+      const dud = lineupDud(row);
+      return dud
+        ? `${dud.player.name} (${dud.player.position}) — ${dud.player.points} vs a ${dud.othersAvg} lineup average`
+        : null;
+    }
   ),
 
   challenge(
