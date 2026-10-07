@@ -203,6 +203,42 @@ describe('challenge scoring', () => {
     assert.equal(out.winner.amount, 15);
   });
 
+  test('No Weak Links ignores kickers and defences (Week 4 regression)', () => {
+    const lineup = (high, low, k, dst) => [
+      s('QB', 'QB', high),
+      s('WR', 'WR', low),
+      s('Kicker', 'K', k),
+      s('Defence', 'D/ST', dst),
+    ];
+    // Team 1 looks tighter only if its 6-point kicker is allowed to be the
+    // "worst starter" (17 gap). Without K/DST its real gap is 16, which is
+    // still bigger than team 2's 15 — so team 2 must win.
+    const out = resolve('balanced', [
+      { ...row(1, 1, 100, { starters: lineup(23, 7, 6, 8) }) },
+      { ...row(2, 1, 100, { starters: lineup(22, 7, 0, 12) }) },
+    ]);
+    assert.equal(out.winner.teamId, 2);
+    assert.equal(out.winner.value, -15);
+    assert.equal(out.winner.detail, '22 high, 7 low');
+  });
+
+  test('No Weak Links still counts the superflex slot', () => {
+    const out = resolve('balanced', [
+      row(1, 1, 100, { starters: [s('A', 'QB', 14, { slotId: 7 }), s('B', 'WR', 10)] }),
+      row(2, 1, 100, { starters: [s('C', 'QB', 30), s('D', 'WR', 2)] }),
+    ]);
+    assert.equal(out.winner.teamId, 1);
+  });
+
+  test('Second Fiddle ignores kickers and defences', () => {
+    const out = resolve('supportingCast', [
+      row(1, 1, 100, { starters: [s('A', 'QB', 30), s('B', 'WR', 10), s('K', 'K', 19)] }),
+      row(2, 1, 100, { starters: [s('C', 'QB', 30), s('D', 'WR', 12), s('E', 'D/ST', 2)] }),
+    ]);
+    assert.equal(out.winner.teamId, 2);
+    assert.equal(out.winner.value, 12);
+  });
+
   test('Price Is Right busts anyone over 100', () => {
     // Team 2 scores highest but goes over, so 99.5 beats it.
     const out = resolve('closestTo100', [row(1, 1, 99.5), row(2, 1, 140), row(3, 1, 80)]);

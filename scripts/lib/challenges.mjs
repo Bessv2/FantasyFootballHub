@@ -84,6 +84,14 @@ const bestStarterAt = (row, position) => {
   return list.length ? list.reduce((a, b) => (a.points >= b.points ? a : b)) : null;
 };
 
+/**
+ * Starters at the "position player" slots only: QB/RB/WR/TE plus the
+ * OP/superflex and FLEX slots. Kickers and defences are left out, because they
+ * score on a different scale and would otherwise decide any challenge that
+ * looks at a team's best or worst starter.
+ */
+const skillStarters = (row) => row.starters.filter((s) => s.position !== 'K' && s.position !== 'D/ST');
+
 const positionPoints = (row, position) => round2(sum(startersAt(row, position), (s) => s.points));
 
 /**
@@ -256,27 +264,31 @@ export const CHALLENGE_DECK = [
   challenge(
     'balanced',
     'No Weak Links',
-    'Smallest gap between your best and worst starter. Depth, not a hero.',
-    (row) =>
-      row.topStarter && row.worstStarter
-        ? -round2(row.topStarter.points - row.worstStarter.points)
-        : null,
-    (row) =>
-      row.topStarter && row.worstStarter
-        ? `${row.topStarter.points} high, ${row.worstStarter.points} low`
-        : null
+    'Smallest gap between your best and worst starter. Depth, not a hero. Kickers and defences do not count.',
+    (row) => {
+      const pool = skillStarters(row);
+      if (pool.length < 2) return null;
+      const points = pool.map((s) => s.points);
+      return -round2(Math.max(...points) - Math.min(...points));
+    },
+    (row) => {
+      const pool = skillStarters(row);
+      if (pool.length < 2) return null;
+      const points = pool.map((s) => s.points);
+      return `${Math.max(...points)} high, ${Math.min(...points)} low`;
+    }
   ),
 
   challenge(
     'supportingCast',
     'Second Fiddle',
-    'Highest-scoring *second*-best starter. Your stud does not count.',
+    'Highest-scoring *second*-best starter. Your stud does not count. Kickers and defences do not count.',
     (row) => {
-      const ranked = [...row.starters].sort((a, b) => b.points - a.points);
+      const ranked = [...skillStarters(row)].sort((a, b) => b.points - a.points);
       return ranked.length > 1 ? ranked[1].points : null;
     },
     (row) => {
-      const ranked = [...row.starters].sort((a, b) => b.points - a.points);
+      const ranked = [...skillStarters(row)].sort((a, b) => b.points - a.points);
       return ranked.length > 1 ? `${ranked[1].name} — ${ranked[1].points}` : null;
     }
   ),
