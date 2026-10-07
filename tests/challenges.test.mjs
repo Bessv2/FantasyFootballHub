@@ -165,8 +165,8 @@ describe('challenge schedule', () => {
   test('fully overriding every week reproduces exactly what was pinned', () => {
     const overrides = {
       1: 'highScore', 2: 'receiverRoom', 3: 'bestDefense', 4: 'balanced',
-      5: 'supportingCast', 6: 'narrowestWin', 7: 'underdog', 8: 'overProjection',
-      9: 'closestTo100', 10: 'bestKicker', 11: 'allPlayWeek', 12: 'uglyWin', 13: 'benchWarmer',
+      5: 'supportingCast', 6: 'narrowestWin', 7: 'everybodyEats', 8: 'tourOfTheLeague',
+      9: 'closestTo100', 10: 'bestKicker', 11: 'soClose', 12: 'uglyWin', 13: 'benchWarmer',
     };
     const schedule = buildChallengeSchedule({ ...LEAGUE, overrides });
     assert.deepEqual(
@@ -230,13 +230,53 @@ describe('challenge scoring', () => {
     assert.equal(out.winner.teamId, 1);
   });
 
-  test('Second Fiddle ignores kickers and defences', () => {
+  test('Second Fiddle counts kickers and defences', () => {
     const out = resolve('supportingCast', [
       row(1, 1, 100, { starters: [s('A', 'QB', 30), s('B', 'WR', 10), s('K', 'K', 19)] }),
       row(2, 1, 100, { starters: [s('C', 'QB', 30), s('D', 'WR', 12), s('E', 'D/ST', 2)] }),
     ]);
+    assert.equal(out.winner.teamId, 1);
+    assert.equal(out.winner.value, 19);
+  });
+
+  test('Everybody Eats counts every started player at 15+, kickers and defences included', () => {
+    const out = resolve('everybodyEats', [
+      row(1, 1, 100, { starters: [s('A', 'QB', 15), s('B', 'WR', 14.9), s('C', 'K', 15), s('D', 'D/ST', 20)] }),
+      row(2, 1, 100, { starters: [s('E', 'QB', 40), s('F', 'WR', 3), s('G', 'RB', 2), s('H', 'K', 1)] }),
+    ]);
+    assert.equal(out.winner.teamId, 1);
+    assert.equal(out.winner.value, 3);
+    assert.equal(out.winner.detail, '3 starters with 15+ points');
+  });
+
+  test('Everybody Eats splits the pot on a tie', () => {
+    const out = resolve('everybodyEats', [
+      row(1, 1, 100, { starters: [s('A', 'QB', 16), s('B', 'WR', 2)] }),
+      row(2, 1, 100, { starters: [s('C', 'QB', 18), s('D', 'WR', 1)] }),
+      row(3, 1, 100, { starters: [s('E', 'QB', 5), s('F', 'WR', 1)] }),
+    ]);
+    assert.equal(out.tiedWith.length, 1);
+    assert.equal(out.winner.amount, 7.5);
+  });
+
+  test('Tour Of The League counts distinct NFL teams, defences included', () => {
+    const out = resolve('tourOfTheLeague', [
+      row(1, 1, 100, { starters: [s('A', 'QB', 1, { proTeam: 'KC' }), s('B', 'WR', 1, { proTeam: 'KC' }), s('C', 'D/ST', 1, { proTeam: 'KC' })] }),
+      row(2, 1, 100, { starters: [s('D', 'QB', 1, { proTeam: 'KC' }), s('E', 'WR', 1, { proTeam: 'BAL' }), s('F', 'K', 1, { proTeam: 'DAL' }), s('G', 'D/ST', 1, { proTeam: 'PIT' })] }),
+    ]);
     assert.equal(out.winner.teamId, 2);
-    assert.equal(out.winner.value, 12);
+    assert.equal(out.winner.value, 4);
+    assert.equal(out.winner.detail, '4 different NFL teams');
+  });
+
+  test('So Close goes to the narrowest loss and ignores winners', () => {
+    const out = resolve('soClose', [
+      row(1, 1, 100, { result: 'WIN', opponentScore: 99.9 }),
+      row(2, 1, 99.9, { result: 'LOSS', opponentScore: 100 }),
+      row(3, 1, 80, { result: 'LOSS', opponentScore: 120 }),
+    ]);
+    assert.equal(out.winner.teamId, 2);
+    assert.equal(out.winner.detail, 'lost by just 0.1');
   });
 
   test('Price Is Right busts anyone over 100', () => {

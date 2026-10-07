@@ -92,6 +92,12 @@ const bestStarterAt = (row, position) => {
  */
 const skillStarters = (row) => row.starters.filter((s) => s.position !== 'K' && s.position !== 'D/ST');
 
+/** A started player counts toward Everybody Eats at or above this many points. */
+const EATS_LINE = 15;
+
+/** Distinct NFL teams across a team's starters, defences included. */
+const nflTeamsStarted = (row) => new Set(row.starters.map((p) => p.proTeam).filter(Boolean));
+
 const positionPoints = (row, position) => round2(sum(startersAt(row, position), (s) => s.points));
 
 /**
@@ -248,20 +254,6 @@ export const CHALLENGE_DECK = [
   ),
 
   challenge(
-    'overProjection',
-    'Overachiever',
-    'Beat your own projected total by the most.',
-    (row) => {
-      const projected = sum(row.starters, (s) => s.projected ?? 0);
-      return projected > 0 ? round2(row.score - projected) : null;
-    },
-    (row) => {
-      const projected = round2(sum(row.starters, (s) => s.projected ?? 0));
-      return projected > 0 ? `${row.score} scored vs ${projected} projected` : null;
-    }
-  ),
-
-  challenge(
     'balanced',
     'No Weak Links',
     'Smallest gap between your best and worst starter. Depth, not a hero. Kickers and defences do not count.',
@@ -282,13 +274,13 @@ export const CHALLENGE_DECK = [
   challenge(
     'supportingCast',
     'Second Fiddle',
-    'Highest-scoring *second*-best starter. Your stud does not count. Kickers and defences do not count.',
+    'Highest-scoring *second*-best starter. Your stud does not count.',
     (row) => {
-      const ranked = [...skillStarters(row)].sort((a, b) => b.points - a.points);
+      const ranked = [...row.starters].sort((a, b) => b.points - a.points);
       return ranked.length > 1 ? ranked[1].points : null;
     },
     (row) => {
-      const ranked = [...skillStarters(row)].sort((a, b) => b.points - a.points);
+      const ranked = [...row.starters].sort((a, b) => b.points - a.points);
       return ranked.length > 1 ? `${ranked[1].name} — ${ranked[1].points}` : null;
     }
   ),
@@ -346,6 +338,33 @@ export const CHALLENGE_DECK = [
     'Beat the highest-scoring opponent of anyone who won.',
     (row) => (row.result === 'WIN' ? row.opponentScore : null),
     (row) => `beat a ${row.opponentScore}-point opponent`
+  ),
+
+  challenge(
+    'everybodyEats',
+    'Everybody Eats',
+    'Most started players scoring 15 or more points. Depth across the whole lineup, not one hero.',
+    (row) => row.starters.filter((p) => p.points >= EATS_LINE).length,
+    (row) => {
+      const n = row.starters.filter((p) => p.points >= EATS_LINE).length;
+      return `${n} starter${n === 1 ? '' : 's'} with ${EATS_LINE}+ points`;
+    }
+  ),
+
+  challenge(
+    'tourOfTheLeague',
+    'Tour Of The League',
+    'Most different NFL teams in your starting lineup. Kickers and defences count.',
+    (row) => nflTeamsStarted(row).size,
+    (row) => `${nflTeamsStarted(row).size} different NFL teams`
+  ),
+
+  challenge(
+    'soClose',
+    'So Close',
+    'Lost by the smallest margin. Only losing teams are eligible.',
+    (row) => (row.result === 'LOSS' ? row.margin : null),
+    (row) => `lost by just ${round2(Math.abs(row.margin))}`
   ),
 ];
 

@@ -206,9 +206,14 @@ decisions a manager actually makes:
 | **Robbed** | Highest score that still lost |
 | **Stole One** | Lowest score that still won |
 | **Gunslinger / Ground Game / Hands Team / …** | Best started player at one position |
-| **No Weak Links** | Smallest gap between your best and worst starter |
+| **No Weak Links** | Smallest gap between your best and worst starter (kickers and defences excluded) |
 | **Second Fiddle** | Highest-scoring *second*-best starter — your stud doesn't count |
-| **Overachiever** | Beat your own projection by the most |
+| **Everybody Eats** | Most started players scoring 15+ points |
+| **Tour Of The League** | Most different NFL teams in your starting lineup |
+| **So Close** | Lost by the smallest margin |
+
+Every challenge scores from that one week's final results only. Nothing looks at
+other weeks, season averages, or pre-game projections.
 
 ### Why the draw is seeded
 
