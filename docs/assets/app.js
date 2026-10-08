@@ -2023,31 +2023,48 @@ function renderTrades() {
   }
 
   if (transactions.length) {
+    // Grouped by the week ESPN filed each move under (the week it counted
+    // for), newest week first. Every move of the season is listed.
+    const byWeek = new Map();
+    for (const tx of transactions) {
+      const week = tx.scoringPeriodId ?? 0;
+      if (!byWeek.has(week)) byWeek.set(week, []);
+      byWeek.get(week).push(tx);
+    }
+    const weeks = [...byWeek.keys()].sort((a, b) => b - a);
+    const TX_TYPE = { WAIVER: 'Waiver', FREEAGENT: 'Free agent' };
+    const ITEM_TYPE = { ADD: 'Added', DROP: 'Dropped' };
+    const fmtTxDate = (ms) => (ms ? new Date(ms).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : '—');
+
     parts.push(`
       <h3 style="margin-top:2rem">Waiver &amp; free agent moves</h3>
+      <p class="view__intro">${transactions.length} move(s) this season, by the week each one counted for.</p>
+      ${weeks.map((week) => {
+        const rows = byWeek.get(week);
+        return `
       <div class="table-scroll">
         <table>
-          <caption>${transactions.length} transaction(s)</caption>
+          <caption>${week ? `Week ${esc(week)}` : 'Week unknown'} · ${rows.length} move(s)</caption>
           <thead><tr>
-            <th scope="col" class="num">Week</th><th scope="col">Team</th>
+            <th scope="col">Date</th><th scope="col">Team</th>
             <th scope="col">Type</th><th scope="col">Players</th><th scope="col" class="num">Bid</th>
           </tr></thead>
           <tbody>
-            ${transactions
-              .slice(0, 100)
+            ${rows
               .map(
                 (tx) => `<tr>
-                  <td class="num">${esc(tx.scoringPeriodId ?? '—')}</td>
+                  <td>${esc(fmtTxDate(tx.date ?? tx.proposedDate))}</td>
                   <th scope="row" class="row-team">${esc(tx.teamName)}</th>
-                  <td>${esc(tx.type)}</td>
-                  <td>${tx.items.map((i) => `${esc(i.type)} ${esc(i.playerName)}`).join(', ')}</td>
+                  <td>${esc(TX_TYPE[tx.type] ?? tx.type)}</td>
+                  <td>${tx.items.map((i) => `${esc(ITEM_TYPE[i.type] ?? i.type)} ${esc(i.playerName)}${i.position ? ` <small>(${esc(i.position)})</small>` : ''}`).join('<br>')}</td>
                   <td class="num">${tx.bidAmount ? `$${esc(tx.bidAmount)}` : '—'}</td>
                 </tr>`
               )
               .join('')}
           </tbody>
         </table>
-      </div>`);
+      </div>`;
+      }).join('')}`);
   }
 
   $('#trades-body').innerHTML = parts.join('');
