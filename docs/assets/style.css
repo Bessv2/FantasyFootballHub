@@ -238,6 +238,7 @@ a:hover { text-decoration-thickness: 2px; }
   transition: border-color 0.15s ease, background 0.15s ease;
 }
 .theme-toggle:hover { border-color: var(--border-strong); background: var(--bg-hover); }
+.tx-view[aria-pressed="true"], .tx-dir[aria-pressed="true"] { background: var(--accent-wash); border-color: var(--accent); color: var(--text); font-weight: 600; }
 
 /* --- Nav ----------------------------------------------------------------- */
 .site-nav { margin-top: 0.9rem; }
