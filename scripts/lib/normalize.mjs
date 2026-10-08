@@ -302,10 +302,24 @@ export function normalizeSchedule(rawSchedule) {
     .filter((game) => Number.isInteger(game.week));
 }
 
-function normalizeTransactions(rawTransactions, playerIndex, teams) {
+/**
+ * Waiver and free-agent moves that actually happened, newest first.
+ *
+ * ESPN also returns claims that failed (status FAILED_*) and claims still
+ * waiting on the waiver run (PENDING). Neither moved a player, and a pending
+ * claim is a manager's private plan until it runs, so only EXECUTED moves are
+ * kept. A raw file built from several weekly requests can carry the same move
+ * twice; the id decides.
+ */
+export function normalizeTransactions(rawTransactions, playerIndex, teams) {
   const teamById = new Map(teams.map((t) => [t.id, t]));
+  const byId = new Map();
+  for (const tx of rawTransactions?.transactions ?? []) {
+    if (tx.status && tx.status !== 'EXECUTED') continue;
+    byId.set(tx.id, tx);
+  }
 
-  return (rawTransactions?.transactions ?? []).map((tx) => ({
+  return [...byId.values()].map((tx) => ({
     id: tx.id,
     type: tx.type,
     status: tx.status,
@@ -315,6 +329,7 @@ function normalizeTransactions(rawTransactions, playerIndex, teams) {
     bidAmount: tx.bidAmount ?? 0,
     proposedDate: tx.proposedDate ?? null,
     executionDate: tx.executionDate ?? null,
+    date: tx.executionDate ?? tx.proposedDate ?? null,
     items: (tx.items ?? []).map((item) => {
       const player = lookupPlayer(playerIndex, item.playerId);
       return {
@@ -327,7 +342,7 @@ function normalizeTransactions(rawTransactions, playerIndex, teams) {
         toTeamId: item.toTeamId ?? null,
       };
     }),
-  }));
+  })).sort((a, b) => (b.scoringPeriodId ?? 0) - (a.scoringPeriodId ?? 0) || (b.date ?? 0) - (a.date ?? 0));
 }
 
 /**

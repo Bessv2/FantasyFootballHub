@@ -111,6 +111,14 @@ the draft happened. Count picks where `playerId > 0`. There is a test for this.
 - **Trades are only in the activity feed.** `mTransactions2` rejects any
   `TRADE_*` value in its filter with a bare 400. Only `FREEAGENT`, `WAIVER`,
   `WAIVER_ERROR` are accepted.
+- **`mTransactions2` returns one week at a time.** Without a
+  `scoringPeriodId` param it returns only the current scoring period, so a
+  single call silently loses every earlier week (the site once showed 27 of
+  ~94 moves, all labelled the current week). `fetch.mjs` asks for every week
+  from `firstScoringPeriod` to the current one and merges by id. Each move's
+  `scoringPeriodId` is the week it *counted for*: a Wednesday waiver run after
+  Week 4 is filed under Week 5. Only `EXECUTED` moves are published — failed
+  claims never moved anyone, and pending ones are a manager's private plan.
 - **Player pool filters must nest under `players`.** A flat
   `{limit, offset}` X-Fantasy-Filter gets a 400 with no explanation.
 - **`players_wl` has no ranks, projections or ownership** — it is a bare name

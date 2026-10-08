@@ -105,16 +105,47 @@ async function fetchSeason(client, season) {
   // ---- Transactions ------------------------------------------------------
   // Only the filter values below are accepted; adding TRADE_* or DRAFT to the
   // list gets the whole request rejected with a bare 400.
-  try {
-    const transactions = await client.getView(season, ['mTransactions2'], {
-      filter: { transactions: { filterType: { value: ['FREEAGENT', 'WAIVER', 'WAIVER_ERROR'] } } },
-    });
-    await writeJson(path.join(dir, 'transactions.json'), transactions);
-    log(`  transactions: ${transactions.transactions?.length ?? 0}`);
-  } catch (error) {
-    log(`  transactions: unavailable (${error.message})`);
+  //
+  // mTransactions2 only returns ONE scoring period: the one named by
+  // scoringPeriodId, or the current week when it is left off. Asking once
+  // therefore showed only this week's moves, and every move wore this week's
+  // number. Ask for every week from the first to the current one and merge,
+  // so the whole season is kept and each move keeps the week ESPN filed it
+  // under. The range grows on its own as the season moves on.
+  const firstPeriod = status.firstScoringPeriod ?? 1;
+  const allTransactions = new Map();
+  let weeksFetched = 0;
+  const failedWeeks = new Set();
+  for (let week = firstPeriod; week <= lastPlayed; week += 1) {
+    try {
+      const page = await client.getView(season, ['mTransactions2'], {
+        params: { scoringPeriodId: week },
+        filter: { transactions: { filterType: { value: ['FREEAGENT', 'WAIVER', 'WAIVER_ERROR'] } } },
+      });
+      weeksFetched += 1;
+      for (const tx of page.transactions ?? []) {
+        // The period asked for is the authority when ESPN leaves it off.
+        allTransactions.set(tx.id, { ...tx, scoringPeriodId: tx.scoringPeriodId ?? week });
+      }
+    } catch (error) {
+      failedWeeks.add(week);
+      log(`  transactions week ${week}: unavailable (${error.message})`);
+    }
+    await sleep(POLITE_DELAY_MS);
   }
-  await sleep(POLITE_DELAY_MS);
+  // A week that failed this run keeps what the last good run saved for it,
+  // and a run where every request failed leaves the file alone entirely.
+  const txFile = path.join(dir, 'transactions.json');
+  if (failedWeeks.size) {
+    const previous = (await readJsonIfExists(txFile))?.transactions ?? [];
+    for (const tx of previous) {
+      if (failedWeeks.has(tx.scoringPeriodId) && !allTransactions.has(tx.id)) allTransactions.set(tx.id, tx);
+    }
+  }
+  if (weeksFetched > 0) {
+    await writeJson(txFile, { transactions: [...allTransactions.values()] });
+  }
+  log(`  transactions: ${allTransactions.size} across weeks ${firstPeriod}–${lastPlayed}`);
 
   // ---- Activity feed (where trade detail actually lives) -----------------
   try {

@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { receptionScoring, normalizeTeams, adviceWeekFor } from '../scripts/lib/normalize.mjs';
+import { receptionScoring, normalizeTeams, adviceWeekFor, normalizeTransactions } from '../scripts/lib/normalize.mjs';
 
 describe('receptionScoring', () => {
   test('reads receptions from scoringItems, ignoring playerRankType', () => {
@@ -50,5 +50,32 @@ describe('adviceWeekFor', () => {
   });
   test('never past the final week', () => {
     assert.equal(adviceWeekFor({ latestScoringPeriod: 18, finalScoringPeriod: 17 }), 17);
+  });
+});
+
+describe('normalizeTransactions', () => {
+  const teams = [{ id: 1, name: 'Alpha' }, { id: 2, name: 'Beta' }];
+  const players = new Map([[10, { id: 10, name: 'Ten', position: 'RB', proTeam: 'SEA' }]]);
+  const tx = (id, week, date, status = 'EXECUTED', teamId = 1) => ({
+    id, type: 'WAIVER', status, teamId, scoringPeriodId: week, proposedDate: date,
+    items: [{ playerId: 10, type: 'ADD', fromTeamId: 0, toTeamId: teamId }],
+  });
+
+  test('keeps every week, each under its own week, newest first', () => {
+    const out = normalizeTransactions({ transactions: [tx('a', 1, 100), tx('b', 3, 300), tx('c', 2, 200), tx('d', 3, 350)] }, players, teams);
+    assert.deepEqual(out.map((t) => [t.id, t.scoringPeriodId]), [['d', 3], ['b', 3], ['c', 2], ['a', 1]]);
+  });
+  test('drops failed and pending claims', () => {
+    const out = normalizeTransactions({ transactions: [
+      tx('ok', 2, 1), tx('failed', 2, 2, 'FAILED_INVALIDPLAYERSOURCE'), tx('pending', 2, 3, 'PENDING'),
+    ] }, players, teams);
+    assert.deepEqual(out.map((t) => t.id), ['ok']);
+  });
+  test('a move fetched twice appears once', () => {
+    const out = normalizeTransactions({ transactions: [tx('a', 2, 1), tx('a', 2, 1)] }, players, teams);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].teamName, 'Alpha');
+    assert.equal(out[0].items[0].playerName, 'Ten');
+    assert.equal(out[0].date, 1);
   });
 });

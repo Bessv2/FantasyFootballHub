@@ -459,7 +459,8 @@ for (let i = 0; i < 40; i += 1) {
     type: rand() < 0.5 ? 'WAIVER' : 'FREEAGENT',
     status: 'EXECUTED',
     teamId,
-    scoringPeriodId: 1 + Math.floor(rand() * REGULAR_WEEKS),
+    // One move a day from Week 1's Thursday, so the week matches the date.
+    scoringPeriodId: Math.min(REGULAR_WEEKS, 1 + Math.floor(i / 7)),
     bidAmount: Math.floor(rand() * 30),
     proposedDate: Date.UTC(2026, 8, 10 + i),
     executionDate: Date.UTC(2026, 8, 11 + i),

@@ -1999,6 +1999,9 @@ function renderTradeCard(t) {
   </div>`;
 }
 
+/** How the moves table is laid out; kept across re-renders. */
+const txState = { view: 'week', dir: 'desc' };
+
 function renderTrades() {
   const trades = state.season?.trades ?? [];
   const transactions = state.season?.transactions ?? [];
@@ -2019,38 +2022,90 @@ function renderTrades() {
         since the trade. The big figure counts only weeks they were in the starting
         lineup — the points that decided matchups. The smaller one includes the bench.
       </p>
-      <div class="grid">${trades.map(renderTradeCard).join('')}</div>`);
+      <div class="grid">${[...trades]
+        .sort((a, b) => (txState.dir === 'asc' ? 1 : -1) * ((a.date ?? 0) - (b.date ?? 0)))
+        .map(renderTradeCard).join('')}</div>`);
   }
 
   if (transactions.length) {
-    parts.push(`
-      <h3 style="margin-top:2rem">Waiver &amp; free agent moves</h3>
+    // Two ways to read the moves: grouped by the week ESPN filed each one
+    // under (the week it counted for), or one list in date order. Either way
+    // the viewer picks newest or oldest first.
+    const { view, dir } = txState;
+    const sign = dir === 'asc' ? 1 : -1;
+    const txDate = (tx) => tx.date ?? tx.proposedDate ?? 0;
+    const sorted = [...transactions].sort((a, b) => sign * (txDate(a) - txDate(b)));
+    const TX_TYPE = { WAIVER: 'Waiver', FREEAGENT: 'Free agent' };
+    const ITEM_TYPE = { ADD: 'Added', DROP: 'Dropped' };
+    const fmtTxDate = (ms) => (ms ? new Date(ms).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : '—');
+    const row = (tx, showWeek) => `<tr>
+                  ${showWeek ? `<td class="num">${esc(tx.scoringPeriodId ?? '—')}</td>` : ''}
+                  <td>${esc(fmtTxDate(txDate(tx)))}</td>
+                  <th scope="row" class="row-team">${esc(tx.teamName)}</th>
+                  <td>${esc(TX_TYPE[tx.type] ?? tx.type)}</td>
+                  <td>${tx.items.map((i) => `${esc(ITEM_TYPE[i.type] ?? i.type)} ${esc(i.playerName)}${i.position ? ` <small>(${esc(i.position)})</small>` : ''}`).join('<br>')}</td>
+                  <td class="num">${tx.bidAmount ? `$${esc(tx.bidAmount)}` : '—'}</td>
+                </tr>`;
+    const table = (caption, rows, showWeek) => `
       <div class="table-scroll">
         <table>
-          <caption>${transactions.length} transaction(s)</caption>
+          <caption>${caption}</caption>
           <thead><tr>
-            <th scope="col" class="num">Week</th><th scope="col">Team</th>
+            ${showWeek ? '<th scope="col" class="num">Week</th>' : ''}
+            <th scope="col">Date</th><th scope="col">Team</th>
             <th scope="col">Type</th><th scope="col">Players</th><th scope="col" class="num">Bid</th>
           </tr></thead>
-          <tbody>
-            ${transactions
-              .slice(0, 100)
-              .map(
-                (tx) => `<tr>
-                  <td class="num">${esc(tx.scoringPeriodId ?? '—')}</td>
-                  <th scope="row" class="row-team">${esc(tx.teamName)}</th>
-                  <td>${esc(tx.type)}</td>
-                  <td>${tx.items.map((i) => `${esc(i.type)} ${esc(i.playerName)}`).join(', ')}</td>
-                  <td class="num">${tx.bidAmount ? `$${esc(tx.bidAmount)}` : '—'}</td>
-                </tr>`
-              )
-              .join('')}
-          </tbody>
+          <tbody>${rows.map((tx) => row(tx, showWeek)).join('')}</tbody>
         </table>
-      </div>`);
+      </div>`;
+
+    let tables;
+    if (view === 'date') {
+      tables = table(`${sorted.length} move(s), ${dir === 'asc' ? 'oldest' : 'newest'} first`, sorted, true);
+    } else {
+      const byWeek = new Map();
+      for (const tx of sorted) {
+        const week = tx.scoringPeriodId ?? 0;
+        if (!byWeek.has(week)) byWeek.set(week, []);
+        byWeek.get(week).push(tx);
+      }
+      tables = [...byWeek.keys()]
+        .sort((a, b) => sign * (a - b))
+        .map((week) => {
+          const rows = byWeek.get(week);
+          return table(`${week ? `Week ${esc(week)}` : 'Week unknown'} · ${rows.length} move(s)`, rows, false);
+        })
+        .join('');
+    }
+
+    const toggle = (cls, key, value, label) =>
+      `<button type="button" class="theme-toggle ${cls}" data-${key}="${value}" aria-pressed="${txState[key] === value}">${label}</button>`;
+
+    parts.push(`
+      <h3 style="margin-top:2rem">Waiver &amp; free agent moves</h3>
+      <p class="view__intro">${transactions.length} move(s) this season. Week is the week each move counted for.</p>
+      <div style="display:flex;flex-wrap:wrap;gap:0.75rem;margin-bottom:1rem">
+        <div role="group" aria-label="Group moves" style="display:flex;gap:0.25rem">
+          ${toggle('tx-view', 'view', 'week', 'By week')}
+          ${toggle('tx-view', 'view', 'date', 'By date')}
+        </div>
+        <div role="group" aria-label="Sort by date" style="display:flex;gap:0.25rem">
+          ${toggle('tx-dir', 'dir', 'desc', 'Newest first')}
+          ${toggle('tx-dir', 'dir', 'asc', 'Oldest first')}
+        </div>
+      </div>
+      ${tables}`);
   }
 
-  $('#trades-body').innerHTML = parts.join('');
+  const body = $('#trades-body');
+  body.innerHTML = parts.join('');
+  for (const btn of body.querySelectorAll('.tx-view, .tx-dir')) {
+    btn.addEventListener('click', () => {
+      if (btn.dataset.view) txState.view = btn.dataset.view;
+      if (btn.dataset.dir) txState.dir = btn.dataset.dir;
+      renderTrades();
+    });
+  }
 }
 
 /** Shown before any results exist, so the league can agree rules early. */
