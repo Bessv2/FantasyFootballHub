@@ -251,6 +251,7 @@ function buildTeamDetail(season, teamStats, teamWeeks, standings, draft) {
           proTeam: p.proTeam, slot: p.slot, slotId: p.slotId,
           started: p.started, projected: p.projected, injuryStatus: p.injuryStatus,
           percentOwned: p.percentOwned ?? null, percentStarted: p.percentStarted ?? null,
+          locked: p.locked ?? false, points: p.points ?? null,
         })),
 
         lineupAdvice: recommendLineup(roster, slots),
@@ -259,6 +260,8 @@ function buildTeamDetail(season, teamStats, teamWeeks, standings, draft) {
           const sim = simulateLineup({
             roster,
             startingSlots: slots,
+            benchSlots: season.league.benchSlots,
+            freeAgents: season.freeAgents,
             opponentRoster: opponentId !== null ? season.currentRosters?.[opponentId] ?? null : null,
             history,
             seed: `roe-lineup:${season.league.season}:${season.adviceWeek}:${team.id}`,

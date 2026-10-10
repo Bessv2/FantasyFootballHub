@@ -1,12 +1,12 @@
 /**
- * The 100-week lineup simulation. Rosters are one-slot (a lone QB slot) so the
+ * The 1,000-week lineup simulation. Rosters are one-slot (a lone QB slot) so the
  * right answer can be reasoned out by hand.
  */
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { simulateLineup, playerSpread } from '../scripts/lib/lineupsim.mjs';
+import { simulateLineup, playerSpread, lognormalParams, PLAY_CHANCE } from '../scripts/lib/lineupsim.mjs';
 
 const QB_ONLY = [{ slotId: 0, count: 1 }];
 const qb = (playerId, projected, extra = {}) => ({ playerId, name: `QB${playerId}`, position: 'QB', projected, slotId: 20, ...extra });
@@ -45,7 +45,7 @@ describe('simulateLineup', () => {
     });
     const rate = Object.fromEntries(sim.players.map((p) => [p.playerId, p.startPct]));
     assert.deepEqual(rate, { 1: 100, 2: 0, 3: 0, 4: 0 });
-    assert.equal(sim.simulations, 100);
+    assert.equal(sim.simulations, 1000);
     assert.deepEqual(sim.recommended.starters.map((p) => p.playerId), [1]);
     assert.equal(sim.recommended.starters[0].slot, 'QB');
   });
@@ -115,5 +115,103 @@ describe('simulateLineup against the lineup set in ESPN', () => {
       startingSlots: QB_ONLY,
     });
     assert.deepEqual(sim.fromCurrent, { start: [], sit: [] });
+  });
+});
+
+describe('lognormalParams', () => {
+  test('keeps the average at the projection and the spread as given', () => {
+    const { m, s: sd } = lognormalParams(12, 6);
+    const mean = Math.exp(m + sd ** 2 / 2);
+    const variance = (Math.exp(sd ** 2) - 1) * Math.exp(2 * m + sd ** 2);
+    assert.ok(Math.abs(mean - 12) < 1e-9);
+    assert.ok(Math.abs(Math.sqrt(variance) - 6) < 1e-9);
+  });
+
+  test('nothing to shape for a zero projection', () => {
+    assert.equal(lognormalParams(0, 3), null);
+  });
+});
+
+describe('simulateLineup: what real weeks look like', () => {
+  const ONE_FLEX = [{ slotId: 0, count: 1 }];
+
+  test('simulated scores average out at the projection', () => {
+    const sim = simulateLineup({ roster: [qb(1, 15)], startingSlots: ONE_FLEX, simulations: 4000, seed: 'avg' });
+    assert.ok(Math.abs(sim.recommended.mean - 15) < 0.5, `mean ${sim.recommended.mean}`);
+    // Skewed: the 90th percentile sits further above the average than the
+    // 10th sits below it.
+    assert.ok(sim.recommended.p90 - 15 > 15 - sim.recommended.p10);
+  });
+
+  test('a Questionable player loses ground to an equal healthy one', () => {
+    const sim = simulateLineup({
+      roster: [qb(1, 20, { injuryStatus: 'QUESTIONABLE' }), qb(2, 20)],
+      startingSlots: ONE_FLEX,
+      seed: 'q',
+    });
+    const rate = Object.fromEntries(sim.players.map((p) => [p.playerId, p.startPct]));
+    assert.ok(rate[2] > rate[1], JSON.stringify(rate));
+    assert.deepEqual(sim.recommended.starters.map((p) => p.playerId), [2]);
+    assert.equal(sim.players.find((p) => p.playerId === 1).playChance, PLAY_CHANCE.QUESTIONABLE);
+  });
+
+  test('a locked starter keeps his slot and scores what he actually scored', () => {
+    // QB2 already played and scored 4; QB1 projects 25 but cannot replace him.
+    const sim = simulateLineup({
+      roster: [qb(1, 25), qb(2, 18, { slotId: 0, locked: true, points: 4 })],
+      startingSlots: ONE_FLEX,
+    });
+    assert.deepEqual(sim.recommended.starters.map((p) => p.playerId), [2]);
+    assert.deepEqual(sim.fromCurrent, { start: [], sit: [] });
+    assert.equal(sim.recommended.mean, 4);
+  });
+
+  test('a locked bench player cannot come in', () => {
+    const sim = simulateLineup({
+      roster: [qb(1, 30, { locked: true, points: 30 }), qb(2, 10, { slotId: 0 })],
+      startingSlots: ONE_FLEX,
+    });
+    assert.deepEqual(sim.recommended.starters.map((p) => p.playerId), [2]);
+  });
+
+  test('teammates boom and bust together', () => {
+    // Two receivers on the same NFL team against two on different teams: same
+    // averages, but the stacked pair swings wider week to week.
+    const wr = (playerId, proTeam) => ({ playerId, name: `WR${playerId}`, position: 'WR', proTeam, projected: 12, slotId: 4 });
+    const TWO_WR = [{ slotId: 4, count: 2 }];
+    const stacked = simulateLineup({ roster: [wr(1, 'DET'), wr(2, 'DET')], startingSlots: TWO_WR, simulations: 4000, seed: 'c' });
+    const apart = simulateLineup({ roster: [wr(1, 'DET'), wr(2, 'MIA')], startingSlots: TWO_WR, simulations: 4000, seed: 'c' });
+    const width = (s) => s.recommended.p90 - s.recommended.p10;
+    assert.ok(width(stacked) > width(apart), `${width(stacked)} vs ${width(apart)}`);
+  });
+});
+
+describe('simulateLineup: pickups and IR', () => {
+  const ONE = [{ slotId: 0, count: 1 }];
+
+  test('a free agent who would start is priced in win chance', () => {
+    const sim = simulateLineup({
+      roster: [qb(1, 10, { slotId: 0 })],
+      startingSlots: ONE,
+      opponentRoster: [qb(9, 18)],
+      freeAgents: [qb(50, 22), qb(51, 6)],
+      seed: 'p',
+    });
+    assert.deepEqual(sim.pickups.map((p) => p.playerId), [50]); // QB51 would not start
+    assert.ok(sim.pickups[0].winGain > 10);
+    assert.deepEqual(sim.pickups[0].replaces.map((p) => p.playerId), [1]);
+  });
+
+  test('an IR player cannot be started when the roster is full, but is offered', () => {
+    // One starter + one bench spot, both filled; QB3 is healthy but in IR.
+    const roster = [qb(1, 10, { slotId: 0 }), qb(2, 8), qb(3, 25, { slotId: 21 })];
+    const sim = simulateLineup({ roster, startingSlots: ONE, benchSlots: 1, opponentRoster: [qb(9, 18)], seed: 'ir' });
+    assert.deepEqual(sim.recommended.starters.map((p) => p.playerId), [1]);
+    assert.deepEqual(sim.irActivations.map((p) => p.playerId), [3]);
+
+    // With an open bench spot he can simply be activated and started.
+    const roomy = simulateLineup({ roster, startingSlots: ONE, benchSlots: 2, opponentRoster: [qb(9, 18)], seed: 'ir' });
+    assert.deepEqual(roomy.recommended.starters.map((p) => p.playerId), [3]);
+    assert.deepEqual(roomy.irActivations, []);
   });
 });

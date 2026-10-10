@@ -1022,6 +1022,7 @@ function startSitCalls(team) {
   const startIds = new Set(moves.start.map((p) => p.playerId));
   const sitIds = new Set(moves.sit.map((p) => p.playerId));
   const hasAdvice = Boolean(sim || advice);
+  const irGain = new Map((sim?.irActivations ?? []).map((a) => [a.playerId, a]));
 
   const calls = new Map();
   for (const p of team.roster) {
@@ -1036,7 +1037,9 @@ function startSitCalls(team) {
     let call;
 
     if (!hasAdvice) call = null;
-    else if (startIds.has(p.playerId)) {
+    else if (p.locked) {
+      call = { tone: 'neutral', label: 'Locked', text: p.started ? 'Game started — he stays in' : 'Game started — can\'t come in' };
+    } else if (startIds.has(p.playerId)) {
       const lead = p.slot === 'IR' ? 'Move off IR and start' : 'Start';
       call = { tone: 'start', label: 'Start', text: other
         ? `${lead} over ${shortName(other.name)} (+${num(gap, 1)} pts)`
@@ -1049,10 +1052,17 @@ function startSitCalls(team) {
       call = out
         ? { tone: 'sit', label: 'Sit', text: outText }
         : rate === null || rate >= 70
-          ? { tone: 'start', label: 'Start', text: 'Locked in' }
+          ? { tone: 'start', label: 'Start', text: 'Must start' }
           : rate >= 40
             ? { tone: 'start', label: 'Start', text: 'Good start' }
             : { tone: 'close', label: 'Start', text: 'Close call — best you have' };
+      // A shaky status is worth a second look even when he is the right start.
+      if (call.tone === 'start' && (s?.playChance ?? 1) < 1) {
+        call = { tone: 'close', label: 'Start', text: `${p.injuryStatus === 'DOUBTFUL' ? 'Doubtful' : 'Questionable'} — check before kickoff` };
+      }
+    } else if (irGain.has(p.playerId)) {
+      const a = irGain.get(p.playerId);
+      call = { tone: 'close', label: 'IR', text: `Would start — activate if you free a roster spot (+${num(a.winGain ?? a.pointsGain, 1)}${a.winGain !== null ? '% win' : ' pts'})` };
     } else if (p.slot === 'IR') {
       call = { tone: 'neutral', label: 'Out', text: 'On IR' };
     } else if (onBye) {
@@ -1105,10 +1115,26 @@ function renderThisWeek(team, { moves, swapFor }) {
        <ul class="swaps">${swaps.join('')}</ul>`
     : '<p class="this-week__lead"><span class="pill pill--good">Lineup set</span> No changes needed.</p>';
 
+  // Roster moves beyond the lineup, priced in the same simulated weeks.
+  const gainText = (a) => (a.winGain !== null && a.winGain !== undefined
+    ? `+${num(a.winGain, 1)}% to win` : `+${num(a.pointsGain, 1)} pts`);
+  const extraMoves = [
+    ...(sim?.irActivations ?? []).slice(0, 2).map((a) => `<li><span class="pill pill--warn">IR</span>
+      Activate <strong>${esc(shortName(a.name))}</strong> — needs a roster spot <small>${esc(gainText(a))}</small></li>`),
+    ...(sim?.pickups ?? []).slice(0, 3).map((a) => `<li><span class="pill pill--accent">Add</span>
+      <strong>${esc(shortName(a.name))}</strong> <small>${esc(a.position)}${a.proTeam ? ` · ${esc(a.proTeam)}` : ''}</small>
+      ${a.replaces?.length ? `over ${esc(a.replaces.map((r) => shortName(r.name)).join(', '))}` : ''}
+      <small>${esc(gainText(a))}</small></li>`),
+  ];
+  const extra = extraMoves.length
+    ? `<p class="this-week__lead"><strong>Worth a roster move</strong></p><ul class="swaps">${extraMoves.join('')}</ul>`
+    : '';
+
   return `<div class="card this-week">
     <h3>Week ${esc(week)}${sim?.opponentName ? ` vs ${esc(sim.opponentName)}` : ''}</h3>
     ${headline}
     ${action}
+    ${extra}
   </div>`;
 }
 
@@ -1145,7 +1171,9 @@ function rosterRow(p, call) {
       <span class="ros-game" data-pro-team="${esc(p.proTeam ?? '')}"></span>
       ${call ? `<span class="ros-call ros-call--${esc(call.tone)}"><strong>${esc(call.label)}</strong> ${esc(call.text)}</span>` : ''}
     </span>
-    <span class="ros-proj"><span class="ros-proj__num">${num(p.projected, 1)}</span><small>proj</small></span>
+    ${p.locked && p.points !== null && p.points !== undefined
+      ? `<span class="ros-proj"><span class="ros-proj__num">${num(p.points, 1)}</span><small>${num(p.projected, 1)} proj</small></span>`
+      : `<span class="ros-proj"><span class="ros-proj__num">${num(p.projected, 1)}</span><small>proj</small></span>`}
   </li>`;
 }
 
@@ -1158,7 +1186,8 @@ function renderRosterList(team, calls) {
     (b.projected ?? 0) - (a.projected ?? 0);
   const starters = team.roster.filter((p) => p.started).sort(bySlot);
   const bench = team.roster.filter((p) => !p.started).sort(byPos);
-  const total = starters.reduce((sum, p) => sum + (p.projected ?? 0), 0);
+  // Actual points once a game has started, the projection until then.
+  const total = starters.reduce((sum, p) => sum + ((p.locked ? p.points : null) ?? p.projected ?? 0), 0);
   const list = (rows) => `<ul class="ros-list">${rows.map((p) => rosterRow(p, calls.get(p.playerId))).join('')}</ul>`;
 
   return `<section class="card ros" aria-label="Roster">
@@ -1427,10 +1456,13 @@ function renderTeam(teamId) {
   if (team.lineupSim?.available) {
     const sim = team.lineupSim;
     parts.push(fold('How the picks work', 'Where the Start / Sit calls come from', glossary([
-      ['The short version', `Each call is the site's pick for Week ${esc(sim.week ?? state.teamDetail.adviceWeek)}, from ESPN projections and how up-and-down each player has been this season.`],
-      ['Locked in / Good start', 'Starts in nearly every version of the week the site played out.'],
+      ['The short version', `Each call is the site's pick for Week ${esc(sim.week ?? state.teamDetail.adviceWeek)}: your week is played out ${esc(sim.simulations)} times from ESPN projections, how up-and-down each player has been this season, injury status, and which players share an NFL team.`],
+      ['Must start / Good start', 'Starts in nearly every version of the week the site played out.'],
       ['Close call', 'Could go either way — starting or benching him are both fine.'],
       ['Start over …', 'A move worth making in ESPN: the player in projects more than the one he replaces.'],
+      ['Questionable', 'Counted as missing about 1 week in 7 (Doubtful: 3 in 4), so a healthy player of the same projection is the safer start.'],
+      ['Locked', "His game has started, so ESPN won't let him move — the site uses his actual points."],
+      ['Add / IR', 'A free agent, or a player stuck on IR with no open roster spot, who would start for you — with how much he raises your chance of winning.'],
       ['Win chance', `Your Week ${esc(sim.week ?? state.teamDetail.adviceWeek)} was played out ${esc(sim.simulations)} times${sim.opponent ? ' against your opponent' : ''}; this is how often you won with the recommended lineup.`],
     ])));
   }
