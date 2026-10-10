@@ -250,6 +250,7 @@ function buildTeamDetail(season, teamStats, teamWeeks, standings, draft) {
           playerId: p.playerId, name: p.name, position: p.position,
           proTeam: p.proTeam, slot: p.slot, slotId: p.slotId,
           started: p.started, projected: p.projected, injuryStatus: p.injuryStatus,
+          percentOwned: p.percentOwned ?? null, percentStarted: p.percentStarted ?? null,
         })),
 
         lineupAdvice: recommendLineup(roster, slots),

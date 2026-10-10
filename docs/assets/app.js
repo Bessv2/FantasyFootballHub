@@ -1,5 +1,5 @@
 import { createMockDraft, advanceToUser, makePick, gradeDraft, rosterNeeds } from './mock.js';
-import { fetchScoreboard, attachRoster, hasLiveGames } from './live.js';
+import { fetchScoreboard, attachRoster, hasLiveGames, normalizeTeam } from './live.js';
 import { pointsLineChart, pointDiffChart } from './charts.js';
 
 /**
@@ -177,16 +177,8 @@ function avatar(src, name, { variant = 'player', size = null } = {}) {
  * nothing is worse than no control.
  */
 const playerCell = (player, sub = null) => {
-  const label = esc(player?.name ?? '—');
   const tail = sub === null ? '' : `<small>${esc(sub)}</small>`;
-  const name = hasCard(player?.playerId)
-    ? `<button type="button" class="pcard-trigger"
-         data-player-id="${esc(player.playerId)}"
-         data-player-name="${esc(player.name ?? '')}"
-         data-player-pos="${esc(player.position ?? '')}"
-         data-player-team="${esc(player.proTeam ?? '')}"
-         aria-describedby="player-card" aria-expanded="false">${label}</button>`
-    : label;
+  const name = playerNameHtml(player, player?.name ?? '—');
   return `
   <span class="named">
     ${avatar(playerImage(player), player?.name, { variant: 'player' })}
@@ -980,116 +972,247 @@ function renderTeams() {
  * readable by anyone in the league. For a fantasy league that is arguably the
  * point; nothing here is more private than what ESPN already shows.
  */
-const STRATEGY_LABELS = {
-  projection: 'projected',
-  mostStarted: 'most-started',
-  upside: 'upside',
-  floor: 'safe-floor',
-};
+// --- My-team roster, laid out like ESPN's own roster page ------------------
 
-const playerList = (list) =>
-  list.map((p) => `<li><strong>${esc(p.name)}</strong> <small>${esc(p.position)} · ${num(p.projected, 1)} proj.</small></li>`).join('');
+/** ESPN's order for the starting slots; anything unknown sorts after. */
+const SLOT_ORDER = { QB: 0, RB: 1, 'RB/WR': 2, WR: 3, 'WR/TE': 4, TE: 5, FLEX: 6, OP: 7, 'D/ST': 8, K: 9 };
+const POS_ORDER = { QB: 0, RB: 1, WR: 2, TE: 3, 'D/ST': 4, K: 5 };
+/** ESPN labels the OP slot "SFLEX" in a superflex league. */
+const slotLabel = (slot) => (slot === 'OP' ? 'SFLEX' : slot);
+
+const OUT_STATUSES = new Set(['OUT', 'INJURY_RESERVE', 'SUSPENSION', 'IR']);
+const isHurt = (p) => p.injuryStatus && p.injuryStatus !== 'ACTIVE' && p.injuryStatus !== 'NORMAL';
+const INJURY_TAG = { QUESTIONABLE: 'Q', DOUBTFUL: 'D', OUT: 'O', INJURY_RESERVE: 'IR', SUSPENSION: 'SSPD' };
+
+/** "Amon-Ra St. Brown" → "A. St. Brown", the way ESPN fits names on a phone. */
+function shortName(name) {
+  const words = String(name ?? '').trim().split(/\s+/);
+  if (words.length < 2 || /D\/ST$/.test(name)) return name ?? '—';
+  return `${words[0][0]}. ${words.slice(1).join(' ')}`;
+}
 
 /**
- * The first thing on a team page: this week's matchup, the chance of winning,
- * and exactly which moves to make in ESPN. Built from the 100-week simulation;
- * falls back to the projection-only advice when there is no simulation.
+ * One plain-English start/sit call per player.
+ *
+ * The simulation's start rate and the moves against the current ESPN lineup
+ * are boiled down to a verdict and a few words — the working stays available
+ * in the "How the picks work" fold for anyone who wants it.
  */
-function renderThisWeek(team) {
-  const sim = team.lineupSim;
-  const week = state.teamDetail.adviceWeek;
+function startSitCalls(team) {
+  const sim = team.lineupSim?.available ? team.lineupSim : null;
+  const advice = team.lineupAdvice?.available ? team.lineupAdvice : null;
+  const moves = sim
+    ? sim.fromCurrent ?? { start: advice?.toStart ?? [], sit: advice?.toSit ?? [] }
+    : { start: advice?.toStart ?? [], sit: advice?.toSit ?? [] };
+  const recommended = new Set(
+    (sim?.recommended?.starters ?? advice?.recommended ?? []).map((p) => p.playerId)
+  );
+  const simById = new Map((sim?.players ?? []).map((p) => [p.playerId, p]));
+  const projOf = new Map(team.roster.map((p) => [p.playerId, p.projected ?? 0]));
 
-  if (!sim?.available) {
-    const advice = team.lineupAdvice;
-    if (!advice?.available) return '';
-    return `<div class="card this-week">
-      <h3>Week ${esc(week)} lineup</h3>
-      ${advice.alreadyOptimal
-        ? '<p><span class="pill pill--good">No changes needed</span> Your lineup is already the best one on projections.</p>'
-        : `<p><strong>Make these changes in ESPN</strong> (worth about ${num(advice.projectedGain, 1)} points on projections):</p>
-           <div class="moves">
-             <div><h4>Put in</h4><ul>${playerList(advice.toStart)}</ul></div>
-             <div><h4>Take out</h4><ul>${playerList(advice.toSit)}</ul></div>
-           </div>`}
-    </div>`;
+  // Pair each "put in" with the "take out" it replaces, so the reason can name
+  // the other player. Moves are listed in the same order on both sides.
+  const swapFor = new Map();
+  moves.start.forEach((p, i) => {
+    const other = moves.sit[i];
+    if (!other) return;
+    swapFor.set(p.playerId, other);
+    swapFor.set(other.playerId, p);
+  });
+  const startIds = new Set(moves.start.map((p) => p.playerId));
+  const sitIds = new Set(moves.sit.map((p) => p.playerId));
+  const hasAdvice = Boolean(sim || advice);
+
+  const calls = new Map();
+  for (const p of team.roster) {
+    const s = simById.get(p.playerId);
+    const out = s?.out || OUT_STATUSES.has(p.injuryStatus);
+    const other = swapFor.get(p.playerId);
+    const gap = other ? Math.abs((projOf.get(p.playerId) ?? 0) - (projOf.get(other.playerId) ?? 0)) : null;
+    const rate = s?.startPct ?? null;
+    // No projection and no injury: almost always a bye week.
+    const onBye = !isHurt(p) && !p.projected;
+    const outText = onBye ? 'On bye — take him out' : 'Ruled out — take him out';
+    let call;
+
+    if (!hasAdvice) call = null;
+    else if (startIds.has(p.playerId)) {
+      const lead = p.slot === 'IR' ? 'Move off IR and start' : 'Start';
+      call = { tone: 'start', label: 'Start', text: other
+        ? `${lead} over ${shortName(other.name)} (+${num(gap, 1)} pts)`
+        : `${lead} him` };
+    } else if (sitIds.has(p.playerId)) {
+      call = { tone: 'sit', label: 'Sit', text: out
+        ? outText
+        : other ? `${shortName(other.name)} projects ${num(gap, 1)} more` : 'Better options on your bench' };
+    } else if (p.started) {
+      call = out
+        ? { tone: 'sit', label: 'Sit', text: outText }
+        : rate === null || rate >= 70
+          ? { tone: 'start', label: 'Start', text: 'Locked in' }
+          : rate >= 40
+            ? { tone: 'start', label: 'Start', text: 'Good start' }
+            : { tone: 'close', label: 'Start', text: 'Close call — best you have' };
+    } else if (p.slot === 'IR') {
+      call = { tone: 'neutral', label: 'Out', text: 'On IR' };
+    } else if (onBye) {
+      call = { tone: 'neutral', label: 'Bye', text: 'Not playing this week' };
+    } else if (out) {
+      call = { tone: 'neutral', label: 'Out', text: 'Not playing' };
+    } else if (recommended.has(p.playerId)) {
+      call = { tone: 'start', label: 'Start', text: 'Start him' };
+    } else {
+      call = rate !== null && rate >= 30
+        ? { tone: 'close', label: 'Sit', text: 'Close call — fine on the bench' }
+        : { tone: 'neutral', label: 'Sit', text: 'Bench' };
+    }
+    calls.set(p.playerId, call);
+  }
+  return { calls, moves, swapFor };
+}
+
+/**
+ * The first thing on a team page: chance of winning and the moves to make, in
+ * one short card. Each player's own call sits on his roster row below.
+ */
+function renderThisWeek(team, { moves, swapFor }) {
+  const sim = team.lineupSim?.available ? team.lineupSim : null;
+  const advice = team.lineupAdvice?.available ? team.lineupAdvice : null;
+  if (!sim && !advice) return '';
+  const week = state.teamDetail.adviceWeek;
+  const pct = (p) => `${num(p, 0)}%`;
+  const rec = sim?.recommended;
+
+  const headline = sim?.opponent && rec?.winPct !== null
+    ? `<p class="this-week__odds"><span class="this-week__big">${pct(rec.winPct)}</span> to win</p>
+       <p class="stat__note">Projected: you ${num(rec.mean, 0)}, ${esc(sim.opponentName ?? 'them')} ${num(sim.opponent.mean, 0)}</p>`
+    : rec
+      ? `<p class="this-week__odds">Projected: <strong>${num(rec.mean, 0)}</strong> points</p>`
+      : `<p class="this-week__odds">Projected: <strong>${num(advice.projectedTotal, 0)}</strong> points</p>`;
+
+  const swaps = moves.start.map((p) => {
+    const other = swapFor.get(p.playerId);
+    return `<li><span class="pill pill--good">In</span> <strong>${esc(shortName(p.name))}</strong>
+      ${other ? `<span class="pill pill--neutral">Out</span> ${esc(shortName(other.name))}` : ''}</li>`;
+  });
+  // A sit with nobody paired (rare: the slot just empties) still gets a line.
+  for (const p of moves.sit) {
+    if (!swapFor.has(p.playerId)) swaps.push(`<li><span class="pill pill--neutral">Out</span> ${esc(shortName(p.name))}</li>`);
   }
 
-  const rec = sim.recommended;
-  // Older builds have no fromCurrent; the projection-only advice compares
-  // against the same ESPN lineup, so it stands in until the next rebuild.
-  const moves = sim.fromCurrent ?? {
-    start: team.lineupAdvice?.toStart ?? [],
-    sit: team.lineupAdvice?.toSit ?? [],
-  };
-  const pct = (p) => `${num(p, 0)}%`;
-  const gainWins = sim.currentLineup && rec.winPct !== null && sim.currentLineup.winPct !== null
-    ? rec.winPct - sim.currentLineup.winPct : null;
-
-  const headline = sim.opponent
-    ? `<p class="this-week__odds"><span class="this-week__big">${pct(rec.winPct)}</span>
-         chance to beat <strong>${esc(sim.opponentName ?? 'your opponent')}</strong> with the lineup below</p>
-       <p class="stat__note">Projected score: you ${num(rec.mean, 0)} (likely ${num(rec.p10, 0)}–${num(rec.p90, 0)}),
-         them ${num(sim.opponent.mean, 0)} (likely ${num(sim.opponent.p10, 0)}–${num(sim.opponent.p90, 0)}).</p>`
-    : `<p class="this-week__odds">Projected score: <strong>${num(rec.mean, 0)}</strong>
-         <small>(likely ${num(rec.p10, 0)}–${num(rec.p90, 0)})</small></p>`;
-
-  const action = moves.start.length || moves.sit.length
-    ? `<p><strong>Make these changes in ESPN</strong>${gainWins !== null && gainWins > 0
-        ? ` — they raise your chance of winning from ${pct(sim.currentLineup.winPct)} to ${pct(rec.winPct)}` : ''}:</p>
-       <div class="moves">
-         <div><h4>Put in</h4><ul>${playerList(moves.start)}</ul></div>
-         <div><h4>Take out</h4><ul>${playerList(moves.sit)}</ul></div>
-       </div>`
-    : '<p><span class="pill pill--good">No changes needed</span> Your lineup in ESPN is already the best one.</p>';
-
-  const why = rec.strategy === 'upside'
-    ? '<p class="stat__note">You are the underdog this week, so this lineup favours players with big-game upside over safe, steady ones.</p>'
-    : rec.strategy === 'floor'
-      ? '<p class="stat__note">You are the favourite this week, so this lineup favours steady players who rarely have a bad game.</p>'
-      : rec.strategy === 'mostStarted'
-        ? '<p class="stat__note">This lineup uses the players who came out as the best choice most often across the simulated weeks.</p>'
-        : '';
-
-  const rows = sim.players.map((p) => `
-    <tr>
-      <th scope="row" class="row-team">${esc(p.name)}<small>${esc(p.position)}${p.out ? ' · not playing' : ''}</small></th>
-      <td class="num">${num(p.projected, 1)}</td>
-      <td class="num">${p.out ? '—' : `${num(Math.max(0, p.projected - p.spread), 0)}–${num(p.projected + p.spread, 0)}`}</td>
-      <td class="bar-cell">${bar(p.startPct, 100, { digits: 0, suffix: '%' })}</td>
-      <td>${p.recommended ? '<span class="pill pill--good">Start</span>' : '<span class="pill pill--neutral">Bench</span>'}</td>
-    </tr>`).join('');
-
-  const alts = (sim.alternatives ?? []).filter((a) => a.winPct !== null && a.strategy !== rec.strategy);
-
-  const detail = `
-    <div class="table-scroll">
-      <table>
-        <caption>Every player on your roster</caption>
-        <thead><tr>
-          <th scope="col">Player</th>
-          <th scope="col" class="num">Projected</th>
-          <th scope="col" class="num">Likely range</th>
-          <th scope="col" class="bar-cell">Start rate</th>
-          <th scope="col">Pick</th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>
-    ${glossary([
-      ['How it works', `The site played out your Week ${esc(week)} ${esc(sim.simulations)} times. Each time, every player scores a different amount around his ESPN projection — more spread for players who have been up and down this season${sim.opponent ? `, and your opponent's lineup is played out the same way` : ''}.`],
-      ['Projected', "ESPN's projection for this week."],
-      ['Likely range', 'Where his score lands in most of the simulated weeks.'],
-      ['Start rate', 'How often he was in the best possible lineup. 100% = always start him; around 50% = a coin flip; 0% = bench.'],
-      ['Which lineup', `Several lineups are tested against all ${esc(sim.simulations)} weeks and the one that wins most often is picked. A lineup has to win at least 3 more of the ${esc(sim.simulations)} to replace the one ESPN's projections suggest — fewer than that is just chance.${alts.length ? ` Also tried: ${alts.map((a) => `${esc(STRATEGY_LABELS[a.strategy] ?? a.strategy)} lineup (${pct(a.winPct)})`).join(', ')}.` : ''}`],
-    ])}`;
+  const action = swaps.length
+    ? `<p class="this-week__lead"><strong>${swaps.length === 1 ? '1 change' : `${swaps.length} changes`} to make in ESPN</strong></p>
+       <ul class="swaps">${swaps.join('')}</ul>`
+    : '<p class="this-week__lead"><span class="pill pill--good">Lineup set</span> No changes needed.</p>';
 
   return `<div class="card this-week">
-    <h3>Week ${esc(week)}${sim.opponentName ? ` vs ${esc(sim.opponentName)}` : ''}</h3>
+    <h3>Week ${esc(week)}${sim?.opponentName ? ` vs ${esc(sim.opponentName)}` : ''}</h3>
     ${headline}
     ${action}
-    ${why}
-    ${fold('Why this lineup?', 'Start rates for every player, and how the simulation works', detail)}
   </div>`;
+}
+
+/** Name that opens the player card when one exists — shared with playerCell. */
+function playerNameHtml(player, label) {
+  return hasCard(player?.playerId)
+    ? `<button type="button" class="pcard-trigger"
+         data-player-id="${esc(player.playerId)}"
+         data-player-name="${esc(player.name ?? '')}"
+         data-player-pos="${esc(player.position ?? '')}"
+         data-player-team="${esc(player.proTeam ?? '')}"
+         aria-describedby="player-card" aria-expanded="false">${esc(label)}</button>`
+    : esc(label);
+}
+
+function rosterRow(p, call) {
+  const pctLine = [
+    p.percentOwned !== null && p.percentOwned !== undefined ? `${num(p.percentOwned, 0)}% Rost` : null,
+    p.percentStarted !== null && p.percentStarted !== undefined ? `${num(p.percentStarted, 0)}% Start` : null,
+  ].filter(Boolean).join(' <span aria-hidden="true">|</span> ');
+  const tag = isHurt(p) ? INJURY_TAG[p.injuryStatus] ?? p.injuryStatus : null;
+  const slot = slotLabel(p.slot);
+
+  return `<li class="ros-row${p.started ? ' is-starter' : ''}">
+    <span class="ros-slot${p.slot === 'IR' ? ' ros-slot--ir' : ''}">${esc(slot)}</span>
+    <span class="ros-face">
+      ${avatar(playerImage(p), p.name, { variant: p.position === 'D/ST' ? 'team' : 'player', size: 44 })}
+      ${tag ? `<span class="ros-tag">${esc(tag)}</span>` : ''}
+    </span>
+    <span class="ros-info">
+      <span class="ros-name">${playerNameHtml(p, shortName(p.name))}
+        <small>${esc(p.proTeam && p.proTeam !== 'FA' ? p.proTeam : '')} ${esc(p.position)}</small></span>
+      ${pctLine ? `<span class="ros-meta">${pctLine}</span>` : ''}
+      <span class="ros-game" data-pro-team="${esc(p.proTeam ?? '')}"></span>
+      ${call ? `<span class="ros-call ros-call--${esc(call.tone)}"><strong>${esc(call.label)}</strong> ${esc(call.text)}</span>` : ''}
+    </span>
+    <span class="ros-proj"><span class="ros-proj__num">${num(p.projected, 1)}</span><small>proj</small></span>
+  </li>`;
+}
+
+/** Starters in ESPN's slot order, then the bench, then IR. */
+function renderRosterList(team, calls) {
+  const bySlot = (a, b) => (SLOT_ORDER[a.slot] ?? 99) - (SLOT_ORDER[b.slot] ?? 99);
+  const byPos = (a, b) =>
+    Number(a.slot === 'IR') - Number(b.slot === 'IR') ||
+    (POS_ORDER[a.position] ?? 99) - (POS_ORDER[b.position] ?? 99) ||
+    (b.projected ?? 0) - (a.projected ?? 0);
+  const starters = team.roster.filter((p) => p.started).sort(bySlot);
+  const bench = team.roster.filter((p) => !p.started).sort(byPos);
+  const total = starters.reduce((sum, p) => sum + (p.projected ?? 0), 0);
+  const list = (rows) => `<ul class="ros-list">${rows.map((p) => rosterRow(p, calls.get(p.playerId))).join('')}</ul>`;
+
+  return `<section class="card ros" aria-label="Roster">
+    <div class="ros-head"><h3>Starters</h3><span>${num(total, 1)} <small>proj</small></span></div>
+    ${list(starters)}
+    ${bench.length ? `<div class="ros-head"><h3>Bench</h3><span><small>proj</small></span></div>${list(bench)}` : ''}
+    <p class="stat__note ros-note">As set in ESPN, with Week ${esc(state.teamDetail.adviceWeek)} projections.</p>
+  </section>`;
+}
+
+/**
+ * Fills each row's game line from ESPN's public scoreboard — kickoff, opponent,
+ * live score or final — like ESPN's "Sun 1:00 PM @MIA". Skipped when the
+ * scoreboard is on a different week from the advice, so a stale line never
+ * claims the wrong game.
+ */
+let teamScoreboard = null;
+async function fillRosterGames(container) {
+  try {
+    if (!teamScoreboard || Date.now() - teamScoreboard.at > 5 * 60_000) {
+      teamScoreboard = { at: Date.now(), data: fetchScoreboard() };
+    }
+    const data = await teamScoreboard.data;
+    if (data.week !== state.teamDetail?.adviceWeek) return;
+
+    const byTeam = new Map();
+    for (const g of data.games) {
+      byTeam.set(g.home.abbrev, { g, me: g.home, them: g.away, home: true });
+      byTeam.set(g.away.abbrev, { g, me: g.away, them: g.home, home: false });
+    }
+    const timeFmt = new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+
+    for (const el of container.querySelectorAll('.ros-game')) {
+      const team = normalizeTeam(el.dataset.proTeam);
+      if (!team || team === 'FA') continue;
+      const m = byTeam.get(team);
+      if (!m) {
+        el.innerHTML = '<span class="ros-bye">BYE</span>';
+        continue;
+      }
+      const opp = `${m.home ? '' : '@'}${esc(m.them.abbrev)}`;
+      if (m.g.isLive) {
+        el.innerHTML = `<span class="ros-live">LIVE</span> ${esc(m.me.score)}-${esc(m.them.score)} ${opp} · ${esc(m.g.statusDetail)}`;
+      } else if (m.g.isFinal) {
+        const res = m.me.score > m.them.score ? 'W' : m.me.score < m.them.score ? 'L' : 'T';
+        el.textContent = `${res} ${m.me.score}-${m.them.score} Final ${m.home ? '' : '@'}${m.them.abbrev}`;
+      } else {
+        el.textContent = `${timeFmt.format(new Date(m.g.date))} ${m.home ? '' : '@'}${m.them.abbrev}`;
+      }
+    }
+  } catch {
+    // The game line is a nicety; the roster reads fine without it.
+    teamScoreboard = null;
+  }
 }
 
 function renderTeam(teamId) {
@@ -1148,9 +1271,11 @@ function renderTeam(teamId) {
       </button>
     </section>`);
 
-  // --- This week: the answer first -------------------------------------
-  const thisWeek = renderThisWeek(team);
+  // --- This week: the answer first, then the roster the way ESPN shows it --
+  const startSit = startSitCalls(team);
+  const thisWeek = renderThisWeek(team, startSit);
   if (thisWeek) parts.push(thisWeek);
+  if (team.roster.length) parts.push(renderRosterList(team, startSit.calls));
 
   // --- Season so far, in plain words ------------------------------------
   const s = team.stats;
@@ -1266,34 +1391,6 @@ function renderTeam(teamId) {
     ));
   }
 
-  if (team.roster.length) {
-    const starters = team.roster.filter((p) => p.started);
-    const benched = team.roster.filter((p) => !p.started);
-    const injured = team.roster.filter((p) => p.injuryStatus && p.injuryStatus !== 'ACTIVE' && p.injuryStatus !== 'NORMAL');
-    const rosterRows = (list) => list.map((p) => `<tr>
-        <td>${esc(p.slot)}</td>
-        <th scope="row" class="row-team">${playerCell(p, p.proTeam)}</th>
-        <td>${esc(p.position)}</td>
-        <td class="num">${num(p.projected, 1)}</td>
-        <td>${p.injuryStatus && p.injuryStatus !== 'ACTIVE' && p.injuryStatus !== 'NORMAL'
-          ? `<span class="pill pill--warn">${esc(p.injuryStatus)}</span>` : ''}</td>
-      </tr>`).join('');
-    parts.push(fold(
-      'Full roster',
-      `${esc(team.roster.length)} players${injured.length ? ` · ${esc(injured.length)} injured` : ''}`,
-      `<div class="table-scroll">
-        <table>
-          <caption>As set in ESPN, with Week ${esc(state.teamDetail.adviceWeek)} projections</caption>
-          <thead><tr>
-            <th scope="col">Slot</th><th scope="col">Player</th><th scope="col">Pos</th>
-            <th scope="col" class="num">Projected</th><th scope="col">Status</th>
-          </tr></thead>
-          <tbody>${rosterRows(starters)}${rosterRows(benched)}</tbody>
-        </table>
-      </div>`
-    ));
-  }
-
   if (team.headToHead?.length) {
     const rec = (r) => (r.games ? `${r.wins}-${r.losses}${r.ties ? `-${r.ties}` : ''}` : '—');
     const last = (m) => (m
@@ -1327,6 +1424,17 @@ function renderTeam(teamId) {
       ${r ? `<p class="stat__note">Your rivalry is the matchup you've played most (closest record breaks ties) — ${esc(r.games)} meetings with ${esc(r.opponentTeamName ?? 'them')}, averaging ${esc(signed(r.avgMargin, 1))} points a game for you.</p>` : ''}`));
   }
 
+  if (team.lineupSim?.available) {
+    const sim = team.lineupSim;
+    parts.push(fold('How the picks work', 'Where the Start / Sit calls come from', glossary([
+      ['The short version', `Each call is the site's pick for Week ${esc(sim.week ?? state.teamDetail.adviceWeek)}, from ESPN projections and how up-and-down each player has been this season.`],
+      ['Locked in / Good start', 'Starts in nearly every version of the week the site played out.'],
+      ['Close call', 'Could go either way — starting or benching him are both fine.'],
+      ['Start over …', 'A move worth making in ESPN: the player in projects more than the one he replaces.'],
+      ['Win chance', `Your Week ${esc(sim.week ?? state.teamDetail.adviceWeek)} was played out ${esc(sim.simulations)} times${sim.opponent ? ' against your opponent' : ''}; this is how often you won with the recommended lineup.`],
+    ])));
+  }
+
   // Nothing above had anything to say yet.
   if (parts.length <= 1) {
     parts.push(
@@ -1339,6 +1447,7 @@ function renderTeam(teamId) {
   }
 
   body.innerHTML = parts.join('');
+  if (team.roster.length) fillRosterGames(body);
 
   $('#claim-team')?.addEventListener('click', () => {
     const nowMine = getMyTeamId() === team.teamId;

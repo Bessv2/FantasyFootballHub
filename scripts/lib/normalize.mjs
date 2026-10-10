@@ -393,13 +393,26 @@ function normalizeTrades(rawActivity, playerIndex, teams) {
 function normalizeCurrentRosters(current, playerIndex, adviceWeek) {
   const out = new Map();
   for (const team of current?.teams ?? []) {
-    const entries = normalizeRosterEntries(team?.roster?.entries, adviceWeek, playerIndex);
+    const rawEntries = team?.roster?.entries ?? [];
+    const entries = normalizeRosterEntries(rawEntries, adviceWeek, playerIndex);
     // ESPN reports actual points for a week that has not happened as 0, which
     // would read as "everyone scored nothing". Only the projection is
     // meaningful here, so drop the actual.
     out.set(
       team.id,
-      entries.map(({ points, ...rest }) => ({ ...rest, projected: rest.projected ?? 0 }))
+      entries.map(({ points, ...rest }, i) => {
+        // Rostered / started across all ESPN leagues — the "90% Rost | 56%
+        // Start" line on ESPN's own roster page. Current rosters only; the
+        // weekly box scores would just carry dead weight.
+        const own = rawEntries[i]?.playerPoolEntry?.player?.ownership;
+        const pct = (v) => (Number.isFinite(v) ? Number(v.toFixed(1)) : null);
+        return {
+          ...rest,
+          projected: rest.projected ?? 0,
+          percentOwned: pct(own?.percentOwned),
+          percentStarted: pct(own?.percentStarted),
+        };
+      })
     );
   }
   return out;
