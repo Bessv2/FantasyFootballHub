@@ -397,7 +397,7 @@ function normalizeCurrentRosters(current, playerIndex, adviceWeek) {
     const entries = normalizeRosterEntries(rawEntries, adviceWeek, playerIndex);
     // ESPN reports actual points for a week that has not happened as 0, which
     // would read as "everyone scored nothing". Only the projection is
-    // meaningful here, so drop the actual.
+    // meaningful here, so the actual is kept only once his game has started.
     out.set(
       team.id,
       entries.map(({ points, ...rest }, i) => {
@@ -406,9 +406,14 @@ function normalizeCurrentRosters(current, playerIndex, adviceWeek) {
         // weekly box scores would just carry dead weight.
         const own = rawEntries[i]?.playerPoolEntry?.player?.ownership;
         const pct = (v) => (Number.isFinite(v) ? Number(v.toFixed(1)) : null);
+        // Once his game kicks off ESPN locks him in place, and from then on
+        // his actual points are real — the simulation fixes both.
+        const locked = Boolean(rawEntries[i]?.playerPoolEntry?.lineupLocked);
         return {
           ...rest,
           projected: rest.projected ?? 0,
+          locked,
+          points: locked ? points : null,
           percentOwned: pct(own?.percentOwned),
           percentStarted: pct(own?.percentStarted),
         };

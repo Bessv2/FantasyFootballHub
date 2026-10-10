@@ -352,29 +352,39 @@ the deck is dealt without replacement. `weeklyChallenge.every: N` (in
 `config/pot.json`) deals every Nth week and wins over `cadence`; like `salt`,
 only change it before Week 1.
 
-**The team page runs 100 simulated weeks for lineup advice.**
-`scripts/lib/lineupsim.mjs` draws every rostered player's score 100 times from a
-normal centred on his ESPN projection, with a spread blending his own weekly
-swings this season (weight n − 1) and a positional default (`DEFAULT_CV`, an
-assumption — weight `SPREAD_K = 4`). OUT/IR/suspended players and zero
-projections (byes) score 0. Each draw is solved for the best lineup, giving
-each player's **start rate**. Then four lineups — projected, most-started,
-upside (80th percentile) and safe-floor (20th) — are scored across the same 100
-weeks against the opponent's projected-best lineup (opponent from
+**The team page runs 1,000 simulated weeks for lineup advice.**
+`scripts/lib/lineupsim.mjs` draws every rostered player's score 1,000 times
+around his ESPN projection, with a spread blending his own weekly swings this
+season (weight n − 1) and a positional default (`DEFAULT_CV`, an assumption —
+weight `SPREAD_K = 4`). The draw is **lognormal** (skewed, mean exactly the
+projection; a clipped normal used to inflate low projections), D/ST excepted
+(normal, floor −5). **Questionable/Doubtful** players sit out a share of draws
+(`PLAY_CHANCE` 0.85 / 0.25 — assumptions). Players on the same **NFL team share
+a weekly factor** (`TEAM_CORRELATION = 0.2`, QB/RB/WR/TE/K, both rosters).
+OUT/IR/suspended players and zero projections (byes) score 0. Players whose
+game has started (`lineupLocked` on the ESPN roster entry) are fixed at their
+actual points and pinned where they are. A player in an **IR slot** can only be
+started if the active roster (starters + `benchSlots`) has an open spot;
+otherwise he is reported in `irActivations` with the win chance he would add.
+Each draw is solved for the best lineup, giving each player's **start rate**.
+Then four lineups — projected (on expected value, injury risk included),
+most-started, upside (80th percentile) and safe-floor (20th) — are scored across
+the same weeks against the opponent's projected-best lineup (opponent from
 `season.schedule`). The projection lineup always has the best *average*, so an
-alternative replaces it only by winning ≥3 more of the 100 — below that is
-noise. In practice that means underdogs are sometimes told to chase upside and
-favourites almost never change. Contenders are defined *before* scoring so the
-pick is not just whichever lineup got lucky in these 100 draws. Seeded on
+alternative replaces it only by adding ≥3 points of win chance — below that is
+noise. Contenders are defined *before* scoring so the pick is not just whichever
+lineup got lucky. The best two free agents per position are also tested on the
+same draws (`pickups`, listed when they add ≥1 point of win chance). Seeded on
 `season:week:team`. No opponent (bye, or no schedule.json) → no win odds, and
-the projected lineup stands.
+the projected lineup stands. All ten teams take well under a second.
 
 **Advice targets the week being played.** `adviceWeekFor()` in `normalize.mjs`
 returns ESPN's `latestScoringPeriod` — the week in progress, until ESPN rolls
 over early the following week. It used to be `latestScoringPeriod + 1`, which on
-a Sunday advised on next week. Known limit: mid-week, players whose game has
-already kicked off are still simulated from their projection, because the fetch
-carries no per-game status to tell "played and scored 0" from "not played yet".
+a Sunday advised on next week. Mid-week, players whose game has already kicked
+off are read from ESPN's `lineupLocked` flag and fixed at their actual points.
+Not yet verified against a live mid-week fetch: if ESPN ever omits the flag,
+those players fall back to being simulated from their projection, as before.
 
 **Standings and team pages lead with the answer; detail is folded.** Each
 page shows one plain-English answer first (standings table with playoff chance;
