@@ -34,7 +34,7 @@ const TEAM_ALIASES = {
   ARI: 'ARI', ARZ: 'ARI',
 };
 
-const normalizeTeam = (abbrev) => {
+export const normalizeTeam = (abbrev) => {
   if (!abbrev) return null;
   const upper = String(abbrev).toUpperCase();
   return TEAM_ALIASES[upper] ?? upper;
