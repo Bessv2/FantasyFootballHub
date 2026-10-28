@@ -2,8 +2,9 @@
 
 Every source file in one place, for reading or for handing to a fresh session.
 
-- **Commit:** `0d0313a` (2026-09-27 17:49:05 +0000)
-- **Generated:** 2026-09-27T17:49:05.741Z
+- **Commit:** `55ef089` (2026-10-28 03:28:12 +0000)
+- **Generated:** 2026-10-28T10:12:04.319Z
+- **WARNING:** the working tree had uncommitted changes when this was generated, so this may not match any commit.
 - **Regenerate with:** `npm run bundle`
 
 **Read [HANDOFF.md](HANDOFF.md) first.** It carries the ESPN API gotchas,
@@ -147,11 +148,11 @@ League identity, the public money rules, and templates. Real credentials (config
       "4": "balanced",
       "5": "supportingCast",
       "6": "narrowestWin",
-      "7": "underdog",
-      "8": "overProjection",
+      "7": "everybodyEats",
+      "8": "paydirt",
       "9": "closestTo100",
       "10": "bestKicker",
-      "11": "allPlayWeek",
+      "11": "soClose",
       "12": "uglyWin",
       "13": "benchWarmer"
     }
@@ -601,7 +602,7 @@ export function createClient({ leagueId, secrets = null, log = () => {} }) {
 
 ### `scripts/lib/constants.mjs`
 
-*222 lines*
+*202 lines*
 
 ```javascript
 /**
@@ -730,37 +731,6 @@ export const PRO_TEAM = {
   34: 'HOU',
 };
 
-/**
- * Activity-feed message type IDs, from the `kona_league_communication` view.
- * Several distinct IDs all mean "dropped" — ESPN distinguishes the source
- * (waiver vs free agent vs roster move) but the outcome is the same.
- */
-export const ACTIVITY_TYPE = {
-  178: 'FA_ADDED',
-  180: 'WAIVER_ADDED',
-  179: 'DROPPED',
-  181: 'DROPPED',
-  239: 'DROPPED',
-  244: 'TRADED',
-};
-
-/** The message-type IDs worth pulling from the activity feed. */
-export const ACTIVITY_TYPE_IDS = [178, 179, 180, 181, 239, 244];
-
-/** `type` on a transaction record from `mTransactions2`. */
-export const TRANSACTION_TYPES = [
-  'DRAFT',
-  'TRADE_ACCEPT',
-  'TRADE_DECLINE',
-  'TRADE_VETO',
-  'TRADE_PROPOSE',
-  'WAIVER',
-  'WAIVER_ERROR',
-  'FREEAGENT',
-  'ROSTER',
-  'LINEUP',
-];
-
 /** Injury status strings ESPN reports, normalized to something displayable. */
 export const INJURY_STATUS = {
   ACTIVE: 'Active',
@@ -825,11 +795,22 @@ export const STAT_KEYS = {
   123: 'defensivePointsAllowed',
   127: 'defensiveYardsAllowed',
 };
+
+/**
+ * Stat ids that make up "touchdowns scored" by a player: rushing, receiving,
+ * kick/punt/interception/fumble returns, and blocked-kick returns (the last
+ * four are how a defence or special teams unit scores).
+ *
+ * Passing touchdowns (4) are deliberately NOT here. A touchdown pass is scored
+ * by the receiver, and counting it for the quarterback too would count every
+ * passing score twice.
+ */
+export const TOUCHDOWN_STAT_IDS = [25, 43, 88, 101, 102, 103, 104];
 ```
 
 ### `scripts/lib/normalize.mjs`
 
-*546 lines*
+*598 lines*
 
 ```javascript
 /**
@@ -851,6 +832,7 @@ import {
   PLAYER_POS,
   PRO_TEAM,
   STAT_SOURCE,
+  TOUCHDOWN_STAT_IDS,
   resolvePosition,
 } from './constants.mjs';
 
@@ -938,6 +920,23 @@ function projectedForWeek(entry, week) {
   return null;
 }
 
+/**
+ * Touchdowns a player scored in a given week (see TOUCHDOWN_STAT_IDS), or null
+ * when ESPN did not send the stat line at all. Null is not zero: a challenge
+ * that scores touchdowns must be able to tell "scored none" from "no data".
+ */
+function touchdownsForWeek(entry, week) {
+  const stats = entry?.playerPoolEntry?.player?.stats ?? [];
+  for (const stat of stats) {
+    if (stat.scoringPeriodId === week && stat.statSourceId === STAT_SOURCE.ACTUAL) {
+      const line = stat.stats;
+      if (!line || typeof line !== 'object') return null;
+      return TOUCHDOWN_STAT_IDS.reduce((total, id) => total + (Number(line[id]) || 0), 0);
+    }
+  }
+  return null;
+}
+
 function normalizeRosterEntries(entries, week, playerIndex) {
   return (entries ?? []).map((entry) => {
     const raw = entry?.playerPoolEntry?.player;
@@ -955,6 +954,7 @@ function normalizeRosterEntries(entries, week, playerIndex) {
       started: !NON_SCORING_SLOTS.has(slotId),
       points: Number((pointsForWeek(entry, week) ?? 0).toFixed(2)),
       projected: projectedForWeek(entry, week),
+      touchdowns: touchdownsForWeek(entry, week),
       injuryStatus: raw?.injuryStatus ?? known.injuryStatus,
     };
   });
@@ -1117,10 +1117,24 @@ export function normalizeSchedule(rawSchedule) {
     .filter((game) => Number.isInteger(game.week));
 }
 
-function normalizeTransactions(rawTransactions, playerIndex, teams) {
+/**
+ * Waiver and free-agent moves that actually happened, newest first.
+ *
+ * ESPN also returns claims that failed (status FAILED_*) and claims still
+ * waiting on the waiver run (PENDING). Neither moved a player, and a pending
+ * claim is a manager's private plan until it runs, so only EXECUTED moves are
+ * kept. A raw file built from several weekly requests can carry the same move
+ * twice; the id decides.
+ */
+export function normalizeTransactions(rawTransactions, playerIndex, teams) {
   const teamById = new Map(teams.map((t) => [t.id, t]));
+  const byId = new Map();
+  for (const tx of rawTransactions?.transactions ?? []) {
+    if (tx.status && tx.status !== 'EXECUTED') continue;
+    byId.set(tx.id, tx);
+  }
 
-  return (rawTransactions?.transactions ?? []).map((tx) => ({
+  return [...byId.values()].map((tx) => ({
     id: tx.id,
     type: tx.type,
     status: tx.status,
@@ -1130,6 +1144,7 @@ function normalizeTransactions(rawTransactions, playerIndex, teams) {
     bidAmount: tx.bidAmount ?? 0,
     proposedDate: tx.proposedDate ?? null,
     executionDate: tx.executionDate ?? null,
+    date: tx.executionDate ?? tx.proposedDate ?? null,
     items: (tx.items ?? []).map((item) => {
       const player = lookupPlayer(playerIndex, item.playerId);
       return {
@@ -1142,7 +1157,7 @@ function normalizeTransactions(rawTransactions, playerIndex, teams) {
         toTeamId: item.toTeamId ?? null,
       };
     }),
-  }));
+  })).sort((a, b) => (b.scoringPeriodId ?? 0) - (a.scoringPeriodId ?? 0) || (b.date ?? 0) - (a.date ?? 0));
 }
 
 /**
@@ -1193,13 +1208,31 @@ function normalizeTrades(rawActivity, playerIndex, teams) {
 function normalizeCurrentRosters(current, playerIndex, adviceWeek) {
   const out = new Map();
   for (const team of current?.teams ?? []) {
-    const entries = normalizeRosterEntries(team?.roster?.entries, adviceWeek, playerIndex);
+    const rawEntries = team?.roster?.entries ?? [];
+    const entries = normalizeRosterEntries(rawEntries, adviceWeek, playerIndex);
     // ESPN reports actual points for a week that has not happened as 0, which
     // would read as "everyone scored nothing". Only the projection is
-    // meaningful here, so drop the actual.
+    // meaningful here, so the actual is kept only once his game has started.
     out.set(
       team.id,
-      entries.map(({ points, ...rest }) => ({ ...rest, projected: rest.projected ?? 0 }))
+      entries.map(({ points, ...rest }, i) => {
+        // Rostered / started across all ESPN leagues — the "90% Rost | 56%
+        // Start" line on ESPN's own roster page. Current rosters only; the
+        // weekly box scores would just carry dead weight.
+        const own = rawEntries[i]?.playerPoolEntry?.player?.ownership;
+        const pct = (v) => (Number.isFinite(v) ? Number(v.toFixed(1)) : null);
+        // Once his game kicks off ESPN locks him in place, and from then on
+        // his actual points are real — the simulation fixes both.
+        const locked = Boolean(rawEntries[i]?.playerPoolEntry?.lineupLocked);
+        return {
+          ...rest,
+          projected: rest.projected ?? 0,
+          locked,
+          points: locked ? points : null,
+          percentOwned: pct(own?.percentOwned),
+          percentStarted: pct(own?.percentStarted),
+        };
+      })
     );
   }
   return out;
@@ -2179,7 +2212,7 @@ export function computePositionalStats(teamWeeks, teamStats) {
 
 ### `scripts/lib/challenges.mjs`
 
-*545 lines*
+*598 lines*
 
 ```javascript
 /**
@@ -2268,6 +2301,17 @@ const bestStarterAt = (row, position) => {
   return list.length ? list.reduce((a, b) => (a.points >= b.points ? a : b)) : null;
 };
 
+/**
+ * Starters at the "position player" slots only: QB/RB/WR/TE plus the
+ * OP/superflex and FLEX slots. Kickers and defences are left out, because they
+ * score on a different scale and would otherwise decide any challenge that
+ * looks at a team's best or worst starter.
+ */
+const skillStarters = (row) => row.starters.filter((s) => s.position !== 'K' && s.position !== 'D/ST');
+
+/** A started player counts toward Everybody Eats at or above this many points. */
+const EATS_LINE = 15;
+
 const positionPoints = (row, position) => round2(sum(startersAt(row, position), (s) => s.points));
 
 /**
@@ -2281,7 +2325,16 @@ const positionPoints = (row, position) => round2(sum(startersAt(row, position), 
  * "18.4" means nothing next to a name and "Josh Allen, 18.4 more than his
  * projection" means everything.
  */
-const challenge = (id, label, rule, score, detail) => ({ id, label, rule, score, detail });
+const challenge = (id, label, rule, score, detail, tiebreak = null) => ({
+  id,
+  label,
+  rule,
+  score,
+  detail,
+  // Optional: decides between teams that tie on `score`, so the pot is not
+  // split. Higher wins, like `score`. Exact ties on both still split.
+  tiebreak,
+});
 
 export const CHALLENGE_DECK = [
   challenge(
@@ -2424,31 +2477,21 @@ export const CHALLENGE_DECK = [
   ),
 
   challenge(
-    'overProjection',
-    'Overachiever',
-    'Beat your own projected total by the most.',
-    (row) => {
-      const projected = sum(row.starters, (s) => s.projected ?? 0);
-      return projected > 0 ? round2(row.score - projected) : null;
-    },
-    (row) => {
-      const projected = round2(sum(row.starters, (s) => s.projected ?? 0));
-      return projected > 0 ? `${row.score} scored vs ${projected} projected` : null;
-    }
-  ),
-
-  challenge(
     'balanced',
     'No Weak Links',
-    'Smallest gap between your best and worst starter. Depth, not a hero.',
-    (row) =>
-      row.topStarter && row.worstStarter
-        ? -round2(row.topStarter.points - row.worstStarter.points)
-        : null,
-    (row) =>
-      row.topStarter && row.worstStarter
-        ? `${row.topStarter.points} high, ${row.worstStarter.points} low`
-        : null
+    'Smallest gap between your best and worst starter. Depth, not a hero. Kickers and defences do not count.',
+    (row) => {
+      const pool = skillStarters(row);
+      if (pool.length < 2) return null;
+      const points = pool.map((s) => s.points);
+      return -round2(Math.max(...points) - Math.min(...points));
+    },
+    (row) => {
+      const pool = skillStarters(row);
+      if (pool.length < 2) return null;
+      const points = pool.map((s) => s.points);
+      return `${Math.max(...points)} high, ${Math.min(...points)} low`;
+    }
   ),
 
   challenge(
@@ -2518,6 +2561,41 @@ export const CHALLENGE_DECK = [
     'Beat the highest-scoring opponent of anyone who won.',
     (row) => (row.result === 'WIN' ? row.opponentScore : null),
     (row) => `beat a ${row.opponentScore}-point opponent`
+  ),
+
+  challenge(
+    'everybodyEats',
+    'Everybody Eats',
+    'Most started players scoring 15 or more points. Depth across the whole lineup, not one hero.',
+    (row) => row.starters.filter((p) => p.points >= EATS_LINE).length,
+    (row) => {
+      const n = row.starters.filter((p) => p.points >= EATS_LINE).length;
+      return `${n} starter${n === 1 ? '' : 's'} with ${EATS_LINE}+ points`;
+    }
+  ),
+
+  challenge(
+    'paydirt',
+    'Paydirt',
+    'Most touchdowns scored by your starters (rushing, receiving and return TDs). Ties go to the lower team score.',
+    (row) => {
+      const counted = row.starters.filter((p) => p.touchdowns !== null && p.touchdowns !== undefined);
+      return counted.length ? sum(counted, (p) => p.touchdowns) : null;
+    },
+    (row) => {
+      const total = sum(row.starters, (p) => p.touchdowns ?? 0);
+      const scorers = row.starters.filter((p) => (p.touchdowns ?? 0) > 0).map((p) => `${p.name} ${p.touchdowns}`);
+      return `${total} touchdown${total === 1 ? '' : 's'}${scorers.length ? ` — ${scorers.join(', ')}` : ''}`;
+    },
+    (row) => -row.score
+  ),
+
+  challenge(
+    'soClose',
+    'So Close',
+    'Lost by the smallest margin. Only losing teams are eligible.',
+    (row) => (row.result === 'LOSS' ? row.margin : null),
+    (row) => `lost by just ${round2(Math.abs(row.margin))}`
   ),
 ];
 
@@ -2661,11 +2739,19 @@ export function computeChallenges({
       return { ...base, noWinner: true };
     }
 
-    const best = scored.reduce((a, b) => (b.value > a.value ? b : a));
+    // Break ties on the card's own tiebreak first; only teams still level after
+    // that share the pot.
+    const tbOf = (entry) => (card.tiebreak ? (card.tiebreak(entry.row, ctx) ?? 0) : 0);
+    const ranked = scored.map((entry) => ({ ...entry, tb: tbOf(entry) }));
+    const best = ranked.reduce((a, b) =>
+      b.value > a.value + 0.001 || (Math.abs(b.value - a.value) < 0.001 && b.tb > a.tb + 0.001) ? b : a
+    );
 
     // Two teams can genuinely tie — same score, same margin. Splitting the pot
     // is the only answer that does not invent a tiebreak nobody agreed to.
-    const tied = scored.filter((entry) => Math.abs(entry.value - best.value) < 0.001);
+    const tied = ranked.filter(
+      (entry) => Math.abs(entry.value - best.value) < 0.001 && Math.abs(entry.tb - best.tb) < 0.001
+    );
     const share = round2(amount / tied.length);
 
     return {
@@ -3167,7 +3253,7 @@ export function waiverTargets(freeAgents, roster, startingSlots, { minGain = 2, 
 
 ### `scripts/lib/bigboard.mjs`
 
-*446 lines*
+*466 lines*
 
 ```javascript
 /**
@@ -3404,9 +3490,15 @@ export function picksForSlot(slot, teams, rounds) {
 /**
  * @param {object} pool  docs/data/draftpool payload (players, startingSlots, teams)
  * @param {object} [draft] analyzed draft, so picks can be attached once held
- * @param {number} [limit] how many players to publish
+ * @param {number} [limit] how many graded players to publish
+ * @param {object} [options]
+ * @param {Map} [options.owners] playerId → { teamId, teamName, managerName } for
+ *   whoever rosters the player today, so the board doubles as a player lookup
+ * @param {boolean} [options.includeUngraded] also publish pool players with no
+ *   projection (or at a position nobody starts) after the graded ones, so a
+ *   search finds everyone ESPN returned
  */
-export function buildBigBoard(pool, draft = null, limit = 250) {
+export function buildBigBoard(pool, draft = null, limit = 250, { owners = null, includeUngraded = false } = {}) {
   const all = (pool?.players ?? []).filter((p) => Number.isFinite(p.projected));
   if (!all.length) {
     return { available: false, players: [], replacement: {}, scarcity: [], rankType: pool?.rankType ?? null };
@@ -3452,6 +3544,16 @@ export function buildBigBoard(pool, draft = null, limit = 250) {
 
   const published = rankable.slice(0, limit);
 
+  // Players the value model cannot grade, kept only so they can be found.
+  const ungraded = includeUngraded
+    ? [
+        ...withVorp.filter((p) => p.vorp === null),
+        ...(pool.players ?? [])
+          .filter((p) => !Number.isFinite(p.projected))
+          .map((p) => ({ ...p, replacement: null, vorp: null })),
+      ]
+    : [];
+
   /**
    * Grades are computed WITHIN each position, not across the board.
    *
@@ -3496,9 +3598,10 @@ export function buildBigBoard(pool, draft = null, limit = 250) {
     }
   }
 
-  const players = published
+  const players = [...published, ...ungraded]
     .map((p) => {
       const pick = pickByPlayer.get(p.playerId) ?? null;
+      const owner = owners?.get(p.playerId) ?? null;
       const delta = p.valueDelta;
       const rec = consensus.get(p.playerId) ?? null;
       // Positive = the market lets him fall past where he should go.
@@ -3528,13 +3631,16 @@ export function buildBigBoard(pool, draft = null, limit = 250) {
         replacement: p.replacement,
         vorp: p.vorp,
 
-        valueRank: p.valueRank,
-        positionRank: p.positionRank,
-        tier: p.tier,
+        valueRank: p.valueRank ?? null,
+        positionRank: p.positionRank ?? null,
+        tier: p.tier ?? null,
         streamable: p.position === 'K' || p.position === 'D/ST',
         // Both measured against others at the same position.
-        valueDelta: delta,
-        grade: p.grade,
+        valueDelta: delta ?? null,
+        grade: p.grade ?? null,
+
+        // Who has him right now; null means he is a free agent.
+        rosteredBy: owner,
 
         drafted: Boolean(pick),
         pick: pick
@@ -5100,19 +5206,33 @@ export function oldestFetch(cache, ids) {
 
 ### `scripts/lib/lineupsim.mjs`
 
-*272 lines*
+*526 lines*
 
 ```javascript
 /**
- * Lineup simulation: 100 possible versions of the coming week, and the lineup
+ * Lineup simulation: 1,000 possible versions of the coming week, and the lineup
  * that holds up best across them.
  *
  * A projection is one number, but a player's week is a range — a boom-or-bust
  * receiver and a steady one can carry the same 12-point projection. So each
- * simulated week draws every rostered player's score from a normal centred on
- * his ESPN projection, with a spread fitted to how much he has actually varied
- * this season. For each draw the solver finds the best possible lineup, which
- * gives two things:
+ * simulated week draws every rostered player's score around his ESPN
+ * projection, with a spread fitted to how much he has actually varied this
+ * season. The draw is shaped like real fantasy scoring:
+ *
+ *   skewed       lognormal, not normal: most weeks land a little under the
+ *                projection and a few land far over it, and the average is
+ *                still exactly the projection. (A normal clipped at zero
+ *                quietly inflates every low-projected player.)
+ *   injuries     a Questionable player sits out some weeks entirely, a
+ *                Doubtful one most weeks (PLAY_CHANCE).
+ *   teammates    players on the same NFL team share a good or bad day
+ *                (TEAM_CORRELATION) — a stack booms and busts together, and
+ *                so does an opponent who starts your players' teammates.
+ *   locked       a player whose game has started is fixed at his actual
+ *                points and cannot be moved in or out of the lineup.
+ *
+ * For each draw the solver finds the best possible lineup, which gives two
+ * things:
  *
  *   start rate   how often each player made the best lineup — "must start",
  *                "coin flip" and "bench" at a glance
@@ -5121,11 +5241,16 @@ export function oldestFetch(cache, ids) {
  *                scored across all 100 weeks against the opponent's simulated
  *                score. The one that wins most often is recommended.
  *
+ * It also answers two "what if" questions on the same simulated weeks, so the
+ * comparison is like for like: how much each free agent worth a look would
+ * raise your chance of winning, and the same for a player stuck on IR when
+ * there is no open roster spot to activate him into.
+ *
  * Averaged over many weeks the projection lineup always scores the most — that
  * is what a projection is — so the simulation only departs from it when a
  * different lineup genuinely wins more often (an underdog wants upside, a
- * favourite wants a safe floor), and only by a clear margin: over 100 draws a
- * one- or two-game edge is noise, not a reason to change your lineup.
+ * favourite wants a safe floor), and only by a clear margin: a one- or
+ * two-point edge in win chance is noise, not a reason to change your lineup.
  *
  * Seeded on season, week and team, so a rebuild shows the same advice.
  */
@@ -5134,15 +5259,45 @@ import { optimalLineup } from './lineup.mjs';
 import { hashSeed, mulberry32 } from './challenges.mjs';
 import { LINEUP_SLOT } from './constants.mjs';
 
-export const DEFAULT_SIMULATIONS = 100;
+export const DEFAULT_SIMULATIONS = 1000;
+
+/**
+ * Chance a player with this status suits up. ESPN keeps projecting a
+ * Questionable player as if he plays, so the risk is modelled here instead.
+ * Assumptions, not measurements: most Questionable players do play; most
+ * Doubtful ones do not.
+ */
+export const PLAY_CHANCE = { QUESTIONABLE: 0.85, DOUBTFUL: 0.25 };
+
+/**
+ * How much of a player's week is shared with his NFL teammates (the share of
+ * variance from a common team factor). A shoot-out lifts the quarterback, his
+ * receivers and his kicker together. Defences are left out: their good days
+ * track the opposing offence, not their own.
+ */
+export const TEAM_CORRELATION = 0.2;
+const CORRELATED_POSITIONS = new Set(['QB', 'RB', 'WR', 'TE', 'K']);
+
+/** How many free agents to test as pickups at each position. */
+const PICKUPS_PER_POSITION = 2;
 
 /**
  * How much a player's week swings when there is little history to go on, as a
- * share of his projection. Assumptions, not measurements: kickers and
- * quarterbacks are the steadiest, tight ends and defences the least. With a few
- * weeks of real scores the player's own spread takes over (see SPREAD_K).
+ * share of his projection. These are only the starting point: once weeks are
+ * final, calibrateProjections() measures the real spread of this league's PPR
+ * scores around ESPN's projections and that takes over (see CALIBRATION_K).
+ * With a few weeks of a player's own scores, his spread takes over in turn
+ * (see SPREAD_K).
  */
 export const DEFAULT_CV = { QB: 0.35, RB: 0.5, WR: 0.55, TE: 0.6, K: 0.45, 'D/ST': 0.65 };
+/**
+ * Prior weight, in player-weeks, on DEFAULT_CV and on "ESPN is unbiased" when
+ * calibrating. Each position sees 70-300 player-weeks by midseason, so the
+ * measurement dominates by then; in Week 1 the defaults stand.
+ */
+export const CALIBRATION_K = { cv: 50, bias: 150 };
+/** ESPN's projections are never scaled by more than this, either way. */
+const MAX_BIAS = 0.1;
 const FALLBACK_CV = 0.55;
 /** No player's week is certain: a floor on the spread, in points. */
 const MIN_SD = 1.5;
@@ -5152,11 +5307,14 @@ const MIN_SD = 1.5;
  * much as the default. Same shrinkage idea as the playoff odds.
  */
 export const SPREAD_K = 4;
-/** Wins out of 100 a contender must add over the projection lineup to replace it. */
+/** Win chance, in points, a contender must add over the projection lineup to replace it. */
 const MIN_WIN_EDGE = 3;
+/** Win chance, in points, a pickup or IR activation must add to be worth listing. */
+const MIN_WHATIF_EDGE = 1;
 
 /** Lineup slots that do not score: bench, IR, and ESPN's extra-reserve slot. */
 const BENCH_SLOTS = new Set([20, 21, 24]);
+const IR_SLOT = 21;
 
 /** Statuses that mean the player will not play this week. */
 const WILL_NOT_PLAY = new Set(['OUT', 'INJURY_RESERVE', 'SUSPENSION']);
@@ -5175,29 +5333,106 @@ const percentile = (sorted, p) => sorted[Math.min(sorted.length - 1, Math.floor(
  * @param {object} player        { position, projected }
  * @param {number[]} history     his actual weekly scores this season (games played)
  */
-export function playerSpread(player, history = [], k = SPREAD_K) {
+export function playerSpread(player, history = [], k = SPREAD_K, cv = DEFAULT_CV) {
   const projected = Math.max(0, player.projected ?? 0);
-  const prior = Math.max(MIN_SD, (DEFAULT_CV[player.position] ?? FALLBACK_CV) * projected);
+  const prior = Math.max(MIN_SD, (cv[player.position] ?? DEFAULT_CV[player.position] ?? FALLBACK_CV) * projected);
   const n = Math.max(0, history.length - 1);
   return Math.max(MIN_SD, (n * sampleSd(history) + k * prior) / (n + k));
+}
+
+/**
+ * How ESPN's weekly projections have actually held up in this league, by
+ * position, from every rostered player-week that is final.
+ *
+ *   cv     the typical miss as a share of the projection — sqrt(sum of squared
+ *          misses / sum of squared projections) — which replaces DEFAULT_CV.
+ *          ESPN's numbers are already this league's PPR scoring, so this is the
+ *          real width of a superflex PPR week, injuries and duds included.
+ *   bias   actual points / projected points. ESPN has been close to 1.0 at
+ *          QB/RB/WR/TE and runs a little hot on kickers and defences. Matters
+ *          for win odds, and for the OP slot, where a QB and a WR compete.
+ *
+ * Both are shrunk toward the prior (CALIBRATION_K) and bias is clamped to
+ * +/- MAX_BIAS, so a hot fortnight cannot rewrite the projections. Only
+ * player-weeks ESPN projected above zero count: a zero is a bye or a player
+ * ruled out, which is not a projection miss.
+ *
+ * @param {Array<{position:string, projected:number|null, points:number}>} rows
+ * @returns {{ [position]: { n, cv, bias } }}
+ */
+export function calibrateProjections(rows, k = CALIBRATION_K) {
+  const acc = new Map();
+  for (const r of rows ?? []) {
+    if (!r || !(r.projected > 0) || !Number.isFinite(r.points)) continue;
+    const a = acc.get(r.position) ?? { n: 0, proj: 0, pts: 0, miss2: 0, proj2: 0 };
+    a.n += 1;
+    a.proj += r.projected;
+    a.pts += r.points;
+    a.miss2 += (r.points - r.projected) ** 2;
+    a.proj2 += r.projected ** 2;
+    acc.set(r.position, a);
+  }
+  const out = {};
+  for (const [position, a] of acc) {
+    const prior = DEFAULT_CV[position] ?? FALLBACK_CV;
+    const measured = Math.sqrt(a.miss2 / a.proj2);
+    const cv = (a.n * measured + k.cv * prior) / (a.n + k.cv);
+    const rawBias = (a.n * (a.pts / a.proj) + k.bias) / (a.n + k.bias);
+    const bias = Math.min(1 + MAX_BIAS, Math.max(1 - MAX_BIAS, rawBias));
+    out[position] = { n: a.n, cv: Number(cv.toFixed(3)), bias: Number(bias.toFixed(3)) };
+  }
+  return out;
 }
 
 const lineupKey = (lineup) => lineup.map((p) => p.playerId).sort((a, b) => a - b).join(',');
 
 /**
+ * Lognormal parameters with the given mean and SD. Fantasy scores are skewed —
+ * a floor near zero, a long tail of big weeks — and a lognormal has exactly
+ * that shape while keeping the average at the projection.
+ */
+export function lognormalParams(mu, sd) {
+  if (!(mu > 0) || !(sd > 0)) return null;
+  const s2 = Math.log(1 + (sd / mu) ** 2);
+  return { m: Math.log(mu) - s2 / 2, s: Math.sqrt(s2) };
+}
+
+/**
+ * Which players a lineup may use this week.
+ *
+ * A player in an IR slot can only be started once he is moved back to the
+ * active roster, which needs an open roster spot. When the active roster is
+ * full, starting him would mean dropping somebody — so he is left out of the
+ * lineup and offered separately as an "activate from IR" option instead.
+ */
+function irRoomFor(list, startingSlots, benchSlots) {
+  if (!Number.isFinite(benchSlots)) return true; // unknown: assume room, as before
+  const starters = startingSlots.reduce((a, s) => a + s.count, 0);
+  const active = list.filter((p) => p.slotId !== IR_SLOT).length;
+  return active < starters + benchSlots;
+}
+
+/**
  * @param {object}   input
- * @param {Array}    input.roster          current roster: { playerId, name, position, projected, slotId, injuryStatus }
+ * @param {Array}    input.roster          current roster: { playerId, name, position, proTeam, projected,
+ *                                         slotId, injuryStatus, locked?, points? }
  * @param {Array}    input.startingSlots   [{ slotId, count }]
+ * @param {number}   [input.benchSlots]    bench size, for whether an IR player can be activated
  * @param {Array}    [input.opponentRoster] the opponent's roster, same shape, if known
+ * @param {Array}    [input.freeAgents]    pickup candidates: { playerId, name, position, proTeam, projected, ... }
  * @param {Map}      [input.history]       playerId -> weekly scores this season
+ * @param {object}   [input.calibration]   calibrateProjections() output; none = ESPN as-is
  * @param {number}   [input.simulations]
  * @param {string}   [input.seed]
  */
 export function simulateLineup({
   roster,
   startingSlots,
+  benchSlots = undefined,
   opponentRoster = null,
+  freeAgents = [],
   history = new Map(),
+  calibration = {},
   simulations = DEFAULT_SIMULATIONS,
   seed = 'roe-lineup',
 }) {
@@ -5207,44 +5442,114 @@ export function simulateLineup({
   const rand = mulberry32(hashSeed(seed));
   const normal = () => Math.sqrt(-2 * Math.log(1 - rand())) * Math.cos(2 * Math.PI * rand());
 
-  const model = (list) => list.map((p) => {
+  const cvs = Object.fromEntries(Object.entries(calibration).map(([pos, c]) => [pos, c.cv]));
+  const model = (list, { irRoom = true } = {}) => list.map((p) => {
+    // Once his game has kicked off, a player's score is what he has actually
+    // put up and his lineup spot is fixed either way.
+    const locked = Boolean(p.locked);
     // A zero projection is ESPN saying he is not playing — usually a bye.
-    const out = WILL_NOT_PLAY.has(p.injuryStatus) || p.projected <= 0;
+    const out = !locked && (WILL_NOT_PLAY.has(p.injuryStatus) || p.projected <= 0);
+    // What the page shows: ESPN's projection, or his actual points once locked.
+    const shown = locked ? Number(p.points ?? 0) : out ? 0 : Math.max(0, p.projected);
+    // What the simulation centres on: ESPN's projection, corrected for how
+    // ESPN has run at his position this season.
+    const mu = locked || out ? shown : shown * (calibration[p.position]?.bias ?? 1);
+    const sd = locked || out ? 0 : playerSpread({ ...p, projected: mu }, history.get(p.playerId) ?? [], SPREAD_K, cvs);
+    const playChance = locked || out ? 1 : PLAY_CHANCE[p.injuryStatus] ?? 1;
     return {
       ...p,
+      locked,
       out,
-      mu: out ? 0 : Math.max(0, p.projected),
-      sd: out ? 0 : playerSpread(p, history.get(p.playerId) ?? []),
+      shown,
+      mu,
+      sd,
+      playChance,
+      // What he is worth on average, injury risk included.
+      ev: mu * playChance,
+      logn: p.position === 'D/ST' ? null : lognormalParams(mu, sd),
+      // Starting him needs a free roster spot, or his game has already begun.
+      usable: !(locked && BENCH_SLOTS.has(p.slotId)) && (p.slotId !== IR_SLOT || irRoom),
     };
   });
-  // A defence can finish below zero; nobody else realistically does.
-  const draw = (p) => (p.out ? 0 : Math.max(p.position === 'D/ST' ? -5 : 0, p.mu + p.sd * normal()));
 
-  const mine = model(eligible);
-  const theirs = opponentRoster ? model(opponentRoster.filter((p) => p && Number.isFinite(p.projected))) : null;
+  /** One player's score in one simulated week, given that week's team factors. */
+  const draw = (p, teamShock) => {
+    if (p.out) return 0;
+    if (p.locked) return p.mu;
+    if (p.playChance < 1 && rand() >= p.playChance) return 0;
+    // A defence can finish below zero; its range is roughly symmetric.
+    if (!p.logn) return Math.max(-5, p.mu + p.sd * normal());
+    const shared = CORRELATED_POSITIONS.has(p.position) && p.proTeam && p.proTeam !== 'FA'
+      ? teamShock(p.proTeam) : null;
+    const z = shared === null
+      ? normal()
+      : Math.sqrt(TEAM_CORRELATION) * shared + Math.sqrt(1 - TEAM_CORRELATION) * normal();
+    return Math.exp(p.logn.m + p.logn.s * z);
+  };
+
+  /**
+   * The best lineup by `value`, keeping locked players where they are: a
+   * locked starter holds his slot, a locked bench player cannot come in.
+   */
+  const solve = (list, value) => {
+    const pinned = list.filter((p) => p.locked && !BENCH_SLOTS.has(p.slotId));
+    const slots = startingSlots
+      .map((s) => ({ ...s, count: s.count - pinned.filter((p) => p.slotId === s.slotId).length }))
+      .filter((s) => s.count > 0);
+    const free = list.filter((p) => p.usable && !p.locked);
+    const rest = optimalLineup(free.map((p) => ({ ...p, points: value(p) })), slots).lineup;
+    return [...pinned, ...rest];
+  };
+
+  const roomMine = irRoomFor(eligible, startingSlots, benchSlots);
+  const mine = model(eligible, { irRoom: roomMine });
+  const theirList = opponentRoster ? opponentRoster.filter((p) => p && Number.isFinite(p.projected)) : null;
+  const theirs = theirList?.length
+    ? model(theirList, { irRoom: irRoomFor(theirList, startingSlots, benchSlots) })
+    : null;
+
+  const rosterIds = new Set(mine.map((p) => p.playerId));
+  // The best few free agents at each position: a waiver QB can matter as much
+  // as a waiver receiver in superflex, so the pool is not just the top overall.
+  const perPosition = new Map();
+  for (const p of [...(freeAgents ?? [])].sort((a, b) => (b?.projected ?? 0) - (a?.projected ?? 0))) {
+    if (!p || !Number.isFinite(p.projected) || p.projected <= 0 || rosterIds.has(p.playerId)) continue;
+    if (WILL_NOT_PLAY.has(p.injuryStatus)) continue;
+    const list = perPosition.get(p.position) ?? [];
+    if (list.length < PICKUPS_PER_POSITION) perPosition.set(p.position, [...list, p]);
+  }
+  const pickupPool = model([...perPosition.values()].flat().map((p) => ({ ...p, slotId: 20, locked: false })));
+  // IR players who would play if there were room for them.
+  const irStuck = roomMine ? [] : mine.filter((p) => p.slotId === IR_SLOT && !p.out && !p.locked);
 
   // The opponent is assumed to start their best lineup on projections.
-  const theirLineup = theirs?.length
-    ? optimalLineup(theirs.map((p) => ({ ...p, points: p.mu })), startingSlots).lineup.map((p) => p.playerId)
-    : null;
+  const theirLineup = theirs ? solve(theirs, (p) => p.ev).map((p) => p.playerId) : null;
   const theirIndex = theirs ? new Map(theirs.map((p) => [p.playerId, p])) : null;
 
-  // The projection lineup: best on the mean of every player.
-  const projection = optimalLineup(mine.map((p) => ({ ...p, points: p.mu })), startingSlots).lineup;
+  // The projection lineup: best on each player's average, injury risk included.
+  const projection = solve(mine, (p) => p.ev);
 
   const draws = [];
   const opponentScores = [];
   const timesOptimal = new Map();
   const startCount = new Map(mine.map((p) => [p.playerId, 0]));
+  const extras = [...pickupPool, ...irStuck.filter((p) => !pickupPool.includes(p))];
 
   for (let s = 0; s < simulations; s += 1) {
-    const points = new Map(mine.map((p) => [p.playerId, draw(p)]));
+    // One shared factor per NFL team per week, for both rosters alike.
+    const shocks = new Map();
+    const teamShock = (team) => {
+      if (!shocks.has(team)) shocks.set(team, normal());
+      return shocks.get(team);
+    };
+    const points = new Map(mine.map((p) => [p.playerId, draw(p, teamShock)]));
+    for (const p of extras) if (!points.has(p.playerId)) points.set(p.playerId, draw(p, teamShock));
     draws.push(points);
     if (theirLineup) {
-      opponentScores.push(theirLineup.reduce((a, id) => a + draw(theirIndex.get(id)), 0));
+      opponentScores.push(theirLineup.reduce((a, id) => a + draw(theirIndex.get(id), teamShock), 0));
     }
 
-    const best = optimalLineup(mine.map((p) => ({ ...p, points: points.get(p.playerId) })), startingSlots).lineup;
+    const best = solve(mine, (p) => points.get(p.playerId));
     const key = lineupKey(best);
     timesOptimal.set(key, (timesOptimal.get(key) ?? 0) + 1);
     for (const p of best) startCount.set(p.playerId, startCount.get(p.playerId) + 1);
@@ -5274,7 +5579,7 @@ export function simulateLineup({
   const projectionStats = evaluate(projection);
 
   // The contenders. Each is the solver's answer to a different question, set
-  // before looking at who wins the 100 weeks — so the pick is not simply
+  // before looking at who wins the simulated weeks — so the pick is not simply
   // whichever lineup got lucky in these particular draws.
   //   mostStarted  the players who made the best lineup most often
   //   upside       judged at the 80th percentile of each player's range — what
@@ -5282,14 +5587,14 @@ export function simulateLineup({
   //   floor        judged at the 20th percentile — what a favourite needs,
   //                since only a bust loses it
   const Z80 = 0.8416;
-  const solveOn = (value) =>
-    optimalLineup(mine.map((p) => ({ ...p, points: value(p) })), startingSlots).lineup;
+  const solveOn = (value) => solve(mine, value);
   const contenders = [
-    ['mostStarted', solveOn((p) => startCount.get(p.playerId) + p.mu / 1000)],
-    ['upside', solveOn((p) => (p.out ? -1 : p.mu + Z80 * p.sd))],
-    ['floor', solveOn((p) => (p.out ? -1 : p.mu - Z80 * p.sd))],
+    ['mostStarted', solveOn((p) => startCount.get(p.playerId) + p.ev / 1000)],
+    ['upside', solveOn((p) => (p.out ? -1 : p.ev + Z80 * p.sd))],
+    ['floor', solveOn((p) => (p.out ? -1 : p.ev - Z80 * p.sd * (2 - p.playChance)))],
   ];
 
+  const minEdge = (MIN_WIN_EDGE / 100) * simulations;
   let pick = { key: projectionKey, strategy: 'projection', lineup: projection, stats: projectionStats };
   const alternatives = [];
   const seen = new Set([projectionKey]);
@@ -5300,10 +5605,10 @@ export function simulateLineup({
     const stats = evaluate(lineup);
     alternatives.push({ strategy, ...stats });
     // Only a lineup that beats the projection by a clear margin replaces it:
-    // over 100 draws, one or two extra wins is noise. Without an opponent
-    // there is nothing to win, and on average the projection always scores
-    // the most, so it stands.
-    if (theirLineup && stats.wins - projectionStats.wins >= MIN_WIN_EDGE * (simulations / 100) && stats.wins > pick.stats.wins) {
+    // a point or two of win chance is noise. Without an opponent there is
+    // nothing to win, and on average the projection always scores the most,
+    // so it stands.
+    if (theirLineup && stats.wins - projectionStats.wins >= minEdge && stats.wins > pick.stats.wins) {
       pick = { key, strategy, lineup, stats };
     }
   }
@@ -5322,8 +5627,44 @@ export function simulateLineup({
     position: p.position,
     slotId: p.slotId,
     slot: LINEUP_SLOT[p.slotId] ?? String(p.slotId),
-    projected: round1(p.mu),
+    projected: round1(p.shown),
   });
+
+  /**
+   * "What if he were on your active roster?" — the best projection lineup with
+   * him added, scored on the same simulated weeks as the pick. Returns null
+   * when he would not even start.
+   */
+  const whatIf = (extra) => {
+    const onRoster = rosterIds.has(extra.playerId);
+    const list = onRoster
+      ? mine.map((p) => (p.playerId === extra.playerId ? { ...p, usable: true } : p))
+      : [...mine, { ...extra, usable: true }];
+    const lineup = solve(list, (p) => p.ev);
+    if (!lineup.some((p) => p.playerId === extra.playerId)) return null;
+    const stats = evaluate(lineup);
+    const ids = new Set(lineup.map((p) => p.playerId));
+    const replaces = pick.lineup.filter((p) => !ids.has(p.playerId));
+    const winGain = theirLineup ? round1(((stats.wins - pick.stats.wins) / simulations) * 100) : null;
+    const pointsGain = round1(stats.mean - pick.stats.mean);
+    if (theirLineup ? winGain < MIN_WHATIF_EDGE : pointsGain < 1) return null;
+    return {
+      playerId: extra.playerId,
+      name: extra.name,
+      position: extra.position,
+      proTeam: extra.proTeam ?? null,
+      projected: round1(extra.shown),
+      injuryStatus: extra.injuryStatus ?? null,
+      percentOwned: extra.percentOwned ?? null,
+      winPct: stats.winPct,
+      winGain,
+      pointsGain,
+      replaces: replaces.map(describe),
+    };
+  };
+  const byGain = (a, b) => (b.winGain ?? b.pointsGain) - (a.winGain ?? a.pointsGain);
+  const pickups = pickupPool.map(whatIf).filter(Boolean).sort(byGain);
+  const irActivations = irStuck.map(whatIf).filter(Boolean).sort(byGain);
 
   const opponentSorted = [...opponentScores].sort((a, b) => a - b);
 
@@ -5338,7 +5679,7 @@ export function simulateLineup({
       ...pick.stats,
     },
     projectionLineup: { timesOptimal: timesOptimal.get(projectionKey) ?? 0, ...projectionStats },
-    // The other lineups tried, and how each did across the same 100 weeks.
+    // The other lineups tried, and how each did across the same weeks.
     alternatives,
     // The lineup currently set in ESPN, and the moves from it to the pick.
     currentLineup: currentStats,
@@ -5352,6 +5693,10 @@ export function simulateLineup({
       start: pick.lineup.filter((p) => !projectionIds.has(p.playerId)).map(describe),
       sit: projection.filter((p) => !pickIds.has(p.playerId)).map(describe),
     },
+    // Free agents who would start for you and raise your chance of winning.
+    pickups,
+    // IR players who would start, if a roster spot were freed to activate them.
+    irActivations,
     opponent: theirLineup
       ? {
           mean: round1(mean(opponentScores)),
@@ -5364,15 +5709,30 @@ export function simulateLineup({
         playerId: p.playerId,
         name: p.name,
         position: p.position,
-        projected: round1(p.mu),
+        projected: round1(p.shown),
         spread: round1(p.sd),
         out: p.out,
+        locked: p.locked,
+        playChance: p.playChance,
+        // The middle 80% of his simulated weeks: 10th to 90th percentile.
+        low: round1(lowHigh(p).low),
+        high: round1(lowHigh(p).high),
         startPct: Math.round((startCount.get(p.playerId) / simulations) * 100),
         recommended: pickIds.has(p.playerId),
       }))
       .sort((a, b) => b.startPct - a.startPct || b.projected - a.projected),
     distinctOptimalLineups: timesOptimal.size,
+    // The per-position correction the simulation ran on, for the glossary.
+    calibration,
   };
+}
+
+/** A player's 10th and 90th percentile week, from his own distribution. */
+function lowHigh(p) {
+  const Z90 = 1.2816;
+  if (p.out || p.locked || p.sd === 0) return { low: p.mu, high: p.mu };
+  if (!p.logn) return { low: Math.max(-5, p.mu - Z90 * p.sd), high: p.mu + Z90 * p.sd };
+  return { low: Math.exp(p.logn.m - Z90 * p.logn.s), high: Math.exp(p.logn.m + Z90 * p.logn.s) };
 }
 ```
 
@@ -5543,7 +5903,7 @@ main().catch((error) => {
 
 ### `scripts/fetch.mjs`
 
-*343 lines*
+*374 lines*
 
 ```javascript
 /**
@@ -5653,16 +6013,47 @@ async function fetchSeason(client, season) {
   // ---- Transactions ------------------------------------------------------
   // Only the filter values below are accepted; adding TRADE_* or DRAFT to the
   // list gets the whole request rejected with a bare 400.
-  try {
-    const transactions = await client.getView(season, ['mTransactions2'], {
-      filter: { transactions: { filterType: { value: ['FREEAGENT', 'WAIVER', 'WAIVER_ERROR'] } } },
-    });
-    await writeJson(path.join(dir, 'transactions.json'), transactions);
-    log(`  transactions: ${transactions.transactions?.length ?? 0}`);
-  } catch (error) {
-    log(`  transactions: unavailable (${error.message})`);
+  //
+  // mTransactions2 only returns ONE scoring period: the one named by
+  // scoringPeriodId, or the current week when it is left off. Asking once
+  // therefore showed only this week's moves, and every move wore this week's
+  // number. Ask for every week from the first to the current one and merge,
+  // so the whole season is kept and each move keeps the week ESPN filed it
+  // under. The range grows on its own as the season moves on.
+  const firstPeriod = status.firstScoringPeriod ?? 1;
+  const allTransactions = new Map();
+  let weeksFetched = 0;
+  const failedWeeks = new Set();
+  for (let week = firstPeriod; week <= lastPlayed; week += 1) {
+    try {
+      const page = await client.getView(season, ['mTransactions2'], {
+        params: { scoringPeriodId: week },
+        filter: { transactions: { filterType: { value: ['FREEAGENT', 'WAIVER', 'WAIVER_ERROR'] } } },
+      });
+      weeksFetched += 1;
+      for (const tx of page.transactions ?? []) {
+        // The period asked for is the authority when ESPN leaves it off.
+        allTransactions.set(tx.id, { ...tx, scoringPeriodId: tx.scoringPeriodId ?? week });
+      }
+    } catch (error) {
+      failedWeeks.add(week);
+      log(`  transactions week ${week}: unavailable (${error.message})`);
+    }
+    await sleep(POLITE_DELAY_MS);
   }
-  await sleep(POLITE_DELAY_MS);
+  // A week that failed this run keeps what the last good run saved for it,
+  // and a run where every request failed leaves the file alone entirely.
+  const txFile = path.join(dir, 'transactions.json');
+  if (failedWeeks.size) {
+    const previous = (await readJsonIfExists(txFile))?.transactions ?? [];
+    for (const tx of previous) {
+      if (failedWeeks.has(tx.scoringPeriodId) && !allTransactions.has(tx.id)) allTransactions.set(tx.id, tx);
+    }
+  }
+  if (weeksFetched > 0) {
+    await writeJson(txFile, { transactions: [...allTransactions.values()] });
+  }
+  log(`  transactions: ${allTransactions.size} across weeks ${firstPeriod}–${lastPlayed}`);
 
   // ---- Activity feed (where trade detail actually lives) -----------------
   try {
@@ -5760,7 +6151,7 @@ async function fetchSeason(client, season) {
   // a board built with the wrong rankType is one nobody here would draft from.
   try {
     const rankType = core.settings?.rosterSettings?.lineupSlotCounts?.['7'] > 0 ? 'SUPERFLEX' : 'PPR';
-    const pool = await client.getDraftPool(season, { limit: 400, rankType });
+    const pool = await client.getDraftPool(season, { limit: 600, rankType });
     await writeJson(path.join(dir, 'draftpool.json'), { rankType, ...pool });
     log(`  draft pool: ${pool.players?.length ?? 0} players (${rankType} ranks)`);
   } catch (error) {
@@ -5892,7 +6283,7 @@ main().catch((error) => {
 
 ### `scripts/build.mjs`
 
-*664 lines*
+*714 lines*
 
 ```javascript
 /**
@@ -5922,7 +6313,7 @@ import {
   computePositionalStats,
 } from './lib/analytics.mjs';
 import { analyzeDraft, buildPlayerWeekPoints } from './lib/draft.mjs';
-import { simulateLineup } from './lib/lineupsim.mjs';
+import { simulateLineup, calibrateProjections } from './lib/lineupsim.mjs';
 import { computeLedger, computePayouts, challengePayout, splitPot, mergeMoneyConfig } from './lib/money.mjs';
 import { buildChallengeSchedule, computeChallenges, challengeLeaderboard } from './lib/challenges.mjs';
 import { sanitizeTeamLogo } from './lib/images.mjs';
@@ -5931,7 +6322,7 @@ import { recommendLineup, coachingReport, waiverTargets } from './lib/advisor.mj
 import { buildBigBoard } from './lib/bigboard.mjs';
 import { computePlayoffOdds } from './lib/odds.mjs';
 import { attributeTrades } from './lib/trades.mjs';
-import { buildRecaps } from './lib/recap.mjs';
+import { buildRecaps, completedWeeks } from './lib/recap.mjs';
 import { buildHeadToHead, headToHeadFor, managerIdOf, publicManagerKey } from './lib/h2h.mjs';
 
 const ROOT = projectRoot();
@@ -6075,11 +6466,16 @@ function buildChallenges(season, teamStats, teamWeeks, moneyConfig) {
   const pot = Math.max(0, challengePayout(payouts, moneyConfig));
   const perWeek = new Map(splitPot(pot, weekNumbers).map((w) => [w.week, w.amount]));
 
+  // Only final weeks are scored. A week counts as "played" from the first
+  // kickoff, and scoring it then would pay out on Thursday night's partial box
+  // score (and reveal next week's card early). It is shown as live until every
+  // matchup has a winner, the same rule the recap uses.
+  const settled = new Set(completedWeeks(season));
   const resolved = computeChallenges({
     schedule,
-    teamWeeks,
+    teamWeeks: teamWeeks.filter((r) => settled.has(r.week)),
     teamStats,
-    weeksPlayed: season.status.weeksPlayed,
+    weeksPlayed: Math.max(0, ...settled),
     payouts: perWeek,
   });
 
@@ -6114,6 +6510,16 @@ function buildTeamDetail(season, teamStats, teamWeeks, standings, draft) {
   for (const [playerId, weeks] of buildPlayerWeekPoints(season)) {
     history.set(playerId, [...weeks.values()].map((w) => w.points).filter((pts) => pts !== 0));
   }
+  // How ESPN's projections have held up in this league's superflex PPR
+  // scoring, by position, over every final week. Steers the lineup simulation.
+  const final = new Set(completedWeeks(season));
+  const calibration = calibrateProjections(
+    season.weeks
+      .filter((w) => final.has(w.week))
+      .flatMap((w) => w.matchups.flatMap((m) => [m.home, m.away]))
+      .flatMap((side) => side?.roster ?? [])
+  );
+
   // Who each team plays in the week being advised on, from the full schedule.
   const opponentOf = new Map();
   for (const g of season.schedule ?? []) {
@@ -6147,6 +6553,8 @@ function buildTeamDetail(season, teamStats, teamWeeks, standings, draft) {
           playerId: p.playerId, name: p.name, position: p.position,
           proTeam: p.proTeam, slot: p.slot, slotId: p.slotId,
           started: p.started, projected: p.projected, injuryStatus: p.injuryStatus,
+          percentOwned: p.percentOwned ?? null, percentStarted: p.percentStarted ?? null,
+          locked: p.locked ?? false, points: p.points ?? null,
         })),
 
         lineupAdvice: recommendLineup(roster, slots),
@@ -6155,8 +6563,11 @@ function buildTeamDetail(season, teamStats, teamWeeks, standings, draft) {
           const sim = simulateLineup({
             roster,
             startingSlots: slots,
+            benchSlots: season.league.benchSlots,
+            freeAgents: season.freeAgents,
             opponentRoster: opponentId !== null ? season.currentRosters?.[opponentId] ?? null : null,
             history,
+            calibration,
             seed: `roe-lineup:${season.league.season}:${season.adviceWeek}:${team.id}`,
           });
           if (!sim.available) return sim;
@@ -6442,9 +6853,39 @@ async function main() {
       };
       await writeJson(path.join(DERIVED, `draftpool-${b.year}.json`), poolPayload);
 
-      // The big board: same players, graded against replacement level and
-      // annotated with who drafted them once the draft has happened.
-      const board = buildBigBoard(poolPayload, b.draft, 250);
+      // The big board: every player in the pool, graded against replacement
+      // level and annotated with whoever rosters him today, so it works as a
+      // season-long player lookup rather than only a draft tool.
+      const teamById = new Map(b.season.teams.map((t) => [t.id, t]));
+      const owners = new Map();
+      // Rostered players ESPN no longer ranks (a long-term injury, say) are
+      // not in the pool at all, but someone searching a roster expects them.
+      const inPool = new Set(poolPayload.players.map((p) => p.playerId));
+      const rosteredOutsidePool = [];
+      for (const [teamId, roster] of Object.entries(b.season.currentRosters ?? {})) {
+        const team = teamById.get(Number(teamId));
+        for (const entry of roster) {
+          owners.set(entry.playerId, {
+            teamId: Number(teamId),
+            teamName: team?.name ?? `Team ${teamId}`,
+            managerName: team?.managerName ?? null,
+          });
+          if (!inPool.has(entry.playerId)) {
+            rosteredOutsidePool.push({
+              playerId: entry.playerId, name: entry.name, position: entry.position,
+              proTeam: entry.proTeam, injuryStatus: entry.injuryStatus,
+              rank: null, pprRank: null, adp: null, auctionValue: null,
+              projected: null, lastSeason: null,
+            });
+          }
+        }
+      }
+      const board = buildBigBoard(
+        { ...poolPayload, players: [...poolPayload.players, ...rosteredOutsidePool] },
+        b.draft,
+        Infinity,
+        { owners, includeUngraded: true }
+      );
       await writeJson(path.join(DERIVED, `bigboard-${b.year}.json`), {
         year: b.year,
         draftHeld: b.draft.held,
@@ -6861,7 +7302,7 @@ console.log();
 
 ### `scripts/fixtures.mjs`
 
-*713 lines*
+*714 lines*
 
 ```javascript
 /**
@@ -7325,7 +7766,8 @@ for (let i = 0; i < 40; i += 1) {
     type: rand() < 0.5 ? 'WAIVER' : 'FREEAGENT',
     status: 'EXECUTED',
     teamId,
-    scoringPeriodId: 1 + Math.floor(rand() * REGULAR_WEEKS),
+    // One move a day from Week 1's Thursday, so the week matches the date.
+    scoringPeriodId: Math.min(REGULAR_WEEKS, 1 + Math.floor(i / 7)),
     bidAmount: Math.floor(rand() * 30),
     proposedDate: Date.UTC(2026, 8, 10 + i),
     executionDate: Date.UTC(2026, 8, 11 + i),
@@ -7654,6 +8096,10 @@ Dependency-free front end. Reads pre-computed JSON from docs/data/ and renders i
   <p class="visually-hidden" role="status" aria-live="polite" id="route-status"></p>
 
   <main id="main" tabindex="-1">
+    <p class="update-notice wrap" id="update-notice" role="status" hidden>
+      New league data is in.
+      <button type="button" class="theme-toggle" id="update-reload">Reload</button>
+    </p>
     <div class="wrap">
       <div id="boot" class="loading">Loading league data…</div>
 
@@ -7705,13 +8151,10 @@ Dependency-free front end. Reads pre-computed JSON from docs/data/ and renders i
       <section class="view" id="view-board" hidden aria-labelledby="h-board">
         <h2 id="h-board">Big Board</h2>
         <p class="view__intro">
-          The top 250 players, ranked by value over <strong>replacement level</strong> — the
-          worst player at each position you'd still start in this league. Raw projections can't
-          be compared across positions; 300 points is elite for a tight end and ordinary for a
-          quarterback.
-          <strong>Grades compare a player only to others at his own position</strong>, so an A
-          means "good value for a quarterback", not "quarterbacks are good value". The
-          league-wide positional story is told once, below.
+          Every player ESPN ranks, with who rosters them now. Search by player, NFL team or
+          manager, or filter to free agents. The order is value over <strong>replacement
+          level</strong>: how far a player projects above the worst starter at his position in
+          this league, which is what makes a tight end and a quarterback comparable.
         </p>
         <div id="board-body"></div>
       </section>
@@ -7766,7 +8209,7 @@ Dependency-free front end. Reads pre-computed JSON from docs/data/ and renders i
   <footer class="site-footer">
     <div class="wrap">
       <p>
-        Data from ESPN, updated every 3 hours. Last built:
+        Data from ESPN, updated every 30 minutes. Last built:
         <time id="generated-at">—</time>.
       </p>
       <p id="fixture-warning" hidden>
@@ -7778,7 +8221,6 @@ Dependency-free front end. Reads pre-computed JSON from docs/data/ and renders i
 
   <!-- Populated on demand by the Big Board's "Beer sheet" button, then
        printed. Empty and invisible otherwise. -->
-  <div id="beer-sheet" aria-hidden="true"></div>
 
   <script src="assets/app.js" type="module"></script>
 </body>
@@ -7787,7 +8229,7 @@ Dependency-free front end. Reads pre-computed JSON from docs/data/ and renders i
 
 ### `docs/assets/style.css`
 
-*942 lines*
+*948 lines*
 
 ```css
 /* ==========================================================================
@@ -8030,6 +8472,13 @@ a:hover { text-decoration-thickness: 2px; }
   transition: border-color 0.15s ease, background 0.15s ease;
 }
 .theme-toggle:hover { border-color: var(--border-strong); background: var(--bg-hover); }
+.update-notice {
+  display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+  margin-top: 1rem; padding-top: 0.6rem; padding-bottom: 0.6rem;
+  background: var(--accent-wash); border: 1px solid var(--accent); border-radius: var(--radius-sm);
+}
+.update-notice[hidden] { display: none; }
+.tx-view[aria-pressed="true"], .tx-dir[aria-pressed="true"] { background: var(--accent-wash); border-color: var(--accent); color: var(--text); font-weight: 600; }
 
 /* --- Nav ----------------------------------------------------------------- */
 .site-nav { margin-top: 0.9rem; }
@@ -8228,11 +8677,63 @@ tr.playoff-cut td, tr.playoff-cut th { border-bottom: 2px solid var(--accent); }
 .this-week__odds { margin: 0.2rem 0 0.1rem; font-size: 1.05rem; }
 .this-week__big { font-size: 2.2rem; font-weight: 750; margin-right: 0.35rem; font-variant-numeric: tabular-nums; }
 .this-week .fold { margin: 1rem 0 0; background: var(--bg-sunken); }
-.moves { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem 1.5rem; margin: 0.4rem 0 0.6rem; }
-.moves h4 { margin: 0 0 0.3rem; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
-.moves ul { margin: 0; padding-left: 1.1rem; }
-.moves small { color: var(--text-dim); }
-@media (max-width: 520px) { .moves { grid-template-columns: 1fr; } }
+
+.this-week__lead { margin: 0.8rem 0 0.4rem; }
+.swaps { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.4rem; }
+.swaps li { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+
+/* My-team roster, laid out like ESPN's roster page. */
+.ros { padding: 0; overflow: hidden; margin-bottom: 1.5rem; }
+.ros-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 0.7rem 1rem; background: var(--bg-sunken);
+  border-block: 1px solid var(--border);
+}
+.ros-head:first-child { border-top: 0; }
+.ros-head h3 { margin: 0; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.06em; }
+.ros-head span { font-weight: 700; font-variant-numeric: tabular-nums; }
+.ros-head small, .ros-proj small { color: var(--text-dim); font-weight: 400; font-size: 0.72rem; }
+.ros-list { list-style: none; margin: 0; padding: 0; }
+.ros-row {
+  display: grid; grid-template-columns: 3.6rem 44px 1fr auto;
+  align-items: center; gap: 0.75rem;
+  padding: 0.65rem 1rem; border-bottom: 1px solid var(--border);
+}
+.ros-list li:last-child { border-bottom: 0; }
+.ros-slot {
+  display: grid; place-items: center; block-size: 1.9rem;
+  border: 1px solid var(--accent); border-radius: 999px;
+  color: var(--accent); font-size: 0.75rem; font-weight: 700;
+}
+.ros-slot--ir { border-color: var(--bad); color: var(--bad); }
+.ros-face { position: relative; }
+.ros-tag {
+  position: absolute; inset-inline: -2px; bottom: -4px; text-align: center;
+  background: var(--bad); color: #fff; border-radius: 4px;
+  font-size: 0.62rem; font-weight: 800; line-height: 1.3;
+}
+.ros-info { display: grid; gap: 0.1rem; min-inline-size: 0; font-size: 0.82rem; color: var(--text-muted); }
+.ros-name { font-size: 1rem; font-weight: 650; color: var(--text); }
+.ros-name small { color: var(--text-dim); font-weight: 500; font-size: 0.75rem; margin-left: 0.25rem; }
+.ros-game:empty { display: none; }
+.ros-bye, .ros-live { color: var(--bad); font-weight: 700; }
+.ros-call { margin-top: 0.15rem; }
+.ros-call strong {
+  display: inline-block; min-inline-size: 2.6rem; text-align: center;
+  padding: 0 0.35rem; margin-right: 0.3rem; border-radius: 4px;
+  font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em;
+  border: 1px solid currentColor;
+}
+.ros-call--start strong { color: var(--good); background: var(--good-dim); }
+.ros-call--sit strong { color: var(--bad); background: var(--bad-dim); }
+.ros-call--close strong { color: var(--warn); background: var(--warn-dim); }
+.ros-call--neutral strong { color: var(--text-muted); background: var(--bg-sunken); }
+.ros-proj { display: grid; justify-items: end; font-variant-numeric: tabular-nums; }
+.ros-proj__num { font-size: 1.05rem; font-weight: 650; }
+.ros-note { padding: 0.6rem 1rem; margin: 0; border-top: 1px solid var(--border); }
+@media (max-width: 520px) {
+  .ros-row { grid-template-columns: 3.1rem 40px 1fr auto; gap: 0.55rem; padding-inline: 0.75rem; }
+}
 
 /* --- Playoff odds ------------------------------------------------------- */
 /* One cell per seed; opacity is the probability. Playoff seeds are accent,
@@ -8525,59 +9026,6 @@ tr.playoff-cut td, tr.playoff-cut th { border-bottom: 2px solid var(--accent); }
 }
 .sort-btn:hover { color: var(--text); text-decoration: underline; }
 
-/* --- Beer sheet (printable draft cheat sheet) ----------------------------- */
-/* Built and populated on demand by printBeerSheet(); stays empty and hidden
-   the rest of the time. Fixed light-on-white regardless of the app's theme —
-   this is going on paper, and a dark background would waste a cartridge of
-   ink for nothing anyone can see once it's printed. */
-#beer-sheet {
-  display: none;
-  background: #fff;
-  color: #111;
-}
-
-body.beer-sheet-mode > *:not(#beer-sheet) { display: none !important; }
-body.beer-sheet-mode #beer-sheet { display: block; }
-
-.beer-sheet__head { margin-bottom: 1rem; }
-.beer-sheet__head h1 { font-size: 1.3rem; margin: 0 0 0.2rem; }
-.beer-sheet__head p { margin: 0.15rem 0; font-size: 0.85rem; color: #333; }
-.beer-sheet__legend { font-size: 0.78rem !important; color: #444 !important; }
-
-.beer-sheet__page { margin-bottom: 1.5rem; }
-.beer-sheet__page h2 { font-size: 1.05rem; margin: 0 0 0.4rem; }
-.beer-sheet__page table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.78rem;
-}
-.beer-sheet__page th,
-.beer-sheet__page td {
-  border: 1px solid #999;
-  padding: 0.2rem 0.4rem;
-  text-align: left;
-}
-.beer-sheet__page th.num,
-.beer-sheet__page td.num { text-align: right; }
-.beer-sheet__page tbody tr:nth-child(even) { background: #f2f2f2; }
-.beer-sheet__page tr.tier-start td { border-top: 2px solid #111; }
-.beer-sheet__page tr.is-drafted { color: #999; text-decoration: line-through; }
-.beer-sheet__page tr.is-drafted .beer-sheet__drafted { text-decoration: none; }
-.beer-sheet__team { color: #555; font-size: 0.9em; }
-.beer-sheet__box {
-  display: inline-block;
-  width: 0.8em;
-  height: 0.8em;
-  border: 1px solid #333;
-}
-
-@media print {
-  @page { margin: 1.2cm; }
-  .beer-sheet__page { page-break-inside: auto; }
-  .beer-sheet__page + .beer-sheet__page { page-break-before: always; }
-  .beer-sheet__page tr { page-break-inside: avoid; }
-}
-
 /* --- Charts ---------------------------------------------------------------
    Hand-rolled SVG, no library. See the note at the top of this file on why
    the line chart alone gets a categorical (--cat-*) palette. */
@@ -8735,11 +9183,11 @@ body.beer-sheet-mode #beer-sheet { display: block; }
 
 ### `docs/assets/app.js`
 
-*3060 lines*
+*2958 lines*
 
 ```javascript
 import { createMockDraft, advanceToUser, makePick, gradeDraft, rosterNeeds } from './mock.js';
-import { fetchScoreboard, attachRoster, hasLiveGames } from './live.js';
+import { fetchScoreboard, attachRoster, hasLiveGames, normalizeTeam } from './live.js';
 import { pointsLineChart, pointDiffChart } from './charts.js';
 
 /**
@@ -8917,16 +9365,8 @@ function avatar(src, name, { variant = 'player', size = null } = {}) {
  * nothing is worse than no control.
  */
 const playerCell = (player, sub = null) => {
-  const label = esc(player?.name ?? '—');
   const tail = sub === null ? '' : `<small>${esc(sub)}</small>`;
-  const name = hasCard(player?.playerId)
-    ? `<button type="button" class="pcard-trigger"
-         data-player-id="${esc(player.playerId)}"
-         data-player-name="${esc(player.name ?? '')}"
-         data-player-pos="${esc(player.position ?? '')}"
-         data-player-team="${esc(player.proTeam ?? '')}"
-         aria-describedby="player-card" aria-expanded="false">${label}</button>`
-    : label;
+  const name = playerNameHtml(player, player?.name ?? '—');
   return `
   <span class="named">
     ${avatar(playerImage(player), player?.name, { variant: 'player' })}
@@ -9720,116 +10160,276 @@ function renderTeams() {
  * readable by anyone in the league. For a fantasy league that is arguably the
  * point; nothing here is more private than what ESPN already shows.
  */
-const STRATEGY_LABELS = {
-  projection: 'projected',
-  mostStarted: 'most-started',
-  upside: 'upside',
-  floor: 'safe-floor',
-};
+// --- My-team roster, laid out like ESPN's own roster page ------------------
 
-const playerList = (list) =>
-  list.map((p) => `<li><strong>${esc(p.name)}</strong> <small>${esc(p.position)} · ${num(p.projected, 1)} proj.</small></li>`).join('');
+/** ESPN's order for the starting slots; anything unknown sorts after. */
+const SLOT_ORDER = { QB: 0, RB: 1, 'RB/WR': 2, WR: 3, 'WR/TE': 4, TE: 5, FLEX: 6, OP: 7, 'D/ST': 8, K: 9 };
+const POS_ORDER = { QB: 0, RB: 1, WR: 2, TE: 3, 'D/ST': 4, K: 5 };
+/** ESPN labels the OP slot "SFLEX" in a superflex league. */
+const slotLabel = (slot) => (slot === 'OP' ? 'SFLEX' : slot);
+
+const OUT_STATUSES = new Set(['OUT', 'INJURY_RESERVE', 'SUSPENSION', 'IR']);
+const isHurt = (p) => p.injuryStatus && p.injuryStatus !== 'ACTIVE' && p.injuryStatus !== 'NORMAL';
+const INJURY_TAG = { QUESTIONABLE: 'Q', DOUBTFUL: 'D', OUT: 'O', INJURY_RESERVE: 'IR', SUSPENSION: 'SSPD' };
+
+/** "Amon-Ra St. Brown" → "A. St. Brown", the way ESPN fits names on a phone. */
+function shortName(name) {
+  const words = String(name ?? '').trim().split(/\s+/);
+  if (words.length < 2 || /D\/ST$/.test(name)) return name ?? '—';
+  return `${words[0][0]}. ${words.slice(1).join(' ')}`;
+}
 
 /**
- * The first thing on a team page: this week's matchup, the chance of winning,
- * and exactly which moves to make in ESPN. Built from the 100-week simulation;
- * falls back to the projection-only advice when there is no simulation.
+ * One plain-English start/sit call per player.
+ *
+ * The simulation's start rate and the moves against the current ESPN lineup
+ * are boiled down to a verdict and a few words — the working stays available
+ * in the "How the picks work" fold for anyone who wants it.
  */
-function renderThisWeek(team) {
-  const sim = team.lineupSim;
-  const week = state.teamDetail.adviceWeek;
+function startSitCalls(team) {
+  const sim = team.lineupSim?.available ? team.lineupSim : null;
+  const advice = team.lineupAdvice?.available ? team.lineupAdvice : null;
+  const moves = sim
+    ? sim.fromCurrent ?? { start: advice?.toStart ?? [], sit: advice?.toSit ?? [] }
+    : { start: advice?.toStart ?? [], sit: advice?.toSit ?? [] };
+  const recommended = new Set(
+    (sim?.recommended?.starters ?? advice?.recommended ?? []).map((p) => p.playerId)
+  );
+  const simById = new Map((sim?.players ?? []).map((p) => [p.playerId, p]));
+  const projOf = new Map(team.roster.map((p) => [p.playerId, p.projected ?? 0]));
 
-  if (!sim?.available) {
-    const advice = team.lineupAdvice;
-    if (!advice?.available) return '';
-    return `<div class="card this-week">
-      <h3>Week ${esc(week)} lineup</h3>
-      ${advice.alreadyOptimal
-        ? '<p><span class="pill pill--good">No changes needed</span> Your lineup is already the best one on projections.</p>'
-        : `<p><strong>Make these changes in ESPN</strong> (worth about ${num(advice.projectedGain, 1)} points on projections):</p>
-           <div class="moves">
-             <div><h4>Put in</h4><ul>${playerList(advice.toStart)}</ul></div>
-             <div><h4>Take out</h4><ul>${playerList(advice.toSit)}</ul></div>
-           </div>`}
-    </div>`;
+  // Pair each "put in" with the "take out" it replaces, so the reason can name
+  // the other player. Moves are listed in the same order on both sides.
+  const swapFor = new Map();
+  moves.start.forEach((p, i) => {
+    const other = moves.sit[i];
+    if (!other) return;
+    swapFor.set(p.playerId, other);
+    swapFor.set(other.playerId, p);
+  });
+  const startIds = new Set(moves.start.map((p) => p.playerId));
+  const sitIds = new Set(moves.sit.map((p) => p.playerId));
+  const hasAdvice = Boolean(sim || advice);
+  const irGain = new Map((sim?.irActivations ?? []).map((a) => [a.playerId, a]));
+
+  const calls = new Map();
+  for (const p of team.roster) {
+    const s = simById.get(p.playerId);
+    const out = s?.out || OUT_STATUSES.has(p.injuryStatus);
+    const other = swapFor.get(p.playerId);
+    const gap = other ? Math.abs((projOf.get(p.playerId) ?? 0) - (projOf.get(other.playerId) ?? 0)) : null;
+    const rate = s?.startPct ?? null;
+    // No projection and no injury: almost always a bye week.
+    const onBye = !isHurt(p) && !p.projected;
+    const outText = onBye ? 'On bye — take him out' : 'Ruled out — take him out';
+    let call;
+
+    if (!hasAdvice) call = null;
+    else if (p.locked) {
+      call = { tone: 'neutral', label: 'Locked', text: p.started ? 'Game started — he stays in' : 'Game started — can\'t come in' };
+    } else if (startIds.has(p.playerId)) {
+      const lead = p.slot === 'IR' ? 'Move off IR and start' : 'Start';
+      call = { tone: 'start', label: 'Start', text: other
+        ? `${lead} over ${shortName(other.name)} (+${num(gap, 1)} pts)`
+        : `${lead} him` };
+    } else if (sitIds.has(p.playerId)) {
+      call = { tone: 'sit', label: 'Sit', text: out
+        ? outText
+        : other ? `${shortName(other.name)} projects ${num(gap, 1)} more` : 'Better options on your bench' };
+    } else if (p.started) {
+      call = out
+        ? { tone: 'sit', label: 'Sit', text: outText }
+        : rate === null || rate >= 70
+          ? { tone: 'start', label: 'Start', text: 'Must start' }
+          : rate >= 40
+            ? { tone: 'start', label: 'Start', text: 'Good start' }
+            : { tone: 'close', label: 'Start', text: 'Close call — best you have' };
+      // A shaky status is worth a second look even when he is the right start.
+      if (call.tone === 'start' && (s?.playChance ?? 1) < 1) {
+        call = { tone: 'close', label: 'Start', text: `${p.injuryStatus === 'DOUBTFUL' ? 'Doubtful' : 'Questionable'} — check before kickoff` };
+      }
+    } else if (irGain.has(p.playerId)) {
+      const a = irGain.get(p.playerId);
+      call = { tone: 'close', label: 'IR', text: `Would start — activate if you free a roster spot (+${num(a.winGain ?? a.pointsGain, 1)}${a.winGain !== null ? '% win' : ' pts'})` };
+    } else if (p.slot === 'IR') {
+      call = { tone: 'neutral', label: 'Out', text: 'On IR' };
+    } else if (onBye) {
+      call = { tone: 'neutral', label: 'Bye', text: 'Not playing this week' };
+    } else if (out) {
+      call = { tone: 'neutral', label: 'Out', text: 'Not playing' };
+    } else if (recommended.has(p.playerId)) {
+      call = { tone: 'start', label: 'Start', text: 'Start him' };
+    } else {
+      call = rate !== null && rate >= 30
+        ? { tone: 'close', label: 'Sit', text: 'Close call — fine on the bench' }
+        : { tone: 'neutral', label: 'Sit', text: 'Bench' };
+    }
+    calls.set(p.playerId, call);
+  }
+  return { calls, moves, swapFor };
+}
+
+/**
+ * The first thing on a team page: chance of winning and the moves to make, in
+ * one short card. Each player's own call sits on his roster row below.
+ */
+function renderThisWeek(team, { moves, swapFor }) {
+  const sim = team.lineupSim?.available ? team.lineupSim : null;
+  const advice = team.lineupAdvice?.available ? team.lineupAdvice : null;
+  if (!sim && !advice) return '';
+  const week = state.teamDetail.adviceWeek;
+  const pct = (p) => `${num(p, 0)}%`;
+  const rec = sim?.recommended;
+
+  const headline = sim?.opponent && rec?.winPct !== null
+    ? `<p class="this-week__odds"><span class="this-week__big">${pct(rec.winPct)}</span> to win</p>
+       <p class="stat__note">Projected: you ${num(rec.mean, 0)}, ${esc(sim.opponentName ?? 'them')} ${num(sim.opponent.mean, 0)}</p>`
+    : rec
+      ? `<p class="this-week__odds">Projected: <strong>${num(rec.mean, 0)}</strong> points</p>`
+      : `<p class="this-week__odds">Projected: <strong>${num(advice.projectedTotal, 0)}</strong> points</p>`;
+
+  const swaps = moves.start.map((p) => {
+    const other = swapFor.get(p.playerId);
+    return `<li><span class="pill pill--good">In</span> <strong>${esc(shortName(p.name))}</strong>
+      ${other ? `<span class="pill pill--neutral">Out</span> ${esc(shortName(other.name))}` : ''}</li>`;
+  });
+  // A sit with nobody paired (rare: the slot just empties) still gets a line.
+  for (const p of moves.sit) {
+    if (!swapFor.has(p.playerId)) swaps.push(`<li><span class="pill pill--neutral">Out</span> ${esc(shortName(p.name))}</li>`);
   }
 
-  const rec = sim.recommended;
-  // Older builds have no fromCurrent; the projection-only advice compares
-  // against the same ESPN lineup, so it stands in until the next rebuild.
-  const moves = sim.fromCurrent ?? {
-    start: team.lineupAdvice?.toStart ?? [],
-    sit: team.lineupAdvice?.toSit ?? [],
-  };
-  const pct = (p) => `${num(p, 0)}%`;
-  const gainWins = sim.currentLineup && rec.winPct !== null && sim.currentLineup.winPct !== null
-    ? rec.winPct - sim.currentLineup.winPct : null;
+  const action = swaps.length
+    ? `<p class="this-week__lead"><strong>${swaps.length === 1 ? '1 change' : `${swaps.length} changes`} to make in ESPN</strong></p>
+       <ul class="swaps">${swaps.join('')}</ul>`
+    : '<p class="this-week__lead"><span class="pill pill--good">Lineup set</span> No changes needed.</p>';
 
-  const headline = sim.opponent
-    ? `<p class="this-week__odds"><span class="this-week__big">${pct(rec.winPct)}</span>
-         chance to beat <strong>${esc(sim.opponentName ?? 'your opponent')}</strong> with the lineup below</p>
-       <p class="stat__note">Projected score: you ${num(rec.mean, 0)} (likely ${num(rec.p10, 0)}–${num(rec.p90, 0)}),
-         them ${num(sim.opponent.mean, 0)} (likely ${num(sim.opponent.p10, 0)}–${num(sim.opponent.p90, 0)}).</p>`
-    : `<p class="this-week__odds">Projected score: <strong>${num(rec.mean, 0)}</strong>
-         <small>(likely ${num(rec.p10, 0)}–${num(rec.p90, 0)})</small></p>`;
-
-  const action = moves.start.length || moves.sit.length
-    ? `<p><strong>Make these changes in ESPN</strong>${gainWins !== null && gainWins > 0
-        ? ` — they raise your chance of winning from ${pct(sim.currentLineup.winPct)} to ${pct(rec.winPct)}` : ''}:</p>
-       <div class="moves">
-         <div><h4>Put in</h4><ul>${playerList(moves.start)}</ul></div>
-         <div><h4>Take out</h4><ul>${playerList(moves.sit)}</ul></div>
-       </div>`
-    : '<p><span class="pill pill--good">No changes needed</span> Your lineup in ESPN is already the best one.</p>';
-
-  const why = rec.strategy === 'upside'
-    ? '<p class="stat__note">You are the underdog this week, so this lineup favours players with big-game upside over safe, steady ones.</p>'
-    : rec.strategy === 'floor'
-      ? '<p class="stat__note">You are the favourite this week, so this lineup favours steady players who rarely have a bad game.</p>'
-      : rec.strategy === 'mostStarted'
-        ? '<p class="stat__note">This lineup uses the players who came out as the best choice most often across the simulated weeks.</p>'
-        : '';
-
-  const rows = sim.players.map((p) => `
-    <tr>
-      <th scope="row" class="row-team">${esc(p.name)}<small>${esc(p.position)}${p.out ? ' · not playing' : ''}</small></th>
-      <td class="num">${num(p.projected, 1)}</td>
-      <td class="num">${p.out ? '—' : `${num(Math.max(0, p.projected - p.spread), 0)}–${num(p.projected + p.spread, 0)}`}</td>
-      <td class="bar-cell">${bar(p.startPct, 100, { digits: 0, suffix: '%' })}</td>
-      <td>${p.recommended ? '<span class="pill pill--good">Start</span>' : '<span class="pill pill--neutral">Bench</span>'}</td>
-    </tr>`).join('');
-
-  const alts = (sim.alternatives ?? []).filter((a) => a.winPct !== null && a.strategy !== rec.strategy);
-
-  const detail = `
-    <div class="table-scroll">
-      <table>
-        <caption>Every player on your roster</caption>
-        <thead><tr>
-          <th scope="col">Player</th>
-          <th scope="col" class="num">Projected</th>
-          <th scope="col" class="num">Likely range</th>
-          <th scope="col" class="bar-cell">Start rate</th>
-          <th scope="col">Pick</th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>
-    ${glossary([
-      ['How it works', `The site played out your Week ${esc(week)} ${esc(sim.simulations)} times. Each time, every player scores a different amount around his ESPN projection — more spread for players who have been up and down this season${sim.opponent ? `, and your opponent's lineup is played out the same way` : ''}.`],
-      ['Projected', "ESPN's projection for this week."],
-      ['Likely range', 'Where his score lands in most of the simulated weeks.'],
-      ['Start rate', 'How often he was in the best possible lineup. 100% = always start him; around 50% = a coin flip; 0% = bench.'],
-      ['Which lineup', `Several lineups are tested against all ${esc(sim.simulations)} weeks and the one that wins most often is picked. A lineup has to win at least 3 more of the ${esc(sim.simulations)} to replace the one ESPN's projections suggest — fewer than that is just chance.${alts.length ? ` Also tried: ${alts.map((a) => `${esc(STRATEGY_LABELS[a.strategy] ?? a.strategy)} lineup (${pct(a.winPct)})`).join(', ')}.` : ''}`],
-    ])}`;
+  // Roster moves beyond the lineup, priced in the same simulated weeks.
+  const gainText = (a) => (a.winGain !== null && a.winGain !== undefined
+    ? `+${num(a.winGain, 1)}% to win` : `+${num(a.pointsGain, 1)} pts`);
+  const extraMoves = [
+    ...(sim?.irActivations ?? []).slice(0, 2).map((a) => `<li><span class="pill pill--warn">IR</span>
+      Activate <strong>${esc(shortName(a.name))}</strong> — needs a roster spot <small>${esc(gainText(a))}</small></li>`),
+    ...(sim?.pickups ?? []).slice(0, 3).map((a) => `<li><span class="pill pill--accent">Add</span>
+      <strong>${esc(shortName(a.name))}</strong> <small>${esc(a.position)}${a.proTeam ? ` · ${esc(a.proTeam)}` : ''}</small>
+      ${a.replaces?.length ? `over ${esc(a.replaces.map((r) => shortName(r.name)).join(', '))}` : ''}
+      <small>${esc(gainText(a))}</small></li>`),
+  ];
+  const extra = extraMoves.length
+    ? `<p class="this-week__lead"><strong>Worth a roster move</strong></p><ul class="swaps">${extraMoves.join('')}</ul>`
+    : '';
 
   return `<div class="card this-week">
-    <h3>Week ${esc(week)}${sim.opponentName ? ` vs ${esc(sim.opponentName)}` : ''}</h3>
+    <h3>Week ${esc(week)}${sim?.opponentName ? ` vs ${esc(sim.opponentName)}` : ''}</h3>
     ${headline}
     ${action}
-    ${why}
-    ${fold('Why this lineup?', 'Start rates for every player, and how the simulation works', detail)}
+    ${extra}
   </div>`;
+}
+
+/** Name that opens the player card when one exists — shared with playerCell. */
+function playerNameHtml(player, label) {
+  return hasCard(player?.playerId)
+    ? `<button type="button" class="pcard-trigger"
+         data-player-id="${esc(player.playerId)}"
+         data-player-name="${esc(player.name ?? '')}"
+         data-player-pos="${esc(player.position ?? '')}"
+         data-player-team="${esc(player.proTeam ?? '')}"
+         aria-describedby="player-card" aria-expanded="false">${esc(label)}</button>`
+    : esc(label);
+}
+
+function rosterRow(p, call) {
+  const pctLine = [
+    p.percentOwned !== null && p.percentOwned !== undefined ? `${num(p.percentOwned, 0)}% Rost` : null,
+    p.percentStarted !== null && p.percentStarted !== undefined ? `${num(p.percentStarted, 0)}% Start` : null,
+  ].filter(Boolean).join(' <span aria-hidden="true">|</span> ');
+  const tag = isHurt(p) ? INJURY_TAG[p.injuryStatus] ?? p.injuryStatus : null;
+  const slot = slotLabel(p.slot);
+
+  return `<li class="ros-row${p.started ? ' is-starter' : ''}">
+    <span class="ros-slot${p.slot === 'IR' ? ' ros-slot--ir' : ''}">${esc(slot)}</span>
+    <span class="ros-face">
+      ${avatar(playerImage(p), p.name, { variant: p.position === 'D/ST' ? 'team' : 'player', size: 44 })}
+      ${tag ? `<span class="ros-tag">${esc(tag)}</span>` : ''}
+    </span>
+    <span class="ros-info">
+      <span class="ros-name">${playerNameHtml(p, shortName(p.name))}
+        <small>${esc(p.proTeam && p.proTeam !== 'FA' ? p.proTeam : '')} ${esc(p.position)}</small></span>
+      ${pctLine ? `<span class="ros-meta">${pctLine}</span>` : ''}
+      <span class="ros-game" data-pro-team="${esc(p.proTeam ?? '')}"></span>
+      ${call ? `<span class="ros-call ros-call--${esc(call.tone)}"><strong>${esc(call.label)}</strong> ${esc(call.text)}</span>` : ''}
+    </span>
+    ${p.locked && p.points !== null && p.points !== undefined
+      ? `<span class="ros-proj"><span class="ros-proj__num">${num(p.points, 1)}</span><small>${num(p.projected, 1)} proj</small></span>`
+      : `<span class="ros-proj"><span class="ros-proj__num">${num(p.projected, 1)}</span><small>proj</small></span>`}
+  </li>`;
+}
+
+/** Starters in ESPN's slot order, then the bench, then IR. */
+function renderRosterList(team, calls) {
+  const bySlot = (a, b) => (SLOT_ORDER[a.slot] ?? 99) - (SLOT_ORDER[b.slot] ?? 99);
+  const byPos = (a, b) =>
+    Number(a.slot === 'IR') - Number(b.slot === 'IR') ||
+    (POS_ORDER[a.position] ?? 99) - (POS_ORDER[b.position] ?? 99) ||
+    (b.projected ?? 0) - (a.projected ?? 0);
+  const starters = team.roster.filter((p) => p.started).sort(bySlot);
+  const bench = team.roster.filter((p) => !p.started).sort(byPos);
+  // Actual points once a game has started, the projection until then.
+  const total = starters.reduce((sum, p) => sum + ((p.locked ? p.points : null) ?? p.projected ?? 0), 0);
+  const list = (rows) => `<ul class="ros-list">${rows.map((p) => rosterRow(p, calls.get(p.playerId))).join('')}</ul>`;
+
+  return `<section class="card ros" aria-label="Roster">
+    <div class="ros-head"><h3>Starters</h3><span>${num(total, 1)} <small>proj</small></span></div>
+    ${list(starters)}
+    ${bench.length ? `<div class="ros-head"><h3>Bench</h3><span><small>proj</small></span></div>${list(bench)}` : ''}
+    <p class="stat__note ros-note">As set in ESPN, with Week ${esc(state.teamDetail.adviceWeek)} projections.</p>
+  </section>`;
+}
+
+/**
+ * Fills each row's game line from ESPN's public scoreboard — kickoff, opponent,
+ * live score or final — like ESPN's "Sun 1:00 PM @MIA". Skipped when the
+ * scoreboard is on a different week from the advice, so a stale line never
+ * claims the wrong game.
+ */
+let teamScoreboard = null;
+async function fillRosterGames(container) {
+  try {
+    if (!teamScoreboard || Date.now() - teamScoreboard.at > 5 * 60_000) {
+      teamScoreboard = { at: Date.now(), data: fetchScoreboard() };
+    }
+    const data = await teamScoreboard.data;
+    if (data.week !== state.teamDetail?.adviceWeek) return;
+
+    const byTeam = new Map();
+    for (const g of data.games) {
+      byTeam.set(g.home.abbrev, { g, me: g.home, them: g.away, home: true });
+      byTeam.set(g.away.abbrev, { g, me: g.away, them: g.home, home: false });
+    }
+    const timeFmt = new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+
+    for (const el of container.querySelectorAll('.ros-game')) {
+      const team = normalizeTeam(el.dataset.proTeam);
+      if (!team || team === 'FA') continue;
+      const m = byTeam.get(team);
+      if (!m) {
+        el.innerHTML = '<span class="ros-bye">BYE</span>';
+        continue;
+      }
+      const opp = `${m.home ? '' : '@'}${esc(m.them.abbrev)}`;
+      if (m.g.isLive) {
+        el.innerHTML = `<span class="ros-live">LIVE</span> ${esc(m.me.score)}-${esc(m.them.score)} ${opp} · ${esc(m.g.statusDetail)}`;
+      } else if (m.g.isFinal) {
+        const res = m.me.score > m.them.score ? 'W' : m.me.score < m.them.score ? 'L' : 'T';
+        el.textContent = `${res} ${m.me.score}-${m.them.score} Final ${m.home ? '' : '@'}${m.them.abbrev}`;
+      } else {
+        el.textContent = `${timeFmt.format(new Date(m.g.date))} ${m.home ? '' : '@'}${m.them.abbrev}`;
+      }
+    }
+  } catch {
+    // The game line is a nicety; the roster reads fine without it.
+    teamScoreboard = null;
+  }
 }
 
 function renderTeam(teamId) {
@@ -9888,9 +10488,11 @@ function renderTeam(teamId) {
       </button>
     </section>`);
 
-  // --- This week: the answer first -------------------------------------
-  const thisWeek = renderThisWeek(team);
+  // --- This week: the answer first, then the roster the way ESPN shows it --
+  const startSit = startSitCalls(team);
+  const thisWeek = renderThisWeek(team, startSit);
   if (thisWeek) parts.push(thisWeek);
+  if (team.roster.length) parts.push(renderRosterList(team, startSit.calls));
 
   // --- Season so far, in plain words ------------------------------------
   const s = team.stats;
@@ -10006,34 +10608,6 @@ function renderTeam(teamId) {
     ));
   }
 
-  if (team.roster.length) {
-    const starters = team.roster.filter((p) => p.started);
-    const benched = team.roster.filter((p) => !p.started);
-    const injured = team.roster.filter((p) => p.injuryStatus && p.injuryStatus !== 'ACTIVE' && p.injuryStatus !== 'NORMAL');
-    const rosterRows = (list) => list.map((p) => `<tr>
-        <td>${esc(p.slot)}</td>
-        <th scope="row" class="row-team">${playerCell(p, p.proTeam)}</th>
-        <td>${esc(p.position)}</td>
-        <td class="num">${num(p.projected, 1)}</td>
-        <td>${p.injuryStatus && p.injuryStatus !== 'ACTIVE' && p.injuryStatus !== 'NORMAL'
-          ? `<span class="pill pill--warn">${esc(p.injuryStatus)}</span>` : ''}</td>
-      </tr>`).join('');
-    parts.push(fold(
-      'Full roster',
-      `${esc(team.roster.length)} players${injured.length ? ` · ${esc(injured.length)} injured` : ''}`,
-      `<div class="table-scroll">
-        <table>
-          <caption>As set in ESPN, with Week ${esc(state.teamDetail.adviceWeek)} projections</caption>
-          <thead><tr>
-            <th scope="col">Slot</th><th scope="col">Player</th><th scope="col">Pos</th>
-            <th scope="col" class="num">Projected</th><th scope="col">Status</th>
-          </tr></thead>
-          <tbody>${rosterRows(starters)}${rosterRows(benched)}</tbody>
-        </table>
-      </div>`
-    ));
-  }
-
   if (team.headToHead?.length) {
     const rec = (r) => (r.games ? `${r.wins}-${r.losses}${r.ties ? `-${r.ties}` : ''}` : '—');
     const last = (m) => (m
@@ -10067,6 +10641,20 @@ function renderTeam(teamId) {
       ${r ? `<p class="stat__note">Your rivalry is the matchup you've played most (closest record breaks ties) — ${esc(r.games)} meetings with ${esc(r.opponentTeamName ?? 'them')}, averaging ${esc(signed(r.avgMargin, 1))} points a game for you.</p>` : ''}`));
   }
 
+  if (team.lineupSim?.available) {
+    const sim = team.lineupSim;
+    parts.push(fold('How the picks work', 'Where the Start / Sit calls come from', glossary([
+      ['The short version', `Each call is the site's pick for Week ${esc(sim.week ?? state.teamDetail.adviceWeek)}: your week is played out ${esc(sim.simulations)} times from ESPN projections, how up-and-down each player has been this season, injury status, and which players share an NFL team.`],
+      ['Must start / Good start', 'Starts in nearly every version of the week the site played out.'],
+      ['Close call', 'Could go either way — starting or benching him are both fine.'],
+      ['Start over …', 'A move worth making in ESPN: the player in projects more than the one he replaces.'],
+      ['Questionable', 'Counted as missing about 1 week in 7 (Doubtful: 3 in 4), so a healthy player of the same projection is the safer start.'],
+      ['Locked', "His game has started, so ESPN won't let him move — the site uses his actual points."],
+      ['Add / IR', 'A free agent, or a player stuck on IR with no open roster spot, who would start for you — with how much he raises your chance of winning.'],
+      ['Win chance', `Your Week ${esc(sim.week ?? state.teamDetail.adviceWeek)} was played out ${esc(sim.simulations)} times${sim.opponent ? ' against your opponent' : ''}; this is how often you won with the recommended lineup.`],
+    ])));
+  }
+
   // Nothing above had anything to say yet.
   if (parts.length <= 1) {
     parts.push(
@@ -10079,6 +10667,7 @@ function renderTeam(teamId) {
   }
 
   body.innerHTML = parts.join('');
+  if (team.roster.length) fillRosterGames(body);
 
   $('#claim-team')?.addEventListener('click', () => {
     const nowMine = getMyTeamId() === team.teamId;
@@ -10098,79 +10687,25 @@ function syncMyTeamNav() {
   if (link && id !== null) link.href = `#team/${id}`;
 }
 
-// --- Big board -------------------------------------------------------------
+// --- Player board ----------------------------------------------------------
 
-const boardState = { position: 'ALL', sort: 'valueRank', dir: 'asc', search: '', hideDrafted: false };
-
-/** Draft slot the visitor expects to pick from, remembered across visits. */
-const DRAFT_SLOT_KEY = 'ffh-draft-slot';
-const getDraftSlot = () => {
-  const raw = localStorage.getItem(DRAFT_SLOT_KEY);
-  return raw === null ? null : Number(raw);
-};
-
-/**
- * Who should still be on the board at each of your picks.
- *
- * A player is "gone" if his recommended pick lands before your turn. This is a
- * projection of a well-run draft, not a promise — one manager reaching changes
- * everything downstream — but it answers the question you actually have while
- * waiting: is it worth hoping he falls to me?
- */
-function targetsForSlot(board, slot) {
-  const picks = board.picksBySlot?.[slot] ?? [];
-  const draftable = board.players.filter((p) => p.draftable);
-
-  return picks.map((overall) => {
-    // Anyone recommended before your turn has already been taken. Comparing
-    // against the previous pick instead of this one was wrong: it listed the
-    // first overall pick as "should be there" at pick 7.
-    //
-    // Ordered by recommended pick, not by value rank. Sorting by value surfaces
-    // whoever has the best VORP among everyone still on the board — which put
-    // three defences at the top of a round-five pick, because their recommended
-    // slot is round fifteen and nothing had taken them yet. What you want at
-    // pick N is the players actually due to come off the board around then.
-    const available = draftable
-      .filter((p) => p.recommendedPick >= overall)
-      .sort((a, b) => a.recommendedPick - b.recommendedPick);
-    return {
-      overall,
-      round: Math.ceil(overall / board.teamCount),
-      best: available.slice(0, 3),
-      // The player the simulation says goes exactly here.
-      onTheClock: draftable.find((p) => p.recommendedPick === overall) ?? null,
-    };
-  });
-}
-
-const GRADE_ORDER = ['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'C-', 'D', 'F'];
-
-/** Colour reinforces the grade; the letter always carries it. */
-function gradePill(grade) {
-  if (!grade) return '<span class="pill pill--neutral">—</span>';
-  const i = GRADE_ORDER.indexOf(grade);
-  const cls = i <= 2 ? 'pill--good' : i <= 5 ? 'pill--accent' : i <= 7 ? 'pill--neutral' : 'pill--bad';
-  return `<span class="pill ${cls}">${esc(grade)}</span>`;
-}
+const boardState = { position: 'ALL', sort: 'valueRank', dir: 'asc', search: '', freeAgentsOnly: false };
 
 function sortBoard(players) {
   const { sort, dir } = boardState;
   const mult = dir === 'asc' ? 1 : -1;
   return [...players].sort((a, b) => {
-    let av;
-    let bv;
-    if (sort === 'grade') {
-      av = GRADE_ORDER.indexOf(a.grade);
-      bv = GRADE_ORDER.indexOf(b.grade);
-    } else if (sort === 'name') {
-      return mult * a.name.localeCompare(b.name);
-    } else {
-      av = a[sort];
-      bv = b[sort];
+    if (sort === 'name') return mult * a.name.localeCompare(b.name);
+    if (sort === 'rosteredBy') {
+      // Free agents sort last regardless of direction.
+      if (!a.rosteredBy) return b.rosteredBy ? 1 : 0;
+      if (!b.rosteredBy) return -1;
+      return mult * a.rosteredBy.teamName.localeCompare(b.rosteredBy.teamName);
     }
+    const av = a[sort];
+    const bv = b[sort];
     // Missing values sort last regardless of direction.
-    if (av === null || av === undefined) return 1;
+    if (av === null || av === undefined) return bv === null || bv === undefined ? 0 : 1;
     if (bv === null || bv === undefined) return -1;
     return mult * (av - bv);
   });
@@ -10191,150 +10726,6 @@ function renderBoard() {
 
   const parts = [];
 
-  // --- The headline insight ---------------------------------------------
-  const qb = board.positionValue.find((p) => p.position === 'QB');
-  if (qb && qb.avgValueDelta > 15) {
-    parts.push(`
-      <section class="hero" style="margin-bottom:1.25rem">
-        <p class="hero__eyebrow">The superflex edge</p>
-        <h2>Quarterbacks are worth ${esc(qb.avgValueDelta)} draft places more than the market thinks</h2>
-        <p class="hero__sub">
-          Average draft position is collected across mostly-standard leagues, where only one
-          QB starts. This league starts two, so all ${esc(board.startersNeeded.QB ?? 24)} startable
-          quarterbacks have real value — and ADP hasn't caught up. That gap is the biggest
-          single edge available to you on draft day.
-        </p>
-      </section>`);
-  }
-
-  // --- Positional value + scarcity --------------------------------------
-  parts.push(`
-    <div class="grid" style="margin-bottom:1.25rem">
-      <div class="card">
-        <h3>Where the value is</h3>
-        <p class="stat__note">
-          Average places of value by position. Positive means the market drafts them later
-          than they're worth.
-        </p>
-        <div class="table-scroll" style="margin-top:0.6rem">
-          <table>
-            <caption>Positional value bias</caption>
-            <thead><tr>
-              <th scope="col">Pos</th><th scope="col" class="num">Value gap</th>
-              <th scope="col" class="num">Starters</th><th scope="col"></th>
-            </tr></thead>
-            <tbody>
-              ${board.positionValue
-                .map(
-                  (p) => `<tr>
-                    <th scope="row">${esc(p.position)}</th>
-                    <td class="num">${deltaPill(p.avgValueDelta, 0)}</td>
-                    <td class="num">${esc(board.startersNeeded[p.position] ?? '—')}</td>
-                    <td>${p.streamable ? '<span class="pill pill--warn">Streamable</span>' : ''}</td>
-                  </tr>`
-                )
-                .join('')}
-            </tbody>
-          </table>
-        </div>
-        <p class="stat__note" style="margin-top:0.6rem">
-          <strong>Streamable</strong> positions overstate their case here. VORP counts 26 points
-          above replacement the same wherever it comes from, but kickers and defences are
-          replaceable off waivers most weeks — so that edge doesn't need a draft pick. The model
-          can't measure week-to-week volatility, so this is flagged rather than silently corrected.
-        </p>
-      </div>
-
-      <div class="card">
-        <h3>Positional scarcity</h3>
-        <p class="stat__note">
-          How far the best player at each position sits above the last one you'd start.
-          A big gap means paying up is worth it.
-        </p>
-        <div class="table-scroll" style="margin-top:0.6rem">
-          <table>
-            <caption>Elite advantage over the last startable player</caption>
-            <thead><tr>
-              <th scope="col">Pos</th><th scope="col" class="bar-cell">Elite advantage</th>
-              <th scope="col" class="num">Replacement</th>
-            </tr></thead>
-            <tbody>
-              ${board.scarcity
-                .map(
-                  (s) => `<tr>
-                    <th scope="row">${esc(s.position)}</th>
-                    <td class="bar-cell">${bar(s.eliteAdvantage ?? 0, board.scarcity[0].eliteAdvantage || 1, { digits: 0, suffix: ' pts' })}</td>
-                    <td class="num">${num(s.replacement, 0)}</td>
-                  </tr>`
-                )
-                .join('')}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>`);
-
-  // --- Your draft slot ---------------------------------------------------
-  const slot = getDraftSlot();
-  if (slot && board.picksBySlot?.[slot]) {
-    const targets = targetsForSlot(board, slot);
-    parts.push(`
-      <div class="card" style="margin-bottom:1.25rem">
-        <h3>Drafting from slot ${esc(slot)}</h3>
-        <p class="stat__note">
-          Your picks, and who the board says should still be there. A projection of a
-          well-run draft — one manager reaching changes everything after it.
-          <button type="button" class="theme-toggle" id="board-clear-slot"
-            style="margin-left:0.4rem">Change slot</button>
-        </p>
-        <div class="table-scroll" style="margin-top:0.6rem;max-height:22rem;overflow-y:auto">
-          <table>
-            <caption>Best available at each of your picks</caption>
-            <thead><tr>
-              <th scope="col" class="num">Rd</th><th scope="col" class="num">Pick</th>
-              <th scope="col">Should be there</th>
-            </tr></thead>
-            <tbody>
-              ${targets
-                .map(
-                  (t) => `<tr>
-                    <td class="num rank">${esc(t.round)}</td>
-                    <td class="num rank">${esc(t.overall)}</td>
-                    <td>${
-                      t.best.length
-                        ? t.best
-                            .map(
-                              (p) => `${esc(p.name)} <small>(${esc(p.position)}${esc(p.positionRank)})</small>`
-                            )
-                            .join(' · ')
-                        : '<span class="stat__note">board exhausted</span>'
-                    }</td>
-                  </tr>`
-                )
-                .join('')}
-            </tbody>
-          </table>
-        </div>
-      </div>`);
-  } else {
-    parts.push(`
-      <div class="card" style="margin-bottom:1.25rem">
-        <h3>Which slot are you drafting from?</h3>
-        <p class="stat__note">
-          Pick your slot and the board will show who should still be available at each of
-          your ${esc(board.rounds ?? 16)} picks. Remembered on this device.
-        </p>
-        <div class="draft-picks" style="margin-top:0.75rem">
-          ${Array.from({ length: board.teamCount }, (_, i) => i + 1)
-            .map(
-              (n) => `<button type="button" class="theme-toggle board-slot" data-slot="${n}"
-                style="width:100%">Slot ${n}</button>`
-            )
-            .join('')}
-        </div>
-      </div>`);
-  }
-
   // --- Controls ----------------------------------------------------------
   const positions = ['ALL', ...POSITIONS_ORDER];
   parts.push(`
@@ -10342,9 +10733,9 @@ function renderBoard() {
       <div>
         <label for="board-search" class="stat__label">Search</label>
         <input type="search" id="board-search" value="${esc(boardState.search)}"
-          placeholder="Player name…"
+          placeholder="Player, NFL team or manager…"
           style="font:inherit;padding:0.45rem 0.7rem;border-radius:var(--radius-sm);
-                 border:1px solid var(--border);background:var(--bg-sunken);color:var(--text);min-width:12rem">
+                 border:1px solid var(--border);background:var(--bg-sunken);color:var(--text);min-width:14rem">
       </div>
       <div role="group" aria-label="Filter by position" style="display:flex;flex-wrap:wrap;gap:0.25rem">
         ${positions
@@ -10354,16 +10745,9 @@ function renderBoard() {
           )
           .join('')}
       </div>
-      ${
-        board.draftHeld
-          ? `<button type="button" class="theme-toggle" id="board-hide-drafted"
-              aria-pressed="${boardState.hideDrafted}">
-              ${boardState.hideDrafted ? 'Showing available only' : 'Show available only'}
-            </button>`
-          : ''
-      }
-      <button type="button" class="theme-toggle" id="board-print" style="margin-left:auto">
-        🍺 Beer sheet (print / save PDF)
+      <button type="button" class="theme-toggle" id="board-free-agents"
+        aria-pressed="${boardState.freeAgentsOnly}">
+        ${boardState.freeAgentsOnly ? 'Showing free agents only' : 'Free agents only'}
       </button>
     </div>`);
 
@@ -10372,17 +10756,23 @@ function renderBoard() {
   if (boardState.position !== 'ALL') rows = rows.filter((p) => p.position === boardState.position);
   if (boardState.search) {
     const q = boardState.search.toLowerCase();
-    rows = rows.filter((p) => p.name.toLowerCase().includes(q) || p.proTeam.toLowerCase().includes(q));
+    rows = rows.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.proTeam.toLowerCase().includes(q) ||
+        (p.rosteredBy?.teamName ?? '').toLowerCase().includes(q) ||
+        (p.rosteredBy?.managerName ?? '').toLowerCase().includes(q)
+    );
   }
-  if (boardState.hideDrafted) rows = rows.filter((p) => !p.drafted);
+  if (boardState.freeAgentsOnly) rows = rows.filter((p) => !p.rosteredBy);
   rows = sortBoard(rows);
 
   const maxVorp = Math.max(...board.players.map((p) => p.vorp ?? 0), 1);
 
-  const sortable = (key, label, hint) => {
+  const sortable = (key, label, hint, cls = 'num') => {
     const active = boardState.sort === key;
     const arrow = active ? (boardState.dir === 'asc' ? ' ▲' : ' ▼') : '';
-    return `<th scope="col" class="num" aria-sort="${active ? (boardState.dir === 'asc' ? 'ascending' : 'descending') : 'none'}">
+    return `<th scope="col" class="${cls}" aria-sort="${active ? (boardState.dir === 'asc' ? 'ascending' : 'descending') : 'none'}">
       <button type="button" class="board-sort sort-btn" data-key="${esc(key)}"
         ${hint ? `title="${esc(hint)}"` : ''}>${esc(label)}${arrow}</button></th>`;
   };
@@ -10392,29 +10782,25 @@ function renderBoard() {
       <table>
         <caption>
           ${esc(rows.length)} of ${esc(board.players.length)} players ·
-          ranked by value over replacement, not by ESPN's published order
-          ${board.draftHeld ? '· draft results attached' : ''}
+          ranked by value over replacement · rosters as of the last data refresh
         </caption>
         <thead>
           <tr>
             ${sortable('valueRank', '#', 'Rank by value over replacement')}
-            <th scope="col">Player</th>
+            ${sortable('name', 'Player', null, '')}
             <th scope="col">Pos</th>
             <th scope="col" class="num">Tier</th>
-            ${sortable('recommendedPick', 'Take at', 'Where this player should go in a well-run draft')}
-            ${sortable('adp', 'ADP', 'Average draft position across ESPN leagues')}
             ${sortable('projected', 'Proj', 'ESPN season projection')}
+            ${sortable('lastSeason', 'Last yr', 'Fantasy points last season')}
             ${sortable('vorp', 'VORP', 'Points above the worst starter at this position')}
-            ${sortable('grade', 'Grade', 'Value compared to others at the same position')}
-            <th scope="col">${board.draftHeld ? 'Drafted by' : 'Status'}</th>
+            ${sortable('rosteredBy', 'Rostered by', null, '')}
           </tr>
         </thead>
         <tbody>
           ${rows
-            .slice(0, 250)
             .map(
               (p) => `<tr>
-                <td class="num rank">${esc(p.valueRank)}</td>
+                <td class="num rank">${p.valueRank === null ? '—' : esc(p.valueRank)}</td>
                 <th scope="row" class="row-team">
                   ${playerCell(
                     p,
@@ -10425,23 +10811,15 @@ function renderBoard() {
                     }`
                   )}
                 </th>
-                <td>${esc(p.position)}${esc(p.positionRank)}</td>
-                <td class="num">${esc(p.tier)}</td>
-                <td class="num">${
-                  p.recommendedPick === null
-                    ? '<span class="pill pill--neutral">Undraftable</span>'
-                    : `${esc(p.recommendedPick)}<small style="color:var(--text-dim)"> R${esc(p.recommendedRound)}</small>`
-                }</td>
-                <td class="num">${p.adp === null ? '—' : num(p.adp, 1)}</td>
-                <td class="num">${num(p.projected, 0)}</td>
-                <td class="bar-cell">${bar(p.vorp ?? 0, maxVorp, { digits: 0 })}</td>
-                <td>${gradePill(p.grade)}${p.streamable ? ' <span class="pill pill--warn">Str</span>' : ''}</td>
+                <td>${esc(p.position)}${p.positionRank === null ? '' : esc(p.positionRank)}</td>
+                <td class="num">${p.tier === null ? '—' : esc(p.tier)}</td>
+                <td class="num">${p.projected === null ? '—' : num(p.projected, 0)}</td>
+                <td class="num">${p.lastSeason === null ? '—' : num(p.lastSeason, 0)}</td>
+                <td class="bar-cell">${p.vorp === null ? '—' : bar(p.vorp, maxVorp, { digits: 0 })}</td>
                 <td>${
-                  p.drafted
-                    ? `<small>${esc(p.pick.teamName)}<br>pick ${esc(p.pick.overall)} (R${esc(p.pick.round)})</small>`
-                    : board.draftHeld
-                      ? '<span class="pill pill--good">Available</span>'
-                      : '<span class="pill pill--neutral">Undrafted</span>'
+                  p.rosteredBy
+                    ? `<a href="#team/${esc(p.rosteredBy.teamId)}">${esc(p.rosteredBy.teamName)}</a>`
+                    : '<span class="pill pill--good">Free agent</span>'
                 }</td>
               </tr>`
             )
@@ -10470,27 +10848,15 @@ function renderBoard() {
         boardState.dir = boardState.dir === 'asc' ? 'desc' : 'asc';
       } else {
         boardState.sort = key;
-        // Rank-like columns read best ascending (pick 1 first); magnitudes and
-        // deltas descending (biggest first).
-        const ascending = ['valueRank', 'adp', 'grade', 'recommendedPick'];
+        // Rank and text columns read best ascending; magnitudes descending.
+        const ascending = ['valueRank', 'name', 'rosteredBy'];
         boardState.dir = ascending.includes(key) ? 'asc' : 'desc';
       }
       renderBoard();
     });
   }
-  $('#board-hide-drafted')?.addEventListener('click', () => {
-    boardState.hideDrafted = !boardState.hideDrafted;
-    renderBoard();
-  });
-  $('#board-print')?.addEventListener('click', () => printBeerSheet(board));
-  for (const btn of body.querySelectorAll('.board-slot')) {
-    btn.addEventListener('click', () => {
-      localStorage.setItem(DRAFT_SLOT_KEY, btn.dataset.slot);
-      renderBoard();
-    });
-  }
-  $('#board-clear-slot')?.addEventListener('click', () => {
-    localStorage.removeItem(DRAFT_SLOT_KEY);
+  $('#board-free-agents')?.addEventListener('click', () => {
+    boardState.freeAgentsOnly = !boardState.freeAgentsOnly;
     renderBoard();
   });
 
@@ -10506,109 +10872,6 @@ function renderBoard() {
     });
   }
 }
-
-// --- Beer sheet (printable draft cheat sheet) -------------------------------
-
-const POSITION_TITLES = {
-  QB: 'Quarterbacks (superflex-eligible)',
-  RB: 'Running backs',
-  WR: 'Wide receivers',
-  TE: 'Tight ends',
-  'D/ST': 'Defense / special teams',
-  K: 'Kickers',
-};
-
-/** One row. `isNewTier` gets a heavy top rule — the cliff a beer sheet exists to mark. */
-function beerSheetRow(p, isNewTier) {
-  const note =
-    p.injuryStatus && !['ACTIVE', 'NORMAL'].includes(p.injuryStatus) ? ` · ${p.injuryStatus}` : '';
-  const takeAt = p.recommendedPick === null ? '—' : `${p.recommendedPick} (R${p.recommendedRound})`;
-  const status = p.drafted
-    ? `<span class="beer-sheet__drafted">${esc(p.pick.teamName)} · pk ${esc(p.pick.overall)}</span>`
-    : '<span class="beer-sheet__box" aria-hidden="true"></span>';
-  const classes = [isNewTier ? 'tier-start' : '', p.drafted ? 'is-drafted' : ''].filter(Boolean).join(' ');
-
-  return `<tr${classes ? ` class="${classes}"` : ''}>
-    <td class="num">${esc(p.valueRank)}</td>
-    <td>${esc(p.name)}<span class="beer-sheet__team"> · ${esc(p.proTeam)}${esc(note)}</span></td>
-    <td>${esc(p.position)}${esc(p.positionRank)}</td>
-    <td class="num">${esc(p.tier)}</td>
-    <td class="num">${p.adp === null ? '—' : num(p.adp, 1)}</td>
-    <td class="num">${esc(takeAt)}</td>
-    <td>${esc(p.grade ?? '—')}</td>
-    <td>${status}</td>
-  </tr>`;
-}
-
-/** A titled table. Tiers reset per position, so track the last-seen tier per group key. */
-function beerSheetSection(title, players, { byPosition = false } = {}) {
-  const lastTier = new Map();
-  const rows = players
-    .map((p) => {
-      const key = byPosition ? p.position : '__overall__';
-      const isNewTier = lastTier.get(key) !== p.tier;
-      lastTier.set(key, p.tier);
-      return beerSheetRow(p, isNewTier);
-    })
-    .join('');
-
-  return `
-    <section class="beer-sheet__page">
-      <h2>${esc(title)}</h2>
-      <table>
-        <thead>
-          <tr>
-            <th class="num">#</th><th>Player</th><th>Pos</th><th class="num">Tier</th>
-            <th class="num">ADP</th><th class="num">Take at</th><th>Grade</th><th>Drafted</th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </section>`;
-}
-
-function buildBeerSheetHtml(board, hub) {
-  const overall = [...board.players].sort((a, b) => a.valueRank - b.valueRank);
-  const generated = hub?.generatedAt ? new Date(hub.generatedAt).toLocaleString() : new Date().toLocaleString();
-  const leagueName = hub?.league?.displayName ?? hub?.league?.name ?? 'Fantasy Football';
-
-  const sections = [beerSheetSection(`Overall — top ${overall.length}`, overall)];
-  for (const pos of POSITIONS_ORDER) {
-    const players = board.players
-      .filter((p) => p.position === pos)
-      .sort((a, b) => a.positionRank - b.positionRank);
-    if (players.length) sections.push(beerSheetSection(POSITION_TITLES[pos] ?? pos, players, { byPosition: true }));
-  }
-
-  return `
-    <header class="beer-sheet__head">
-      <h1>${esc(leagueName)} — Superflex PPR beer sheet</h1>
-      <p>
-        ${esc(board.teamCount ?? '')} teams · PPR · Superflex (OP) · Generated ${esc(generated)}
-        ${board.draftHeld ? ' · draft in progress — refresh and reprint for the latest picks' : ''}
-      </p>
-      <p class="beer-sheet__legend">
-        Ranked by value over replacement, not raw projections — see the site for why. A heavy top
-        rule marks a tier break: a bigger drop there means less reason to reach. "Take at" is where
-        a well-run draft would take this player. Check a box as a player comes off the board;
-        anyone already drafted (as of the last data refresh) shows who took them instead.
-      </p>
-    </header>
-    ${sections.join('')}`;
-}
-
-function printBeerSheet(board) {
-  if (!board?.available) return;
-  const sheet = $('#beer-sheet');
-  if (!sheet) return;
-  sheet.innerHTML = buildBeerSheetHtml(board, state.hub);
-  document.body.classList.add('beer-sheet-mode');
-  window.print();
-}
-
-window.addEventListener('afterprint', () => {
-  document.body.classList.remove('beer-sheet-mode');
-});
 
 // --- Mock draft ------------------------------------------------------------
 
@@ -11065,6 +11328,9 @@ function renderTradeCard(t) {
   </div>`;
 }
 
+/** How the moves table is laid out; kept across re-renders. */
+const txState = { view: 'week', dir: 'desc' };
+
 function renderTrades() {
   const trades = state.season?.trades ?? [];
   const transactions = state.season?.transactions ?? [];
@@ -11085,38 +11351,90 @@ function renderTrades() {
         since the trade. The big figure counts only weeks they were in the starting
         lineup — the points that decided matchups. The smaller one includes the bench.
       </p>
-      <div class="grid">${trades.map(renderTradeCard).join('')}</div>`);
+      <div class="grid">${[...trades]
+        .sort((a, b) => (txState.dir === 'asc' ? 1 : -1) * ((a.date ?? 0) - (b.date ?? 0)))
+        .map(renderTradeCard).join('')}</div>`);
   }
 
   if (transactions.length) {
-    parts.push(`
-      <h3 style="margin-top:2rem">Waiver &amp; free agent moves</h3>
+    // Two ways to read the moves: grouped by the week ESPN filed each one
+    // under (the week it counted for), or one list in date order. Either way
+    // the viewer picks newest or oldest first.
+    const { view, dir } = txState;
+    const sign = dir === 'asc' ? 1 : -1;
+    const txDate = (tx) => tx.date ?? tx.proposedDate ?? 0;
+    const sorted = [...transactions].sort((a, b) => sign * (txDate(a) - txDate(b)));
+    const TX_TYPE = { WAIVER: 'Waiver', FREEAGENT: 'Free agent' };
+    const ITEM_TYPE = { ADD: 'Added', DROP: 'Dropped' };
+    const fmtTxDate = (ms) => (ms ? new Date(ms).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : '—');
+    const row = (tx, showWeek) => `<tr>
+                  ${showWeek ? `<td class="num">${esc(tx.scoringPeriodId ?? '—')}</td>` : ''}
+                  <td>${esc(fmtTxDate(txDate(tx)))}</td>
+                  <th scope="row" class="row-team">${esc(tx.teamName)}</th>
+                  <td>${esc(TX_TYPE[tx.type] ?? tx.type)}</td>
+                  <td>${tx.items.map((i) => `${esc(ITEM_TYPE[i.type] ?? i.type)} ${esc(i.playerName)}${i.position ? ` <small>(${esc(i.position)})</small>` : ''}`).join('<br>')}</td>
+                  <td class="num">${tx.bidAmount ? `$${esc(tx.bidAmount)}` : '—'}</td>
+                </tr>`;
+    const table = (caption, rows, showWeek) => `
       <div class="table-scroll">
         <table>
-          <caption>${transactions.length} transaction(s)</caption>
+          <caption>${caption}</caption>
           <thead><tr>
-            <th scope="col" class="num">Week</th><th scope="col">Team</th>
+            ${showWeek ? '<th scope="col" class="num">Week</th>' : ''}
+            <th scope="col">Date</th><th scope="col">Team</th>
             <th scope="col">Type</th><th scope="col">Players</th><th scope="col" class="num">Bid</th>
           </tr></thead>
-          <tbody>
-            ${transactions
-              .slice(0, 100)
-              .map(
-                (tx) => `<tr>
-                  <td class="num">${esc(tx.scoringPeriodId ?? '—')}</td>
-                  <th scope="row" class="row-team">${esc(tx.teamName)}</th>
-                  <td>${esc(tx.type)}</td>
-                  <td>${tx.items.map((i) => `${esc(i.type)} ${esc(i.playerName)}`).join(', ')}</td>
-                  <td class="num">${tx.bidAmount ? `$${esc(tx.bidAmount)}` : '—'}</td>
-                </tr>`
-              )
-              .join('')}
-          </tbody>
+          <tbody>${rows.map((tx) => row(tx, showWeek)).join('')}</tbody>
         </table>
-      </div>`);
+      </div>`;
+
+    let tables;
+    if (view === 'date') {
+      tables = table(`${sorted.length} move(s), ${dir === 'asc' ? 'oldest' : 'newest'} first`, sorted, true);
+    } else {
+      const byWeek = new Map();
+      for (const tx of sorted) {
+        const week = tx.scoringPeriodId ?? 0;
+        if (!byWeek.has(week)) byWeek.set(week, []);
+        byWeek.get(week).push(tx);
+      }
+      tables = [...byWeek.keys()]
+        .sort((a, b) => sign * (a - b))
+        .map((week) => {
+          const rows = byWeek.get(week);
+          return table(`${week ? `Week ${esc(week)}` : 'Week unknown'} · ${rows.length} move(s)`, rows, false);
+        })
+        .join('');
+    }
+
+    const toggle = (cls, key, value, label) =>
+      `<button type="button" class="theme-toggle ${cls}" data-${key}="${value}" aria-pressed="${txState[key] === value}">${label}</button>`;
+
+    parts.push(`
+      <h3 style="margin-top:2rem">Waiver &amp; free agent moves</h3>
+      <p class="view__intro">${transactions.length} move(s) this season. Week is the week each move counted for.</p>
+      <div style="display:flex;flex-wrap:wrap;gap:0.75rem;margin-bottom:1rem">
+        <div role="group" aria-label="Group moves" style="display:flex;gap:0.25rem">
+          ${toggle('tx-view', 'view', 'week', 'By week')}
+          ${toggle('tx-view', 'view', 'date', 'By date')}
+        </div>
+        <div role="group" aria-label="Sort by date" style="display:flex;gap:0.25rem">
+          ${toggle('tx-dir', 'dir', 'desc', 'Newest first')}
+          ${toggle('tx-dir', 'dir', 'asc', 'Oldest first')}
+        </div>
+      </div>
+      ${tables}`);
   }
 
-  $('#trades-body').innerHTML = parts.join('');
+  const body = $('#trades-body');
+  body.innerHTML = parts.join('');
+  for (const btn of body.querySelectorAll('.tx-view, .tx-dir')) {
+    btn.addEventListener('click', () => {
+      if (btn.dataset.view) txState.view = btn.dataset.view;
+      if (btn.dataset.dir) txState.dir = btn.dataset.dir;
+      renderTrades();
+    });
+  }
 }
 
 /** Shown before any results exist, so the league can agree rules early. */
@@ -11426,7 +11744,7 @@ function renderChallenges() {
            }</p>`
         : w.noWinner
           ? '<p class="challenge__detail"><em>Nobody qualified. The pot rolls into the season awards.</em></p>'
-          : '<p class="challenge__detail"><em>Not played yet.</em></p>';
+          : `<p class="challenge__detail"><em>${w.week <= (state.hub?.status?.weeksPlayed ?? 0) ? 'In progress — scored once every matchup is final.' : 'Not played yet.'}</em></p>`;
 
       return `<div class="challenge challenge--${esc(status)}">
         <p class="challenge__week">Week ${esc(w.week)} · ${esc(money(w.amount, currency))}</p>
@@ -11713,6 +12031,32 @@ function initTheme() {
   sync();
 }
 
+// --- New data --------------------------------------------------------------
+
+/** How often an open tab asks whether a newer build has been published. */
+const NEW_DATA_CHECK_MS = 10 * 60 * 1000;
+
+/**
+ * The data is rebuilt every 30 minutes, but a phone tab can stay open for
+ * days. When the tab comes back into view (at most every NEW_DATA_CHECK_MS),
+ * re-read hub.json's build time and offer a reload if it moved. Never reloads
+ * by itself: that would throw away a mock draft in progress.
+ */
+function watchForNewData(loadedAt) {
+  let lastCheck = Date.now();
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState !== 'visible' || Date.now() - lastCheck < NEW_DATA_CHECK_MS) return;
+    lastCheck = Date.now();
+    try {
+      const { generatedAt } = await loadJson('data/hub.json');
+      if (generatedAt && generatedAt !== loadedAt) $('#update-notice').hidden = false;
+    } catch {
+      // Offline or mid-deploy: try again next time the tab is shown.
+    }
+  });
+  $('#update-reload').addEventListener('click', () => location.reload());
+}
+
 // --- Boot ------------------------------------------------------------------
 
 async function boot() {
@@ -11779,6 +12123,8 @@ async function boot() {
 
     if (hub.synthetic) $('#fixture-warning').hidden = false;
 
+    watchForNewData(hub.generatedAt);
+
     $('#boot').hidden = true;
     onHashChange(true);
     window.addEventListener('hashchange', () => onHashChange(false));
@@ -11801,7 +12147,7 @@ boot();
 
 ### `docs/assets/mock.js`
 
-*260 lines*
+*254 lines*
 
 ```javascript
 /**
@@ -12057,12 +12403,6 @@ export function rosterNeeds(roster, startingSlots) {
   }
   return unfilled;
 }
-
-/** Value relative to where the board said a player should go. */
-export function pickValue(pick) {
-  if (pick.player.rank === null) return null;
-  return pick.overall - pick.player.rank;
-}
 ```
 
 ### `docs/_headers`
@@ -12088,7 +12428,7 @@ export function pickValue(pick) {
 #
 # `connect-src` names one host for the same reason: site.api.espn.com is
 # ESPN's public scoreboard, fetched in the browser rather than at build time
-# because scores move by the minute and the build runs every few hours. It is a
+# because scores move by the minute and the build runs every half hour. It is a
 # read-only GET of public data, and no credentials go with it — the league
 # cookies live only in the Node fetcher and never reach the page.
 #
@@ -12122,7 +12462,7 @@ The only thing standing between "the maths is right" and "the maths runs" — th
 
 ### `tests/analytics.test.mjs`
 
-*1039 lines*
+*1057 lines*
 
 ```javascript
 /**
@@ -12924,6 +13264,24 @@ describe('big board', () => {
     assert.equal(board.players.filter((p) => p.drafted).length, 1);
   });
 
+  test('current owners are attached and unprojected players are still listed', () => {
+    const pool = makePool(SUPERFLEX_SLOTS);
+    const target = pool.players[0];
+    const unprojected = { playerId: 999999, name: 'No Projection', position: 'WR', proTeam: 'FA', projected: null };
+    pool.players = [...pool.players, unprojected];
+    const owners = new Map([[target.playerId, { teamId: 4, teamName: 'Some Team', managerName: 'Sam' }]]);
+
+    const board = buildBigBoard(pool, null, Infinity, { owners, includeUngraded: true });
+    assert.equal(board.players.find((p) => p.playerId === target.playerId).rosteredBy.teamName, 'Some Team');
+    assert.equal(board.players.filter((p) => p.rosteredBy).length, 1, 'everyone else is a free agent');
+
+    const listed = board.players.find((p) => p.playerId === 999999);
+    assert.ok(listed, 'searchable even without a projection');
+    assert.equal(listed.valueRank, null);
+    assert.equal(listed.vorp, null);
+    assert.equal(board.players.at(-1).playerId, 999999, 'ungraded players come after graded ones');
+  });
+
   test('an empty pool returns unavailable rather than throwing', () => {
     const board = buildBigBoard({ players: [], startingSlots: SUPERFLEX_SLOTS, teams: 12 }, null, 250);
     assert.equal(board.available, false);
@@ -13167,7 +13525,7 @@ describe('challengePayoutStatus', () => {
 
 ### `tests/challenges.test.mjs`
 
-*447 lines*
+*549 lines*
 
 ```javascript
 /**
@@ -13337,8 +13695,8 @@ describe('challenge schedule', () => {
   test('fully overriding every week reproduces exactly what was pinned', () => {
     const overrides = {
       1: 'highScore', 2: 'receiverRoom', 3: 'bestDefense', 4: 'balanced',
-      5: 'supportingCast', 6: 'narrowestWin', 7: 'underdog', 8: 'overProjection',
-      9: 'closestTo100', 10: 'bestKicker', 11: 'allPlayWeek', 12: 'uglyWin', 13: 'benchWarmer',
+      5: 'supportingCast', 6: 'narrowestWin', 7: 'everybodyEats', 8: 'paydirt',
+      9: 'closestTo100', 10: 'bestKicker', 11: 'soClose', 12: 'uglyWin', 13: 'benchWarmer',
     };
     const schedule = buildChallengeSchedule({ ...LEAGUE, overrides });
     assert.deepEqual(
@@ -13373,6 +13731,108 @@ describe('challenge scoring', () => {
     const out = resolve('highScore', [row(1, 1, 110), row(2, 1, 130), row(3, 1, 99)]);
     assert.equal(out.winner.teamId, 2);
     assert.equal(out.winner.amount, 15);
+  });
+
+  test('No Weak Links ignores kickers and defences (Week 4 regression)', () => {
+    const lineup = (high, low, k, dst) => [
+      s('QB', 'QB', high),
+      s('WR', 'WR', low),
+      s('Kicker', 'K', k),
+      s('Defence', 'D/ST', dst),
+    ];
+    // Team 1 looks tighter only if its 6-point kicker is allowed to be the
+    // "worst starter" (17 gap). Without K/DST its real gap is 16, which is
+    // still bigger than team 2's 15 — so team 2 must win.
+    const out = resolve('balanced', [
+      { ...row(1, 1, 100, { starters: lineup(23, 7, 6, 8) }) },
+      { ...row(2, 1, 100, { starters: lineup(22, 7, 0, 12) }) },
+    ]);
+    assert.equal(out.winner.teamId, 2);
+    assert.equal(out.winner.value, -15);
+    assert.equal(out.winner.detail, '22 high, 7 low');
+  });
+
+  test('No Weak Links still counts the superflex slot', () => {
+    const out = resolve('balanced', [
+      row(1, 1, 100, { starters: [s('A', 'QB', 14, { slotId: 7 }), s('B', 'WR', 10)] }),
+      row(2, 1, 100, { starters: [s('C', 'QB', 30), s('D', 'WR', 2)] }),
+    ]);
+    assert.equal(out.winner.teamId, 1);
+  });
+
+  test('Second Fiddle counts kickers and defences', () => {
+    const out = resolve('supportingCast', [
+      row(1, 1, 100, { starters: [s('A', 'QB', 30), s('B', 'WR', 10), s('K', 'K', 19)] }),
+      row(2, 1, 100, { starters: [s('C', 'QB', 30), s('D', 'WR', 12), s('E', 'D/ST', 2)] }),
+    ]);
+    assert.equal(out.winner.teamId, 1);
+    assert.equal(out.winner.value, 19);
+  });
+
+  test('Everybody Eats counts every started player at 15+, kickers and defences included', () => {
+    const out = resolve('everybodyEats', [
+      row(1, 1, 100, { starters: [s('A', 'QB', 15), s('B', 'WR', 14.9), s('C', 'K', 15), s('D', 'D/ST', 20)] }),
+      row(2, 1, 100, { starters: [s('E', 'QB', 40), s('F', 'WR', 3), s('G', 'RB', 2), s('H', 'K', 1)] }),
+    ]);
+    assert.equal(out.winner.teamId, 1);
+    assert.equal(out.winner.value, 3);
+    assert.equal(out.winner.detail, '3 starters with 15+ points');
+  });
+
+  test('Everybody Eats splits the pot on a tie', () => {
+    const out = resolve('everybodyEats', [
+      row(1, 1, 100, { starters: [s('A', 'QB', 16), s('B', 'WR', 2)] }),
+      row(2, 1, 100, { starters: [s('C', 'QB', 18), s('D', 'WR', 1)] }),
+      row(3, 1, 100, { starters: [s('E', 'QB', 5), s('F', 'WR', 1)] }),
+    ]);
+    assert.equal(out.tiedWith.length, 1);
+    assert.equal(out.winner.amount, 7.5);
+  });
+
+  test('Paydirt counts touchdowns scored by starters, kickers and defences included', () => {
+    const out = resolve('paydirt', [
+      row(1, 1, 100, { starters: [s('A', 'RB', 10, { touchdowns: 2 }), s('B', 'WR', 10, { touchdowns: 1 }), s('Defence', 'D/ST', 5, { touchdowns: 1 })] }),
+      row(2, 1, 100, { starters: [s('C', 'RB', 10, { touchdowns: 3 }), s('D', 'WR', 10, { touchdowns: 0 })] }),
+    ]);
+    assert.equal(out.winner.teamId, 1);
+    assert.equal(out.winner.value, 4);
+    assert.match(out.winner.detail, /^4 touchdowns — A 2, B 1, Defence 1$/);
+  });
+
+  test('Paydirt breaks a tie with the lower team score instead of splitting', () => {
+    const out = resolve('paydirt', [
+      row(1, 1, 120, { starters: [s('A', 'RB', 10, { touchdowns: 3 })] }),
+      row(2, 1, 95.5, { starters: [s('B', 'RB', 10, { touchdowns: 3 })] }),
+      row(3, 1, 140, { starters: [s('C', 'RB', 10, { touchdowns: 1 })] }),
+    ]);
+    assert.equal(out.winner.teamId, 2);
+    assert.equal(out.tiedWith.length, 0);
+    assert.equal(out.winner.amount, 15);
+  });
+
+  test('Paydirt still splits when touchdowns and score are both identical', () => {
+    const out = resolve('paydirt', [
+      row(1, 1, 100, { starters: [s('A', 'RB', 10, { touchdowns: 2 })] }),
+      row(2, 1, 100, { starters: [s('B', 'RB', 10, { touchdowns: 2 })] }),
+    ]);
+    assert.equal(out.tiedWith.length, 1);
+    assert.equal(out.winner.amount, 7.5);
+  });
+
+  test('Paydirt has no winner when ESPN sent no touchdown data, rather than inventing zeros', () => {
+    const out = resolve('paydirt', [row(1, 1, 100, { starters: [s('A', 'RB', 10, { touchdowns: null })] })]);
+    assert.equal(out.winner, null);
+    assert.equal(out.noWinner, true);
+  });
+
+  test('So Close goes to the narrowest loss and ignores winners', () => {
+    const out = resolve('soClose', [
+      row(1, 1, 100, { result: 'WIN', opponentScore: 99.9 }),
+      row(2, 1, 99.9, { result: 'LOSS', opponentScore: 100 }),
+      row(3, 1, 80, { result: 'LOSS', opponentScore: 120 }),
+    ]);
+    assert.equal(out.winner.teamId, 2);
+    assert.equal(out.winner.detail, 'lost by just 0.1');
   });
 
   test('Price Is Right busts anyone over 100', () => {
@@ -14040,12 +14500,12 @@ describe('news normalization', () => {
 
 ### `tests/normalize.test.mjs`
 
-*55 lines*
+*82 lines*
 
 ```javascript
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { receptionScoring, normalizeTeams, adviceWeekFor } from '../scripts/lib/normalize.mjs';
+import { receptionScoring, normalizeTeams, adviceWeekFor, normalizeTransactions } from '../scripts/lib/normalize.mjs';
 
 describe('receptionScoring', () => {
   test('reads receptions from scoringItems, ignoring playerRankType', () => {
@@ -14095,6 +14555,33 @@ describe('adviceWeekFor', () => {
   });
   test('never past the final week', () => {
     assert.equal(adviceWeekFor({ latestScoringPeriod: 18, finalScoringPeriod: 17 }), 17);
+  });
+});
+
+describe('normalizeTransactions', () => {
+  const teams = [{ id: 1, name: 'Alpha' }, { id: 2, name: 'Beta' }];
+  const players = new Map([[10, { id: 10, name: 'Ten', position: 'RB', proTeam: 'SEA' }]]);
+  const tx = (id, week, date, status = 'EXECUTED', teamId = 1) => ({
+    id, type: 'WAIVER', status, teamId, scoringPeriodId: week, proposedDate: date,
+    items: [{ playerId: 10, type: 'ADD', fromTeamId: 0, toTeamId: teamId }],
+  });
+
+  test('keeps every week, each under its own week, newest first', () => {
+    const out = normalizeTransactions({ transactions: [tx('a', 1, 100), tx('b', 3, 300), tx('c', 2, 200), tx('d', 3, 350)] }, players, teams);
+    assert.deepEqual(out.map((t) => [t.id, t.scoringPeriodId]), [['d', 3], ['b', 3], ['c', 2], ['a', 1]]);
+  });
+  test('drops failed and pending claims', () => {
+    const out = normalizeTransactions({ transactions: [
+      tx('ok', 2, 1), tx('failed', 2, 2, 'FAILED_INVALIDPLAYERSOURCE'), tx('pending', 2, 3, 'PENDING'),
+    ] }, players, teams);
+    assert.deepEqual(out.map((t) => t.id), ['ok']);
+  });
+  test('a move fetched twice appears once', () => {
+    const out = normalizeTransactions({ transactions: [tx('a', 2, 1), tx('a', 2, 1)] }, players, teams);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].teamName, 'Alpha');
+    assert.equal(out[0].items[0].playerName, 'Ten');
+    assert.equal(out[0].date, 1);
   });
 });
 ```
@@ -14734,18 +15221,18 @@ describe('news cache', () => {
 
 ### `tests/lineupsim.test.mjs`
 
-*120 lines*
+*252 lines*
 
 ```javascript
 /**
- * The 100-week lineup simulation. Rosters are one-slot (a lone QB slot) so the
+ * The 1,000-week lineup simulation. Rosters are one-slot (a lone QB slot) so the
  * right answer can be reasoned out by hand.
  */
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { simulateLineup, playerSpread } from '../scripts/lib/lineupsim.mjs';
+import { simulateLineup, playerSpread, lognormalParams, calibrateProjections, PLAY_CHANCE } from '../scripts/lib/lineupsim.mjs';
 
 const QB_ONLY = [{ slotId: 0, count: 1 }];
 const qb = (playerId, projected, extra = {}) => ({ playerId, name: `QB${playerId}`, position: 'QB', projected, slotId: 20, ...extra });
@@ -14784,7 +15271,7 @@ describe('simulateLineup', () => {
     });
     const rate = Object.fromEntries(sim.players.map((p) => [p.playerId, p.startPct]));
     assert.deepEqual(rate, { 1: 100, 2: 0, 3: 0, 4: 0 });
-    assert.equal(sim.simulations, 100);
+    assert.equal(sim.simulations, 1000);
     assert.deepEqual(sim.recommended.starters.map((p) => p.playerId), [1]);
     assert.equal(sim.recommended.starters[0].slot, 'QB');
   });
@@ -14856,6 +15343,138 @@ describe('simulateLineup against the lineup set in ESPN', () => {
     assert.deepEqual(sim.fromCurrent, { start: [], sit: [] });
   });
 });
+
+describe('lognormalParams', () => {
+  test('keeps the average at the projection and the spread as given', () => {
+    const { m, s: sd } = lognormalParams(12, 6);
+    const mean = Math.exp(m + sd ** 2 / 2);
+    const variance = (Math.exp(sd ** 2) - 1) * Math.exp(2 * m + sd ** 2);
+    assert.ok(Math.abs(mean - 12) < 1e-9);
+    assert.ok(Math.abs(Math.sqrt(variance) - 6) < 1e-9);
+  });
+
+  test('nothing to shape for a zero projection', () => {
+    assert.equal(lognormalParams(0, 3), null);
+  });
+});
+
+describe('simulateLineup: what real weeks look like', () => {
+  const ONE_FLEX = [{ slotId: 0, count: 1 }];
+
+  test('simulated scores average out at the projection', () => {
+    const sim = simulateLineup({ roster: [qb(1, 15)], startingSlots: ONE_FLEX, simulations: 4000, seed: 'avg' });
+    assert.ok(Math.abs(sim.recommended.mean - 15) < 0.5, `mean ${sim.recommended.mean}`);
+    // Skewed: the 90th percentile sits further above the average than the
+    // 10th sits below it.
+    assert.ok(sim.recommended.p90 - 15 > 15 - sim.recommended.p10);
+  });
+
+  test('a Questionable player loses ground to an equal healthy one', () => {
+    const sim = simulateLineup({
+      roster: [qb(1, 20, { injuryStatus: 'QUESTIONABLE' }), qb(2, 20)],
+      startingSlots: ONE_FLEX,
+      seed: 'q',
+    });
+    const rate = Object.fromEntries(sim.players.map((p) => [p.playerId, p.startPct]));
+    assert.ok(rate[2] > rate[1], JSON.stringify(rate));
+    assert.deepEqual(sim.recommended.starters.map((p) => p.playerId), [2]);
+    assert.equal(sim.players.find((p) => p.playerId === 1).playChance, PLAY_CHANCE.QUESTIONABLE);
+  });
+
+  test('a locked starter keeps his slot and scores what he actually scored', () => {
+    // QB2 already played and scored 4; QB1 projects 25 but cannot replace him.
+    const sim = simulateLineup({
+      roster: [qb(1, 25), qb(2, 18, { slotId: 0, locked: true, points: 4 })],
+      startingSlots: ONE_FLEX,
+    });
+    assert.deepEqual(sim.recommended.starters.map((p) => p.playerId), [2]);
+    assert.deepEqual(sim.fromCurrent, { start: [], sit: [] });
+    assert.equal(sim.recommended.mean, 4);
+  });
+
+  test('a locked bench player cannot come in', () => {
+    const sim = simulateLineup({
+      roster: [qb(1, 30, { locked: true, points: 30 }), qb(2, 10, { slotId: 0 })],
+      startingSlots: ONE_FLEX,
+    });
+    assert.deepEqual(sim.recommended.starters.map((p) => p.playerId), [2]);
+  });
+
+  test('teammates boom and bust together', () => {
+    // Two receivers on the same NFL team against two on different teams: same
+    // averages, but the stacked pair swings wider week to week.
+    const wr = (playerId, proTeam) => ({ playerId, name: `WR${playerId}`, position: 'WR', proTeam, projected: 12, slotId: 4 });
+    const TWO_WR = [{ slotId: 4, count: 2 }];
+    const stacked = simulateLineup({ roster: [wr(1, 'DET'), wr(2, 'DET')], startingSlots: TWO_WR, simulations: 4000, seed: 'c' });
+    const apart = simulateLineup({ roster: [wr(1, 'DET'), wr(2, 'MIA')], startingSlots: TWO_WR, simulations: 4000, seed: 'c' });
+    const width = (s) => s.recommended.p90 - s.recommended.p10;
+    assert.ok(width(stacked) > width(apart), `${width(stacked)} vs ${width(apart)}`);
+  });
+});
+
+describe('simulateLineup: pickups and IR', () => {
+  const ONE = [{ slotId: 0, count: 1 }];
+
+  test('a free agent who would start is priced in win chance', () => {
+    const sim = simulateLineup({
+      roster: [qb(1, 10, { slotId: 0 })],
+      startingSlots: ONE,
+      opponentRoster: [qb(9, 18)],
+      freeAgents: [qb(50, 22), qb(51, 6)],
+      seed: 'p',
+    });
+    assert.deepEqual(sim.pickups.map((p) => p.playerId), [50]); // QB51 would not start
+    assert.ok(sim.pickups[0].winGain > 10);
+    assert.deepEqual(sim.pickups[0].replaces.map((p) => p.playerId), [1]);
+  });
+
+  test('an IR player cannot be started when the roster is full, but is offered', () => {
+    // One starter + one bench spot, both filled; QB3 is healthy but in IR.
+    const roster = [qb(1, 10, { slotId: 0 }), qb(2, 8), qb(3, 25, { slotId: 21 })];
+    const sim = simulateLineup({ roster, startingSlots: ONE, benchSlots: 1, opponentRoster: [qb(9, 18)], seed: 'ir' });
+    assert.deepEqual(sim.recommended.starters.map((p) => p.playerId), [1]);
+    assert.deepEqual(sim.irActivations.map((p) => p.playerId), [3]);
+
+    // With an open bench spot he can simply be activated and started.
+    const roomy = simulateLineup({ roster, startingSlots: ONE, benchSlots: 2, opponentRoster: [qb(9, 18)], seed: 'ir' });
+    assert.deepEqual(roomy.recommended.starters.map((p) => p.playerId), [3]);
+    assert.deepEqual(roomy.irActivations, []);
+  });
+});
+
+describe('calibrateProjections', () => {
+  const rows = (position, n, projected, points) =>
+    Array.from({ length: n }, (_, i) => ({ position, projected, points: i % 2 ? points[1] : points[0] }));
+
+  test('measures the spread around the projection, shrunk toward the default', () => {
+    // 50 QB weeks projected 20, alternating 12 / 28: every miss is 8, so the
+    // measured CV is 8 / 20 = 0.4. Prior 0.35 at weight 50 -> (0.4 + 0.35) / 2.
+    const cal = calibrateProjections(rows('QB', 50, 20, [12, 28]));
+    assert.equal(cal.QB.n, 50);
+    assert.equal(cal.QB.cv, 0.375);
+    assert.equal(cal.QB.bias, 1); // averages exactly the projection
+  });
+
+  test('bias is shrunk toward 1 and clamped', () => {
+    // 150 kicker weeks at 80% of projection: (150 * 0.8 + 150) / 300 = 0.9.
+    assert.equal(calibrateProjections(rows('K', 150, 10, [8, 8])).K.bias, 0.9);
+    // Wildly over-projected at 10% of projection: clamped at 0.9, not 0.55.
+    assert.equal(calibrateProjections(rows('K', 150, 10, [1, 1])).K.bias, 0.9);
+  });
+
+  test('zero projections (byes, ruled out) are not projection misses', () => {
+    assert.deepEqual(calibrateProjections([{ position: 'WR', projected: 0, points: 0 }]), {});
+  });
+
+  test('the simulation centres on the corrected projection but shows ESPN\'s', () => {
+    const calibration = { QB: { n: 150, cv: 0.4, bias: 0.9 } };
+    const sim = simulateLineup({ roster: [qb(1, 20, { slotId: 0 })], startingSlots: QB_ONLY, calibration, seed: 'c' });
+    assert.equal(sim.players[0].projected, 20);
+    assert.equal(sim.players[0].spread, 7.2); // 0.4 * (0.9 * 20)
+    assert.ok(Math.abs(sim.recommended.mean - 18) < 0.6);
+    assert.deepEqual(sim.calibration, calibration);
+  });
+});
 ```
 
 ## Automation
@@ -14864,7 +15483,7 @@ Daily GitHub Actions run: fetch, build, test, commit only on change.
 
 ### `.github/workflows/update.yml`
 
-*127 lines*
+*128 lines*
 
 ```yaml
 name: Update league data
@@ -14880,9 +15499,10 @@ name: Update league data
 
 on:
   schedule:
-    # Every 3 hours, around the clock, so scores and news land within a few
-    # hours instead of waiting for the next calendar day.
-    - cron: '0 */3 * * *'
+    # Every 30 minutes, around the clock, so scores, injuries and projections
+    # land within half an hour. GitHub may start a scheduled run a few minutes
+    # late under load; the concurrency group below stops two from overlapping.
+    - cron: '*/30 * * * *'
   workflow_dispatch:
     inputs:
       force:
@@ -14901,7 +15521,7 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Check out
@@ -15026,4 +15646,4 @@ jobs:
 
 ---
 
-*47 files, 14,684 lines.*
+*47 files, 15,303 lines.*

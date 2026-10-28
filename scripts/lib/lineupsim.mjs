@@ -72,11 +72,21 @@ const PICKUPS_PER_POSITION = 2;
 
 /**
  * How much a player's week swings when there is little history to go on, as a
- * share of his projection. Assumptions, not measurements: kickers and
- * quarterbacks are the steadiest, tight ends and defences the least. With a few
- * weeks of real scores the player's own spread takes over (see SPREAD_K).
+ * share of his projection. These are only the starting point: once weeks are
+ * final, calibrateProjections() measures the real spread of this league's PPR
+ * scores around ESPN's projections and that takes over (see CALIBRATION_K).
+ * With a few weeks of a player's own scores, his spread takes over in turn
+ * (see SPREAD_K).
  */
 export const DEFAULT_CV = { QB: 0.35, RB: 0.5, WR: 0.55, TE: 0.6, K: 0.45, 'D/ST': 0.65 };
+/**
+ * Prior weight, in player-weeks, on DEFAULT_CV and on "ESPN is unbiased" when
+ * calibrating. Each position sees 70-300 player-weeks by midseason, so the
+ * measurement dominates by then; in Week 1 the defaults stand.
+ */
+export const CALIBRATION_K = { cv: 50, bias: 150 };
+/** ESPN's projections are never scaled by more than this, either way. */
+const MAX_BIAS = 0.1;
 const FALLBACK_CV = 0.55;
 /** No player's week is certain: a floor on the spread, in points. */
 const MIN_SD = 1.5;
@@ -112,11 +122,55 @@ const percentile = (sorted, p) => sorted[Math.min(sorted.length - 1, Math.floor(
  * @param {object} player        { position, projected }
  * @param {number[]} history     his actual weekly scores this season (games played)
  */
-export function playerSpread(player, history = [], k = SPREAD_K) {
+export function playerSpread(player, history = [], k = SPREAD_K, cv = DEFAULT_CV) {
   const projected = Math.max(0, player.projected ?? 0);
-  const prior = Math.max(MIN_SD, (DEFAULT_CV[player.position] ?? FALLBACK_CV) * projected);
+  const prior = Math.max(MIN_SD, (cv[player.position] ?? DEFAULT_CV[player.position] ?? FALLBACK_CV) * projected);
   const n = Math.max(0, history.length - 1);
   return Math.max(MIN_SD, (n * sampleSd(history) + k * prior) / (n + k));
+}
+
+/**
+ * How ESPN's weekly projections have actually held up in this league, by
+ * position, from every rostered player-week that is final.
+ *
+ *   cv     the typical miss as a share of the projection — sqrt(sum of squared
+ *          misses / sum of squared projections) — which replaces DEFAULT_CV.
+ *          ESPN's numbers are already this league's PPR scoring, so this is the
+ *          real width of a superflex PPR week, injuries and duds included.
+ *   bias   actual points / projected points. ESPN has been close to 1.0 at
+ *          QB/RB/WR/TE and runs a little hot on kickers and defences. Matters
+ *          for win odds, and for the OP slot, where a QB and a WR compete.
+ *
+ * Both are shrunk toward the prior (CALIBRATION_K) and bias is clamped to
+ * +/- MAX_BIAS, so a hot fortnight cannot rewrite the projections. Only
+ * player-weeks ESPN projected above zero count: a zero is a bye or a player
+ * ruled out, which is not a projection miss.
+ *
+ * @param {Array<{position:string, projected:number|null, points:number}>} rows
+ * @returns {{ [position]: { n, cv, bias } }}
+ */
+export function calibrateProjections(rows, k = CALIBRATION_K) {
+  const acc = new Map();
+  for (const r of rows ?? []) {
+    if (!r || !(r.projected > 0) || !Number.isFinite(r.points)) continue;
+    const a = acc.get(r.position) ?? { n: 0, proj: 0, pts: 0, miss2: 0, proj2: 0 };
+    a.n += 1;
+    a.proj += r.projected;
+    a.pts += r.points;
+    a.miss2 += (r.points - r.projected) ** 2;
+    a.proj2 += r.projected ** 2;
+    acc.set(r.position, a);
+  }
+  const out = {};
+  for (const [position, a] of acc) {
+    const prior = DEFAULT_CV[position] ?? FALLBACK_CV;
+    const measured = Math.sqrt(a.miss2 / a.proj2);
+    const cv = (a.n * measured + k.cv * prior) / (a.n + k.cv);
+    const rawBias = (a.n * (a.pts / a.proj) + k.bias) / (a.n + k.bias);
+    const bias = Math.min(1 + MAX_BIAS, Math.max(1 - MAX_BIAS, rawBias));
+    out[position] = { n: a.n, cv: Number(cv.toFixed(3)), bias: Number(bias.toFixed(3)) };
+  }
+  return out;
 }
 
 const lineupKey = (lineup) => lineup.map((p) => p.playerId).sort((a, b) => a - b).join(',');
@@ -156,6 +210,7 @@ function irRoomFor(list, startingSlots, benchSlots) {
  * @param {Array}    [input.opponentRoster] the opponent's roster, same shape, if known
  * @param {Array}    [input.freeAgents]    pickup candidates: { playerId, name, position, proTeam, projected, ... }
  * @param {Map}      [input.history]       playerId -> weekly scores this season
+ * @param {object}   [input.calibration]   calibrateProjections() output; none = ESPN as-is
  * @param {number}   [input.simulations]
  * @param {string}   [input.seed]
  */
@@ -166,6 +221,7 @@ export function simulateLineup({
   opponentRoster = null,
   freeAgents = [],
   history = new Map(),
+  calibration = {},
   simulations = DEFAULT_SIMULATIONS,
   seed = 'roe-lineup',
 }) {
@@ -175,19 +231,25 @@ export function simulateLineup({
   const rand = mulberry32(hashSeed(seed));
   const normal = () => Math.sqrt(-2 * Math.log(1 - rand())) * Math.cos(2 * Math.PI * rand());
 
+  const cvs = Object.fromEntries(Object.entries(calibration).map(([pos, c]) => [pos, c.cv]));
   const model = (list, { irRoom = true } = {}) => list.map((p) => {
     // Once his game has kicked off, a player's score is what he has actually
     // put up and his lineup spot is fixed either way.
     const locked = Boolean(p.locked);
     // A zero projection is ESPN saying he is not playing — usually a bye.
     const out = !locked && (WILL_NOT_PLAY.has(p.injuryStatus) || p.projected <= 0);
-    const mu = locked ? Number(p.points ?? 0) : out ? 0 : Math.max(0, p.projected);
-    const sd = locked || out ? 0 : playerSpread(p, history.get(p.playerId) ?? []);
+    // What the page shows: ESPN's projection, or his actual points once locked.
+    const shown = locked ? Number(p.points ?? 0) : out ? 0 : Math.max(0, p.projected);
+    // What the simulation centres on: ESPN's projection, corrected for how
+    // ESPN has run at his position this season.
+    const mu = locked || out ? shown : shown * (calibration[p.position]?.bias ?? 1);
+    const sd = locked || out ? 0 : playerSpread({ ...p, projected: mu }, history.get(p.playerId) ?? [], SPREAD_K, cvs);
     const playChance = locked || out ? 1 : PLAY_CHANCE[p.injuryStatus] ?? 1;
     return {
       ...p,
       locked,
       out,
+      shown,
       mu,
       sd,
       playChance,
@@ -354,7 +416,7 @@ export function simulateLineup({
     position: p.position,
     slotId: p.slotId,
     slot: LINEUP_SLOT[p.slotId] ?? String(p.slotId),
-    projected: round1(p.mu),
+    projected: round1(p.shown),
   });
 
   /**
@@ -380,7 +442,7 @@ export function simulateLineup({
       name: extra.name,
       position: extra.position,
       proTeam: extra.proTeam ?? null,
-      projected: round1(extra.mu),
+      projected: round1(extra.shown),
       injuryStatus: extra.injuryStatus ?? null,
       percentOwned: extra.percentOwned ?? null,
       winPct: stats.winPct,
@@ -436,7 +498,7 @@ export function simulateLineup({
         playerId: p.playerId,
         name: p.name,
         position: p.position,
-        projected: round1(p.mu),
+        projected: round1(p.shown),
         spread: round1(p.sd),
         out: p.out,
         locked: p.locked,
@@ -449,6 +511,8 @@ export function simulateLineup({
       }))
       .sort((a, b) => b.startPct - a.startPct || b.projected - a.projected),
     distinctOptimalLineups: timesOptimal.size,
+    // The per-position correction the simulation ran on, for the glossary.
+    calibration,
   };
 }
 

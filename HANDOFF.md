@@ -20,16 +20,17 @@ the way they are.
 | Format | **10 teams**, PPR, **superflex** (ESPN OP slot), 16-round snake |
 | Lineup | 1 QB, 2 RB, 2 WR, 1 TE, **1 OP**, 1 D/ST, 1 K + 7 bench, 2 IR — **9 starters** |
 | Season | 13 regular-season weeks, 8 playoff teams |
-| Draft | **Sat 5 Sept 2026, 4:00 PM ET** (room opens 3:00 PM) |
+| Draft | Held Sat 5 Sept 2026 — 150 of 160 slots filled |
 | Trade deadline | 2 Dec 2026 |
-| Managers | **10 committed.** ESPN size changed 12 -> 10. Most have not claimed their ESPN team yet. |
+| Managers | 9 of 10 teams claimed; the tenth is ESPN's "CPU Team 1" placeholder |
 | Buy-in | **$75** (was $50). Payouts **350 / 130 / 75** + **$195** funding weekly challenges at $15/wk. |
 | Money owed | Everyone paid **$50** under the old buy-in. The ledger shows each of them **$25 short** until somebody confirms otherwise — see below. |
-| Tests | 207, all passing |
-| Automation | GitHub Actions, every 3 hours — **verified working**, it has pushed real commits |
+| Season so far | **Week 7 final** (28 Oct 2026). Challenge winners for Weeks 1–7 re-verified by an independent recount of the box scores |
+| Tests | 234, all passing |
+| Automation | GitHub Actions `update.yml`, every 30 minutes (was every 3 hours) |
 
-The league had no rosters, no picks and no games at time of writing. Every
-"available: false" and empty state you see is correct, not broken.
+Everything below about "before the draft" is history now; the gotchas still
+apply.
 
 **The settings have already changed twice** during development (14→13 weeks,
 6→8 playoff teams, FLEX→superflex). Do not hardcode any of them; they all come
@@ -241,7 +242,7 @@ question. If this comes up again, the answer has not changed.
   Use `;`, or `npm run ship`. Documented in the README because it bit us.
 - **`git rebase` has no `--allow-unrelated-histories`** (that's a merge flag).
   To reparent onto an unrelated history: `git reset --soft <target>` then commit.
-- **The automation pushes commits every 3 hours.** Expect to need `git pull --rebase`
+- **The automation pushes commits every 30 minutes.** Expect to need `git pull --rebase`
   before pushing. Conflicts will be in `docs/data/*.json`, which are build
   artefacts — resolve by running `node scripts/build.mjs`, never by hand-merging
   minified JSON.
@@ -283,7 +284,7 @@ four weeks; the comment explains why). Seeds are ranked with
 rather than copied, and a test pins that zero remaining games reproduces the
 real standings exactly. The generator is the challenges' mulberry32, seeded on
 `roe-playoff-odds:{season}:{weeksPlayed}`, so repeated builds on the same data
-publish the same numbers instead of jittering by a tenth every three hours.
+publish the same numbers instead of jittering by a tenth every half hour.
 Percentages are capped at 99.9 / 0.1 unless *every* run agreed: 9,996 of
 10,000 is not a clinch.
 
@@ -355,8 +356,17 @@ only change it before Week 1.
 **The team page runs 1,000 simulated weeks for lineup advice.**
 `scripts/lib/lineupsim.mjs` draws every rostered player's score 1,000 times
 around his ESPN projection, with a spread blending his own weekly swings this
-season (weight n − 1) and a positional default (`DEFAULT_CV`, an assumption —
-weight `SPREAD_K = 4`). The draw is **lognormal** (skewed, mean exactly the
+season (weight n − 1) and a positional default (weight `SPREAD_K = 4`). The
+positional default and the projection itself are **calibrated on this league's
+superflex PPR results**: `calibrateProjections()` measures, per position over
+every final week, ESPN's bias (actual ÷ projected, shrunk toward 1 with 150
+player-weeks of prior and clamped ±10%) and the spread of the misses
+(√(Σmiss²/Σproj²), shrunk toward `DEFAULT_CV` with 50). After Week 7 that was
+QB 0.41 / RB 0.52 / WR 0.58 / TE 0.64 / K 0.53 / D/ST 0.76 against the old
+assumed 0.35 / 0.50 / 0.55 / 0.60 / 0.45 / 0.65 — the assumptions were too
+narrow, most of all for kickers, defences and the quarterbacks the OP slot
+turns on — and biases between 0.97 and 1.00. The simulation centres on the
+corrected projection; the page still shows ESPN's number. The draw is **lognormal** (skewed, mean exactly the
 projection; a clipped normal used to inflate low projections), D/ST excepted
 (normal, floor −5). **Questionable/Doubtful** players sit out a share of draws
 (`PLAY_CHANCE` 0.85 / 0.25 — assumptions). Players on the same **NFL team share
@@ -452,6 +462,14 @@ dishonest; the flag says what is known and what is not.
 
 **The countdown is `aria-hidden` with a static sentence behind it.** A value
 announced every second is unusable with a screen reader.
+
+**A challenge week is scored only once it is final.** ESPN fills in matchup
+scores as games are played, and a week counts as `played` from its first
+kickoff. `buildChallenges()` therefore scores only `completedWeeks()` (the same
+rule as the recap: every matchup has a winner) and reveals through the last
+*final* week + 1. Without that, Thursday night's partial box score would name a
+winner, the leaderboard and the private ledger would pay it, and next week's
+card would unseal early.
 
 **The weekly challenge draw is seeded, and that is load-bearing.** The schedule
 is a Fisher-Yates shuffle over `CHALLENGE_DECK` driven by mulberry32 seeded on
@@ -637,8 +655,11 @@ and the coaching report all light up on their own.
   handles it, but a player ESPN has no photo of shows initials with no
   indication of why. That is the right behaviour; it is only worth noting so a
   future session does not treat it as a bug.
-- **The advisor uses ESPN projections uncritically.** No opponent adjustment, no
-  matchup weighting, no injury-probability discount. Planned as "Phase 8" and
+- **Projections are calibrated by position, not by matchup.** The lineup
+  simulation corrects ESPN's per-position bias and spread from this league's
+  results (see `calibrateProjections()`), and Questionable/Doubtful players
+  already sit out a share of draws. What is still missing is the opponent: no
+  points-allowed adjustment, no matchup weighting. Planned as "Phase 8" and
   deliberately not built yet: points-allowed-by-defense needs each player's NFL
   opponent for every past week, and the adjustment needs next week's — the
   normalized model only carries a player's `proTeam`, and nothing fetches the
@@ -646,7 +667,8 @@ and the coaching report all light up on their own.
   view, unverified here), normalize it to `{ week, proTeam -> opponent }`, then
   the rest is pure: shrink positional points-allowed toward the average as
   `odds.mjs` does, clamp the multiplier (±15%), apply a fixed documented
-  Questionable/Doubtful discount, and show "ESPN proj → adj" side by side.
+  show "ESPN proj → adj" side by side. The waiver list (`waiverTargets()`)
+  still ranks on raw ESPN projections.
 - **Historical seasons are unsupported in practice.** The code handles the
   pre-2018 `leagueHistory` endpoint, but this league has no history so that path
   has never executed.

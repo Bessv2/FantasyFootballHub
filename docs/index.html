@@ -65,6 +65,10 @@
   <p class="visually-hidden" role="status" aria-live="polite" id="route-status"></p>
 
   <main id="main" tabindex="-1">
+    <p class="update-notice wrap" id="update-notice" role="status" hidden>
+      New league data is in.
+      <button type="button" class="theme-toggle" id="update-reload">Reload</button>
+    </p>
     <div class="wrap">
       <div id="boot" class="loading">Loading league data…</div>
 
@@ -174,7 +178,7 @@
   <footer class="site-footer">
     <div class="wrap">
       <p>
-        Data from ESPN, updated every 3 hours. Last built:
+        Data from ESPN, updated every 30 minutes. Last built:
         <time id="generated-at">—</time>.
       </p>
       <p id="fixture-warning" hidden>

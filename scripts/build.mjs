@@ -25,7 +25,7 @@ import {
   computePositionalStats,
 } from './lib/analytics.mjs';
 import { analyzeDraft, buildPlayerWeekPoints } from './lib/draft.mjs';
-import { simulateLineup } from './lib/lineupsim.mjs';
+import { simulateLineup, calibrateProjections } from './lib/lineupsim.mjs';
 import { computeLedger, computePayouts, challengePayout, splitPot, mergeMoneyConfig } from './lib/money.mjs';
 import { buildChallengeSchedule, computeChallenges, challengeLeaderboard } from './lib/challenges.mjs';
 import { sanitizeTeamLogo } from './lib/images.mjs';
@@ -34,7 +34,7 @@ import { recommendLineup, coachingReport, waiverTargets } from './lib/advisor.mj
 import { buildBigBoard } from './lib/bigboard.mjs';
 import { computePlayoffOdds } from './lib/odds.mjs';
 import { attributeTrades } from './lib/trades.mjs';
-import { buildRecaps } from './lib/recap.mjs';
+import { buildRecaps, completedWeeks } from './lib/recap.mjs';
 import { buildHeadToHead, headToHeadFor, managerIdOf, publicManagerKey } from './lib/h2h.mjs';
 
 const ROOT = projectRoot();
@@ -178,11 +178,16 @@ function buildChallenges(season, teamStats, teamWeeks, moneyConfig) {
   const pot = Math.max(0, challengePayout(payouts, moneyConfig));
   const perWeek = new Map(splitPot(pot, weekNumbers).map((w) => [w.week, w.amount]));
 
+  // Only final weeks are scored. A week counts as "played" from the first
+  // kickoff, and scoring it then would pay out on Thursday night's partial box
+  // score (and reveal next week's card early). It is shown as live until every
+  // matchup has a winner, the same rule the recap uses.
+  const settled = new Set(completedWeeks(season));
   const resolved = computeChallenges({
     schedule,
-    teamWeeks,
+    teamWeeks: teamWeeks.filter((r) => settled.has(r.week)),
     teamStats,
-    weeksPlayed: season.status.weeksPlayed,
+    weeksPlayed: Math.max(0, ...settled),
     payouts: perWeek,
   });
 
@@ -217,6 +222,16 @@ function buildTeamDetail(season, teamStats, teamWeeks, standings, draft) {
   for (const [playerId, weeks] of buildPlayerWeekPoints(season)) {
     history.set(playerId, [...weeks.values()].map((w) => w.points).filter((pts) => pts !== 0));
   }
+  // How ESPN's projections have held up in this league's superflex PPR
+  // scoring, by position, over every final week. Steers the lineup simulation.
+  const final = new Set(completedWeeks(season));
+  const calibration = calibrateProjections(
+    season.weeks
+      .filter((w) => final.has(w.week))
+      .flatMap((w) => w.matchups.flatMap((m) => [m.home, m.away]))
+      .flatMap((side) => side?.roster ?? [])
+  );
+
   // Who each team plays in the week being advised on, from the full schedule.
   const opponentOf = new Map();
   for (const g of season.schedule ?? []) {
@@ -264,6 +279,7 @@ function buildTeamDetail(season, teamStats, teamWeeks, standings, draft) {
             freeAgents: season.freeAgents,
             opponentRoster: opponentId !== null ? season.currentRosters?.[opponentId] ?? null : null,
             history,
+            calibration,
             seed: `roe-lineup:${season.league.season}:${season.adviceWeek}:${team.id}`,
           });
           if (!sim.available) return sim;

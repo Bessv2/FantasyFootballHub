@@ -31,24 +31,14 @@ npm run bundle    # regenerate SOURCE-BUNDLE.md
 
 ## Current state
 
-The league was created 2026-08-11 and **has not drafted yet**. As of the last
-build: 1 of 12 teams claimed, 0 draft picks made, 0 games played.
+**In season.** As of the last build (28 Oct 2026): the draft is done (150
+picks), Week 7 is final, and every section of the site is live. Nine of the ten
+teams are claimed; the tenth is ESPN's "CPU Team 1" placeholder.
 
-That is expected, and the site says so rather than showing empty tables. Each
-section fills in on its own schedule:
-
-| Section | Unlocks |
-| --- | --- |
-| Money | **Now** — set the buy-in and start tracking payments |
-| Player cards | After one `npm run update` — needs a fetch to build |
-| Challenges | **Now** — Week 1's challenge is drawn; the rest stay sealed |
-| Prizes (catalogue) | **Now** — see the 18 prizes so you can agree rules early |
-| Teams | As managers claim their spots |
-| Draft | Draft night, **Sept 5 2026** |
-| Team pages: roster, lineup advice, waivers | Once rosters exist (draft night) |
-| Standings, Power, Prizes (winners) | After Week 1 |
-| Team pages: coaching report, week log, head-to-head | After Week 1 |
-| Trades | First completed trade |
+The weekly challenge has settled Weeks 1–7 and each winner has been checked
+against an independent recount of the published box scores. A week's challenge
+is only scored once every matchup in it has a winner, so nobody is paid on
+Thursday night's partial scores; until then it shows as in progress.
 
 ## Live scoreboard
 
@@ -58,7 +48,7 @@ carrying it, and a link to ESPN's Gamecast. Set your team once (Teams → yours 
 field**, starters in bold.
 
 This is the one panel that does **not** come from the build. Scores move by the
-minute and the build runs every few hours, so a "live" panel refreshed on that
+minute and the build runs every half hour, so a "live" panel refreshed on that
 cadence would be worse than none. ESPN's public scoreboard sends
 `Access-Control-Allow-Origin: *`, so the page calls it directly and re-polls
 every 45 seconds — but only while a game is actually in progress, only while the
@@ -526,7 +516,7 @@ Fetches, builds, commits, pushes. Cloudflare redeploys automatically.
 
 ## Automation — the hands-off option
 
-`.github/workflows/update.yml` runs every 3 hours, around the clock. It fetches,
+`.github/workflows/update.yml` runs every 30 minutes, around the clock. It fetches,
 rebuilds, runs the tests, and commits **only when something actually
 changed** — Cloudflare redeploys off that push. You never have to touch it
 during the season.

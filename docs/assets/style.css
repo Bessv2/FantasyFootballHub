@@ -238,6 +238,12 @@ a:hover { text-decoration-thickness: 2px; }
   transition: border-color 0.15s ease, background 0.15s ease;
 }
 .theme-toggle:hover { border-color: var(--border-strong); background: var(--bg-hover); }
+.update-notice {
+  display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+  margin-top: 1rem; padding-top: 0.6rem; padding-bottom: 0.6rem;
+  background: var(--accent-wash); border: 1px solid var(--accent); border-radius: var(--radius-sm);
+}
+.update-notice[hidden] { display: none; }
 .tx-view[aria-pressed="true"], .tx-dir[aria-pressed="true"] { background: var(--accent-wash); border-color: var(--accent); color: var(--text); font-weight: 600; }
 
 /* --- Nav ----------------------------------------------------------------- */
