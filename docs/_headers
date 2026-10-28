@@ -16,7 +16,7 @@
 #
 # `connect-src` names one host for the same reason: site.api.espn.com is
 # ESPN's public scoreboard, fetched in the browser rather than at build time
-# because scores move by the minute and the build runs every half hour. It is a
+# because scores move by the minute and the build runs every 30 minutes at best. It is a
 # read-only GET of public data, and no credentials go with it — the league
 # cookies live only in the Node fetcher and never reach the page.
 #

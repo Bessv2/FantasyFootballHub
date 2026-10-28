@@ -2,8 +2,8 @@
 
 Every source file in one place, for reading or for handing to a fresh session.
 
-- **Commit:** `55ef089` (2026-10-28 03:28:12 +0000)
-- **Generated:** 2026-10-28T10:12:04.319Z
+- **Commit:** `511e348` (2026-10-28 10:23:57 +0000)
+- **Generated:** 2026-10-28T10:24:10.249Z
 - **WARNING:** the working tree had uncommitted changes when this was generated, so this may not match any commit.
 - **Regenerate with:** `npm run bundle`
 
@@ -8209,7 +8209,7 @@ Dependency-free front end. Reads pre-computed JSON from docs/data/ and renders i
   <footer class="site-footer">
     <div class="wrap">
       <p>
-        Data from ESPN, updated every 30 minutes. Last built:
+        Data from ESPN, updated every 30 minutes during games. Last built:
         <time id="generated-at">—</time>.
       </p>
       <p id="fixture-warning" hidden>
@@ -12037,7 +12037,7 @@ function initTheme() {
 const NEW_DATA_CHECK_MS = 10 * 60 * 1000;
 
 /**
- * The data is rebuilt every 30 minutes, but a phone tab can stay open for
+ * The data is rebuilt every 30 minutes during games, but a phone tab can stay open for
  * days. When the tab comes back into view (at most every NEW_DATA_CHECK_MS),
  * re-read hub.json's build time and offer a reload if it moved. Never reloads
  * by itself: that would throw away a mock draft in progress.
@@ -12428,7 +12428,7 @@ export function rosterNeeds(roster, startingSlots) {
 #
 # `connect-src` names one host for the same reason: site.api.espn.com is
 # ESPN's public scoreboard, fetched in the browser rather than at build time
-# because scores move by the minute and the build runs every half hour. It is a
+# because scores move by the minute and the build runs every 30 minutes at best. It is a
 # read-only GET of public data, and no credentials go with it — the league
 # cookies live only in the Node fetcher and never reach the page.
 #
@@ -15483,7 +15483,7 @@ Daily GitHub Actions run: fetch, build, test, commit only on change.
 
 ### `.github/workflows/update.yml`
 
-*128 lines*
+*147 lines*
 
 ```yaml
 name: Update league data
@@ -15499,10 +15499,29 @@ name: Update league data
 
 on:
   schedule:
-    # Every 30 minutes, around the clock, so scores, injuries and projections
-    # land within half an hour. GitHub may start a scheduled run a few minutes
-    # late under load; the concurrency group below stops two from overlapping.
-    - cron: '*/30 * * * *'
+    # Cron is UTC. Times below are Eastern Standard Time (UTC-5); during
+    # daylight time (before early November) each window lands an hour early.
+    #
+    # Every 30 minutes while games are on:
+    #   Thursday 8 PM - midnight   (Fri 01:00-05:00 UTC)
+    - cron: '*/30 1-4 * * 5'
+    - cron: '0 5 * * 5'
+    #   Sunday 10 AM - midnight    (Sun 15:00 - Mon 05:00 UTC)
+    - cron: '*/30 15-23 * * 0'
+    - cron: '*/30 0-4 * * 1'
+    - cron: '0 5 * * 1'
+    #   Monday 8 PM - midnight     (Tue 01:00-05:00 UTC)
+    - cron: '*/30 1-4 * * 2'
+    - cron: '0 5 * * 2'
+    #
+    # Every 3 hours the rest of the week, skipping hours a window already
+    # covers so no slot fires twice. About 96 runs a week (~415 a month),
+    # under Cloudflare Pages' free 500 builds with room for manual pushes.
+    - cron: '0 */3 * * 3,4,6'
+    - cron: '0 0,6-21/3 * * 5'
+    - cron: '0 0-12/3 * * 0'
+    - cron: '0 6-21/3 * * 1'
+    - cron: '0 0,6-21/3 * * 2'
   workflow_dispatch:
     inputs:
       force:
@@ -15646,4 +15665,4 @@ jobs:
 
 ---
 
-*47 files, 15,303 lines.*
+*47 files, 15,322 lines.*

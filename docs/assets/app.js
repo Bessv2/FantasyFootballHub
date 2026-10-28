@@ -2849,7 +2849,7 @@ function initTheme() {
 const NEW_DATA_CHECK_MS = 10 * 60 * 1000;
 
 /**
- * The data is rebuilt every 30 minutes, but a phone tab can stay open for
+ * The data is rebuilt every 30 minutes during games, but a phone tab can stay open for
  * days. When the tab comes back into view (at most every NEW_DATA_CHECK_MS),
  * re-read hub.json's build time and offer a reload if it moved. Never reloads
  * by itself: that would throw away a mock draft in progress.

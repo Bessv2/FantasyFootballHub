@@ -27,7 +27,7 @@ the way they are.
 | Money owed | Everyone paid **$50** under the old buy-in. The ledger shows each of them **$25 short** until somebody confirms otherwise — see below. |
 | Season so far | **Week 7 final** (28 Oct 2026). Challenge winners for Weeks 1–7 re-verified by an independent recount of the box scores |
 | Tests | 234, all passing |
-| Automation | GitHub Actions `update.yml`, every 30 minutes (was every 3 hours) |
+| Automation | GitHub Actions `update.yml`, every 30 min during games (Thu/Mon 8 PM–midnight, Sun 10 AM–midnight ET), every 3 h otherwise — ~415 runs/month to stay under Cloudflare Pages' free 500 builds |
 
 Everything below about "before the draft" is history now; the gotchas still
 apply.
@@ -242,7 +242,7 @@ question. If this comes up again, the answer has not changed.
   Use `;`, or `npm run ship`. Documented in the README because it bit us.
 - **`git rebase` has no `--allow-unrelated-histories`** (that's a merge flag).
   To reparent onto an unrelated history: `git reset --soft <target>` then commit.
-- **The automation pushes commits every 30 minutes.** Expect to need `git pull --rebase`
+- **The automation pushes commits every 30 minutes during games, every 3 hours otherwise.** Expect to need `git pull --rebase`
   before pushing. Conflicts will be in `docs/data/*.json`, which are build
   artefacts — resolve by running `node scripts/build.mjs`, never by hand-merging
   minified JSON.
@@ -284,7 +284,7 @@ four weeks; the comment explains why). Seeds are ranked with
 rather than copied, and a test pins that zero remaining games reproduces the
 real standings exactly. The generator is the challenges' mulberry32, seeded on
 `roe-playoff-odds:{season}:{weeksPlayed}`, so repeated builds on the same data
-publish the same numbers instead of jittering by a tenth every half hour.
+publish the same numbers instead of jittering by a tenth on every run.
 Percentages are capped at 99.9 / 0.1 unless *every* run agreed: 9,996 of
 10,000 is not a clinch.
 
