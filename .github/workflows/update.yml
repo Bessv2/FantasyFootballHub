@@ -11,10 +11,29 @@ name: Update league data
 
 on:
   schedule:
-    # Every 30 minutes, around the clock, so scores, injuries and projections
-    # land within half an hour. GitHub may start a scheduled run a few minutes
-    # late under load; the concurrency group below stops two from overlapping.
-    - cron: '*/30 * * * *'
+    # Cron is UTC. Times below are Eastern Standard Time (UTC-5); during
+    # daylight time (before early November) each window lands an hour early.
+    #
+    # Every 30 minutes while games are on:
+    #   Thursday 8 PM - midnight   (Fri 01:00-05:00 UTC)
+    - cron: '*/30 1-4 * * 5'
+    - cron: '0 5 * * 5'
+    #   Sunday 10 AM - midnight    (Sun 15:00 - Mon 05:00 UTC)
+    - cron: '*/30 15-23 * * 0'
+    - cron: '*/30 0-4 * * 1'
+    - cron: '0 5 * * 1'
+    #   Monday 8 PM - midnight     (Tue 01:00-05:00 UTC)
+    - cron: '*/30 1-4 * * 2'
+    - cron: '0 5 * * 2'
+    #
+    # Every 3 hours the rest of the week, skipping hours a window already
+    # covers so no slot fires twice. About 96 runs a week (~415 a month),
+    # under Cloudflare Pages' free 500 builds with room for manual pushes.
+    - cron: '0 */3 * * 3,4,6'
+    - cron: '0 0,6-21/3 * * 5'
+    - cron: '0 0-12/3 * * 0'
+    - cron: '0 6-21/3 * * 1'
+    - cron: '0 0,6-21/3 * * 2'
   workflow_dispatch:
     inputs:
       force:

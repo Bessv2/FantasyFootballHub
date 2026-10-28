@@ -48,7 +48,7 @@ carrying it, and a link to ESPN's Gamecast. Set your team once (Teams → yours 
 field**, starters in bold.
 
 This is the one panel that does **not** come from the build. Scores move by the
-minute and the build runs every half hour, so a "live" panel refreshed on that
+minute and the build runs every 30 minutes at most, so a "live" panel refreshed on that
 cadence would be worse than none. ESPN's public scoreboard sends
 `Access-Control-Allow-Origin: *`, so the page calls it directly and re-polls
 every 45 seconds — but only while a game is actually in progress, only while the
@@ -516,7 +516,9 @@ Fetches, builds, commits, pushes. Cloudflare redeploys automatically.
 
 ## Automation — the hands-off option
 
-`.github/workflows/update.yml` runs every 30 minutes, around the clock. It fetches,
+`.github/workflows/update.yml` runs every 30 minutes during games (Thu 8 PM–midnight, Sun 10 AM–midnight,
+Mon 8 PM–midnight ET) and every 3 hours otherwise — about 415 runs a month,
+inside Cloudflare Pages' free 500 builds. It fetches,
 rebuilds, runs the tests, and commits **only when something actually
 changed** — Cloudflare redeploys off that push. You never have to touch it
 during the season.
