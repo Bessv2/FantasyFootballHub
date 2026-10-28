@@ -2,7 +2,7 @@
  * Live NFL scoreboard.
  *
  * Fetched in the browser, not at build time, because scores move by the minute
- * and the build only runs every few hours — a "live" panel that was three hours
+ * and the build only runs every half hour — a "live" panel that was half an hour
  * stale would be worse than none. ESPN's public scoreboard sends
  * `Access-Control-Allow-Origin: *`, so the page can call it directly.
  *

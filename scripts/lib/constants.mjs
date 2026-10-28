@@ -124,37 +124,6 @@ export const PRO_TEAM = {
   34: 'HOU',
 };
 
-/**
- * Activity-feed message type IDs, from the `kona_league_communication` view.
- * Several distinct IDs all mean "dropped" — ESPN distinguishes the source
- * (waiver vs free agent vs roster move) but the outcome is the same.
- */
-export const ACTIVITY_TYPE = {
-  178: 'FA_ADDED',
-  180: 'WAIVER_ADDED',
-  179: 'DROPPED',
-  181: 'DROPPED',
-  239: 'DROPPED',
-  244: 'TRADED',
-};
-
-/** The message-type IDs worth pulling from the activity feed. */
-export const ACTIVITY_TYPE_IDS = [178, 179, 180, 181, 239, 244];
-
-/** `type` on a transaction record from `mTransactions2`. */
-export const TRANSACTION_TYPES = [
-  'DRAFT',
-  'TRADE_ACCEPT',
-  'TRADE_DECLINE',
-  'TRADE_VETO',
-  'TRADE_PROPOSE',
-  'WAIVER',
-  'WAIVER_ERROR',
-  'FREEAGENT',
-  'ROSTER',
-  'LINEUP',
-];
-
 /** Injury status strings ESPN reports, normalized to something displayable. */
 export const INJURY_STATUS = {
   ACTIVE: 'Active',

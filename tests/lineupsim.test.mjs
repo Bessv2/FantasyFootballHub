@@ -6,7 +6,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { simulateLineup, playerSpread, lognormalParams, PLAY_CHANCE } from '../scripts/lib/lineupsim.mjs';
+import { simulateLineup, playerSpread, lognormalParams, calibrateProjections, PLAY_CHANCE } from '../scripts/lib/lineupsim.mjs';
 
 const QB_ONLY = [{ slotId: 0, count: 1 }];
 const qb = (playerId, projected, extra = {}) => ({ playerId, name: `QB${playerId}`, position: 'QB', projected, slotId: 20, ...extra });
@@ -213,5 +213,39 @@ describe('simulateLineup: pickups and IR', () => {
     const roomy = simulateLineup({ roster, startingSlots: ONE, benchSlots: 2, opponentRoster: [qb(9, 18)], seed: 'ir' });
     assert.deepEqual(roomy.recommended.starters.map((p) => p.playerId), [3]);
     assert.deepEqual(roomy.irActivations, []);
+  });
+});
+
+describe('calibrateProjections', () => {
+  const rows = (position, n, projected, points) =>
+    Array.from({ length: n }, (_, i) => ({ position, projected, points: i % 2 ? points[1] : points[0] }));
+
+  test('measures the spread around the projection, shrunk toward the default', () => {
+    // 50 QB weeks projected 20, alternating 12 / 28: every miss is 8, so the
+    // measured CV is 8 / 20 = 0.4. Prior 0.35 at weight 50 -> (0.4 + 0.35) / 2.
+    const cal = calibrateProjections(rows('QB', 50, 20, [12, 28]));
+    assert.equal(cal.QB.n, 50);
+    assert.equal(cal.QB.cv, 0.375);
+    assert.equal(cal.QB.bias, 1); // averages exactly the projection
+  });
+
+  test('bias is shrunk toward 1 and clamped', () => {
+    // 150 kicker weeks at 80% of projection: (150 * 0.8 + 150) / 300 = 0.9.
+    assert.equal(calibrateProjections(rows('K', 150, 10, [8, 8])).K.bias, 0.9);
+    // Wildly over-projected at 10% of projection: clamped at 0.9, not 0.55.
+    assert.equal(calibrateProjections(rows('K', 150, 10, [1, 1])).K.bias, 0.9);
+  });
+
+  test('zero projections (byes, ruled out) are not projection misses', () => {
+    assert.deepEqual(calibrateProjections([{ position: 'WR', projected: 0, points: 0 }]), {});
+  });
+
+  test('the simulation centres on the corrected projection but shows ESPN\'s', () => {
+    const calibration = { QB: { n: 150, cv: 0.4, bias: 0.9 } };
+    const sim = simulateLineup({ roster: [qb(1, 20, { slotId: 0 })], startingSlots: QB_ONLY, calibration, seed: 'c' });
+    assert.equal(sim.players[0].projected, 20);
+    assert.equal(sim.players[0].spread, 7.2); // 0.4 * (0.9 * 20)
+    assert.ok(Math.abs(sim.recommended.mean - 18) < 0.6);
+    assert.deepEqual(sim.calibration, calibration);
   });
 });

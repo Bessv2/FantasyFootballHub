@@ -11,9 +11,10 @@ name: Update league data
 
 on:
   schedule:
-    # Every 3 hours, around the clock, so scores and news land within a few
-    # hours instead of waiting for the next calendar day.
-    - cron: '0 */3 * * *'
+    # Every 30 minutes, around the clock, so scores, injuries and projections
+    # land within half an hour. GitHub may start a scheduled run a few minutes
+    # late under load; the concurrency group below stops two from overlapping.
+    - cron: '*/30 * * * *'
   workflow_dispatch:
     inputs:
       force:
@@ -32,7 +33,7 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Check out

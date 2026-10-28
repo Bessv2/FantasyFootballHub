@@ -2556,7 +2556,7 @@ function renderChallenges() {
            }</p>`
         : w.noWinner
           ? '<p class="challenge__detail"><em>Nobody qualified. The pot rolls into the season awards.</em></p>'
-          : '<p class="challenge__detail"><em>Not played yet.</em></p>';
+          : `<p class="challenge__detail"><em>${w.week <= (state.hub?.status?.weeksPlayed ?? 0) ? 'In progress — scored once every matchup is final.' : 'Not played yet.'}</em></p>`;
 
       return `<div class="challenge challenge--${esc(status)}">
         <p class="challenge__week">Week ${esc(w.week)} · ${esc(money(w.amount, currency))}</p>
@@ -2843,6 +2843,32 @@ function initTheme() {
   sync();
 }
 
+// --- New data --------------------------------------------------------------
+
+/** How often an open tab asks whether a newer build has been published. */
+const NEW_DATA_CHECK_MS = 10 * 60 * 1000;
+
+/**
+ * The data is rebuilt every 30 minutes, but a phone tab can stay open for
+ * days. When the tab comes back into view (at most every NEW_DATA_CHECK_MS),
+ * re-read hub.json's build time and offer a reload if it moved. Never reloads
+ * by itself: that would throw away a mock draft in progress.
+ */
+function watchForNewData(loadedAt) {
+  let lastCheck = Date.now();
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState !== 'visible' || Date.now() - lastCheck < NEW_DATA_CHECK_MS) return;
+    lastCheck = Date.now();
+    try {
+      const { generatedAt } = await loadJson('data/hub.json');
+      if (generatedAt && generatedAt !== loadedAt) $('#update-notice').hidden = false;
+    } catch {
+      // Offline or mid-deploy: try again next time the tab is shown.
+    }
+  });
+  $('#update-reload').addEventListener('click', () => location.reload());
+}
+
 // --- Boot ------------------------------------------------------------------
 
 async function boot() {
@@ -2908,6 +2934,8 @@ async function boot() {
     timeEl.dateTime = hub.generatedAt;
 
     if (hub.synthetic) $('#fixture-warning').hidden = false;
+
+    watchForNewData(hub.generatedAt);
 
     $('#boot').hidden = true;
     onHashChange(true);

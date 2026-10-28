@@ -251,9 +251,3 @@ export function rosterNeeds(roster, startingSlots) {
   }
   return unfilled;
 }
-
-/** Value relative to where the board said a player should go. */
-export function pickValue(pick) {
-  if (pick.player.rank === null) return null;
-  return pick.overall - pick.player.rank;
-}
