@@ -317,6 +317,20 @@ describe('challenge scoring', () => {
     assert.equal(out.noWinner, true);
   });
 
+  test('a commissioner award pays the named team even when the rule found no winner', () => {
+    const out = resolve('closestTo100', [row(1, 1, 100.58), row(3, 1, 102.1)], {
+      awards: { 1: { teamId: 3, note: 'needs a bone' } },
+    });
+    assert.equal(out.winner.teamId, 3);
+    assert.equal(out.winner.amount, 15);
+    assert.equal(out.winner.awardedByCommissioner, true);
+    assert.equal(out.noWinner, undefined);
+  });
+
+  test('a commissioner award for a team that did not play is rejected', () => {
+    assert.throws(() => resolve('closestTo100', [row(1, 1, 120)], { awards: { 1: { teamId: 9 } } }));
+  });
+
   test('Photo Finish wants the smallest winning margin, not the largest', () => {
     const out = resolve('narrowestWin', [
       row(1, 1, 100, { opponentScore: 99, result: 'WIN' }),

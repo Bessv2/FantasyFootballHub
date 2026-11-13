@@ -481,6 +481,7 @@ export function computeChallenges({
   revealAll = false,
   payouts = new Map(),
   deck = CHALLENGE_DECK,
+  awards = {},
 }) {
   const cardById = new Map(deck.map((c) => [c.id, c]));
   const statsById = new Map(teamStats.map((t) => [t.teamId, t]));
@@ -514,6 +515,34 @@ export function computeChallenges({
     if (sealed || !rows.length || !card) return base;
 
     const ctx = { week: rows };
+
+    // A commissioner's ruling replaces the computed result for that week —
+    // for example a Price Is Right where everybody busts and the league
+    // agrees to pay the closest team anyway. It is flagged on the page so
+    // nobody mistakes it for what the rule produced.
+    const award = awards[slot.week];
+    if (award) {
+      const awardRow = rows.find((r) => r.teamId === award.teamId);
+      if (!awardRow) {
+        throw new Error(`weekly challenge award for week ${slot.week} names team ${award.teamId}, which did not play that week`);
+      }
+      const stats = statsById.get(award.teamId);
+      return {
+        ...base,
+        winner: {
+          teamId: award.teamId,
+          teamName: stats?.teamName ?? `Team ${award.teamId}`,
+          managerName: stats?.managerName ?? null,
+          logo: stats?.logo ?? null,
+          value: round2(awardRow.score),
+          detail: award.detail ?? `${awardRow.score} points`,
+          amount: amount,
+          awardedByCommissioner: true,
+          note: award.note ?? null,
+        },
+        tiedWith: [],
+      };
+    }
     const scored = rows
       .map((row) => ({ row, value: card.score(row, ctx) }))
       .filter((entry) => entry.value !== null && entry.value !== undefined && !Number.isNaN(entry.value));
