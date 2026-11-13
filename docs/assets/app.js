@@ -2549,6 +2549,7 @@ function renderChallenges() {
       const outcome = w.winner
         ? `<p class="challenge__winner">${teamCell(w.winner, null, `#team/${w.winner.teamId}`)}</p>
            <p class="challenge__detail">${esc(w.winner.detail ?? '')}</p>
+           ${w.winner.awardedByCommissioner ? `<p class="challenge__detail"><em>Awarded by the commissioner${w.winner.note ? ` — ${esc(w.winner.note)}` : ''}</em></p>` : ''}
            <p class="challenge__payout">${esc(money(w.winner.amount, currency))}${
              (w.tiedWith ?? []).length
                ? ` each — tied with ${esc(w.tiedWith.map((t) => t.teamName).join(', '))}`

@@ -189,6 +189,11 @@ function buildChallenges(season, teamStats, teamWeeks, moneyConfig) {
     teamStats,
     weeksPlayed: Math.max(0, ...settled),
     payouts: perWeek,
+    awards: Object.fromEntries(
+      Object.entries(config.awards ?? {})
+        .filter(([week]) => !week.startsWith('_'))
+        .map(([week, a]) => [Number(week), a])
+    ),
   });
 
   return {

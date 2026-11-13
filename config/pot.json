@@ -61,7 +61,10 @@
       "           removed from the deck before the remaining weeks are dealt,",
       "           so it can never also land on another week. Only ever add or",
       "           change an override for a week that has not been played yet —",
-      "           same rule as salt."
+      "           same rule as salt.",
+      "awards:    week number -> { teamId, detail, note }, a commissioner's",
+      "           ruling that replaces the computed winner for a played week.",
+      "           Shown on the site as awarded by the commissioner."
     ],
     "enabled": true,
     "cadence": "weekly",
@@ -82,6 +85,13 @@
       "11": "soClose",
       "12": "uglyWin",
       "13": "benchWarmer"
+    },
+    "awards": {
+      "9": {
+        "teamId": 3,
+        "detail": "102.1 points — 2.1 over the line",
+        "note": "everybody busted; awarded to Old man's club"
+      }
     }
   }
 }
